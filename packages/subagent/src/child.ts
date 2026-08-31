@@ -13,6 +13,11 @@ import {
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import {
+  CHILD_INTERCOM_TOOL_NAMES,
+  createChildIntercomTools,
+  type ChildIntercomHandlers,
+} from './intercom.ts'
 import { toThinkingLevel, type ResolvedModel } from './model.ts'
 import { loadRolePrompt, type RoleDefinition } from './roles.ts'
 
@@ -79,6 +84,7 @@ function createSessionManager(
 export interface CreateChildOptions {
   ctx: ExtensionContext
   description: string
+  intercom: ChildIntercomHandlers
   model: ResolvedModel
   resumeFile: string | undefined
   role: RoleDefinition
@@ -105,12 +111,14 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
   })
   await resourceLoader.reload()
 
+  const sessionManager = createSessionManager(options.ctx, options.resumeFile)
   const created = await createAgentSession({
+    customTools: createChildIntercomTools(sessionManager.getSessionId(), options.intercom),
     cwd: options.ctx.cwd,
     model: options.model.model,
     modelRuntime: options.runtime,
     resourceLoader,
-    sessionManager: createSessionManager(options.ctx, options.resumeFile),
+    sessionManager,
     thinkingLevel: toThinkingLevel(options.model.effort),
   })
 
@@ -135,7 +143,7 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
 
   try {
     if (options.role.tools !== undefined) {
-      created.session.setActiveToolsByName([...options.role.tools])
+      created.session.setActiveToolsByName([...options.role.tools, ...CHILD_INTERCOM_TOOL_NAMES])
     }
     created.session.setSessionName(`Task: ${options.description}`)
     return created.session

@@ -66,6 +66,7 @@ export const RunRecordSchema = Type.Object({
   output: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
   durationMs: Type.Optional(Type.Number({ minimum: 0 })),
+  intercomUsage: Type.Optional(RunUsageSchema),
   usage: Type.Optional(RunUsageSchema),
 })
 

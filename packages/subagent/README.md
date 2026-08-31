@@ -42,6 +42,20 @@ Set `run_in_background` to `true` to return the Agent ID after session creation.
 
 Set `readonly` to `true` to remove shell and mutation tools.
 
+## Parent-model intercom
+
+Each child receives these private tools:
+
+- `ask_parent` runs an isolated side turn with the current parent model.
+- `notify_parent` sends a non-blocking update and starts a parent turn.
+- `update_progress` changes the live activity text without starting a parent turn.
+
+`ask_parent` copies a bounded parent conversation snapshot into an in-memory session. It removes tool traffic, redacts common secret formats, and uses a fixed supervisor prompt. The side turn has no tools and a two-minute timeout.
+
+The parent model answers directly. The user does not need to reply. The final question and automatic answer enter the parent transcript as a `subagent-intercom` message.
+
+Side turns use additional model tokens and cost. `intercomUsage` reports them separately from child usage.
+
 ## TUI
 
 The widget above the editor shows live status, activity, tool calls, token use, cost, and elapsed time.

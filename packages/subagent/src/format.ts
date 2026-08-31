@@ -76,7 +76,13 @@ function taskDuration(snapshot: SubagentSnapshot): string {
 
 function taskStats(snapshot: SubagentSnapshot): string {
   const usage = formatUsage(snapshot.usage)
-  return `${snapshot.usage.toolCalls} tools${usage.length > 0 ? ` · ${usage}` : ''}`
+  const intercom = formatUsage(snapshot.intercomUsage)
+  return [
+    `${snapshot.usage.toolCalls} tools${usage.length > 0 ? ` · ${usage}` : ''}`,
+    intercom.length > 0 ? `parent ↔ ${intercom}` : undefined,
+  ]
+    .filter((part) => part !== undefined)
+    .join(' · ')
 }
 
 export function taskLine(snapshot: SubagentSnapshot): string {

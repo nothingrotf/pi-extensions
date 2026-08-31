@@ -10,6 +10,7 @@ import {
   syncChildProviders,
 } from './child.ts'
 import { activitySnippet, describeCall } from './format.ts'
+import { ParentSideTurnError, recordAutomaticReply, runParentSideTurn } from './intercom.ts'
 import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts'
 import { resolveRole } from './roles.ts'
 import type { Effort, RunRecord, RunUsage, TaskInput } from './schema.ts'
@@ -39,8 +40,11 @@ interface ActiveRun {
   abortReason: string | undefined
   completion: Promise<RuntimeTerminalResult> | undefined
   cwd: string
+  intercomController: AbortController
+  intercomUsage: RunUsage
   lastActivity: string | undefined
   messages: AssistantMessage[]
+  pendingQuestion: ReturnType<typeof runParentSideTurn> | undefined
   metrics: RunMetrics
   session: AgentSession
   startedAt: number
@@ -52,6 +56,7 @@ export interface SubagentSnapshot {
   effort: Effort
   endedAt: number | undefined
   error: string | undefined
+  intercomUsage: RunUsage
   lastActivity: string | undefined
   model: string
   output: string | undefined
@@ -70,6 +75,7 @@ export interface RuntimeCompletedDetails {
   effort: Effort
   fast: boolean
   finalMessage: string
+  intercomUsage: RunUsage
   model: string
   status: 'completed'
   toolCallCount: number
@@ -177,6 +183,19 @@ function collectUsage(
   return usage
 }
 
+function addUsage(left: RunUsage, right: RunUsage): RunUsage {
+  return {
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    cost: left.cost + right.cost,
+    durationMs: left.durationMs + right.durationMs,
+    input: left.input + right.input,
+    output: left.output + right.output,
+    toolCalls: left.toolCalls + right.toolCalls,
+    turns: left.turns + right.turns,
+  }
+}
+
 export function truncateOutput(output: string): string {
   const encoded = new TextEncoder().encode(output)
   if (encoded.byteLength <= MAX_OUTPUT_BYTES) return output
@@ -257,6 +276,7 @@ export class SubagentRuntime {
           endedAt:
             active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
           error: record.error,
+          intercomUsage: active?.intercomUsage ?? record.intercomUsage ?? emptyUsage(0),
           lastActivity: active?.lastActivity,
           model: record.model,
           output: record.output,
@@ -279,6 +299,7 @@ export class SubagentRuntime {
     const active = this.active.get(agentId)
     if (active === undefined) return false
     active.abortReason = 'The child was canceled from the subagent pane.'
+    active.intercomController.abort(active.abortReason)
     active.abortPromise ??= active.session.abort().catch((error) => {
       active.abortReason = errorMessage(error)
     })
@@ -319,6 +340,7 @@ export class SubagentRuntime {
     const activeRuns = [...this.active.values()]
     for (const active of activeRuns) {
       active.abortReason = reason
+      active.intercomController.abort(reason)
       active.abortPromise ??= active.session.abort().catch((error) => {
         active.abortReason = `${reason} ${errorMessage(error)}`
       })
@@ -368,6 +390,12 @@ export class SubagentRuntime {
     const session = await createChildSession({
       ctx: options.ctx,
       description,
+      intercom: {
+        askParent: (agentId, question) =>
+          this.askParent(options.ctx, runtime, agentId, description, question),
+        notifyParent: (agentId, message, level) => this.notifyParent(agentId, message, level),
+        updateProgress: (agentId, phase, note) => this.updateProgress(agentId, phase, note),
+      },
       model,
       resumeFile: prior?.sessionFile,
       role,
@@ -422,9 +450,12 @@ export class SubagentRuntime {
       abortReason: undefined,
       completion: undefined,
       cwd: options.ctx.cwd,
+      intercomController: new AbortController(),
+      intercomUsage: emptyUsage(0),
       lastActivity: 'Starting',
       messages: [],
       metrics: { toolCalls: 0, turns: 0 },
+      pendingQuestion: undefined,
       session,
       startedAt: Date.now(),
     }
@@ -488,6 +519,76 @@ export class SubagentRuntime {
     }
   }
 
+  private async askParent(
+    ctx: ExtensionContext,
+    runtime: Awaited<ReturnType<typeof createChildModelRuntime>>,
+    agentId: string,
+    description: string,
+    question: string,
+  ): Promise<string> {
+    const active = this.active.get(agentId)
+    if (active === undefined) throw new Error(`Agent ID "${agentId}" is not active.`)
+    if (active.pendingQuestion !== undefined) {
+      throw new Error('The child already has a parent-model question in progress.')
+    }
+    active.lastActivity = 'Consulting parent model'
+    this.emitChange()
+    const pending = runParentSideTurn({
+      agentId,
+      ctx,
+      description,
+      question,
+      runtime,
+      signal: active.intercomController.signal,
+    })
+    active.pendingQuestion = pending
+    try {
+      const result = await pending
+      active.intercomUsage = addUsage(active.intercomUsage, result.usage)
+      recordAutomaticReply(this.pi, agentId, question, result.reply)
+      return result.reply
+    } catch (error) {
+      if (error instanceof ParentSideTurnError) {
+        active.intercomUsage = addUsage(active.intercomUsage, error.usage)
+      }
+      throw error
+    } finally {
+      active.pendingQuestion = undefined
+      const current = this.active.get(agentId)
+      if (current !== undefined) current.lastActivity = 'Applying parent guidance'
+      this.emitChange()
+    }
+  }
+
+  private notifyParent(
+    agentId: string,
+    message: string,
+    level: 'info' | 'warning' | 'error',
+  ): void {
+    if (!this.active.has(agentId)) return
+    this.pi.sendMessage(
+      {
+        content: [
+          `<subagent-notice agent-id="${agentId}" level="${level}">`,
+          message,
+          '</subagent-notice>',
+        ].join('\n'),
+        customType: 'subagent-intercom',
+        details: { agentId, kind: 'notification', level, message },
+        display: true,
+      },
+      { deliverAs: 'followUp', triggerTurn: true },
+    )
+  }
+
+  private updateProgress(agentId: string, phase: string, note: string | undefined): void {
+    const active = this.active.get(agentId)
+    if (active === undefined) return
+    active.lastActivity =
+      note === undefined || note.trim().length === 0 ? phase : `${phase} · ${note}`
+    this.emitChange()
+  }
+
   private async getModelRuntime(ctx: ExtensionContext) {
     this.modelRuntimePromise ??= createChildModelRuntime(ctx)
     const runtime = await this.modelRuntimePromise
@@ -527,6 +628,7 @@ export class SubagentRuntime {
     let timeout: ReturnType<typeof setTimeout> | undefined
     const abortFromSignal = () => {
       active.abortReason = 'The parent Task call was aborted.'
+      active.intercomController.abort(active.abortReason)
       active.abortPromise ??= active.session.abort().catch((error) => {
         active.abortReason = errorMessage(error)
       })
@@ -541,6 +643,7 @@ export class SubagentRuntime {
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           active.abortReason = 'The child exceeded the six-hour runtime limit.'
+          active.intercomController.abort(active.abortReason)
           active.abortPromise ??= active.session.abort().catch((error) => {
             active.abortReason = errorMessage(error)
           })
@@ -551,6 +654,7 @@ export class SubagentRuntime {
         active.session.prompt(prompt, { expandPromptTemplates: false }),
         timeoutPromise,
       ])
+      if (active.abortReason !== undefined) throw new Error(active.abortReason)
 
       const text = finalText(active.messages)
       const output = truncateOutput(
@@ -561,12 +665,21 @@ export class SubagentRuntime {
       const failure = stopError(active.messages.at(-1))
       if (failure !== undefined) {
         const status = active.messages.at(-1)?.stopReason === 'aborted' ? 'aborted' : 'failed'
-        return this.finishFailure(record, failure, status, durationMs, usage, output)
+        return this.finishFailure(
+          record,
+          failure,
+          status,
+          durationMs,
+          usage,
+          output,
+          active.intercomUsage,
+        )
       }
 
       const completedRecord: RunRecord = {
         ...record,
         durationMs,
+        intercomUsage: active.intercomUsage,
         output,
         status: 'completed',
         updatedAt: Date.now(),
@@ -581,6 +694,7 @@ export class SubagentRuntime {
           effort: model.effort,
           fast: model.fast,
           finalMessage: output,
+          intercomUsage: active.intercomUsage,
           model: actualModel(active.messages, model.modelRef),
           status: 'completed',
           toolCallCount: active.metrics.toolCalls,
@@ -602,6 +716,7 @@ export class SubagentRuntime {
         durationMs,
         usage,
         output,
+        active.intercomUsage,
       )
     } finally {
       if (timeout !== undefined) clearTimeout(timeout)
@@ -639,6 +754,7 @@ export class SubagentRuntime {
   private cleanupRun(record: RunRecord, active: ActiveRun): void {
     this.active.delete(record.agentId)
     this.leases.delete(record.agentId)
+    active.intercomController.abort('The child run ended.')
     active.session.dispose()
     this.emitChange()
   }
@@ -658,11 +774,13 @@ export class SubagentRuntime {
     durationMs: number,
     usage: RunUsage,
     output: string,
+    intercomUsage: RunUsage,
   ): RuntimeFailedResult {
     let failedRecord: RunRecord = {
       ...record,
       durationMs,
       error,
+      intercomUsage,
       status,
       updatedAt: Date.now(),
       usage,

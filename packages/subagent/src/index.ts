@@ -133,12 +133,21 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
         return new Text(`✗ ${theme.fg('error', details.error)}${id}`, 0, 0)
       }
       const usage = formatUsage(details.usage)
+      const intercomUsage = formatUsage(details.intercomUsage)
+      const usageLines = [
+        usage,
+        intercomUsage.length > 0 ? `parent ↔ ${intercomUsage}` : undefined,
+      ].filter((line) => line !== undefined && line.length > 0)
       const header = `${statusIcon(details.status)} ${theme.fg('accent', details.agentId)}`
       if (!expanded) {
-        return new Text(usage.length === 0 ? header : `${header}\n${theme.fg('dim', usage)}`, 0, 0)
+        return new Text(
+          usageLines.length === 0 ? header : `${header}\n${theme.fg('dim', usageLines.join('\n'))}`,
+          0,
+          0,
+        )
       }
       return new Text(
-        [header, theme.fg('dim', details.finalMessage), theme.fg('dim', usage)]
+        [header, theme.fg('dim', details.finalMessage), theme.fg('dim', usageLines.join('\n'))]
           .filter((line) => line.length > 0)
           .join('\n'),
         0,
