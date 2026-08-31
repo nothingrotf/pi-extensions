@@ -23,9 +23,11 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 
 | Package                              | Purpose                                                                           |
 | ------------------------------------ | --------------------------------------------------------------------------------- |
+| [`@nothingrotf/ask`](packages/ask)   | Interactive question forms with selectable and freeform answers                   |
 | [`@nothingrotf/goal`](packages/goal) | Durable autonomous goal lifecycle for Pi sessions                                 |
 | [`@nothingrotf/hud`](packages/hud)   | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
 | [`@nothingrotf/loop`](packages/loop) | Session loop for recurring and self-paced prompts or skills                       |
+| [`@nothingrotf/todo`](packages/todo) | Structured todo lifecycle with session state and a persistent tree                |
 
 ## Development
 
