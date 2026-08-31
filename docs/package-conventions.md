@@ -34,7 +34,7 @@ Use this manifest as the base:
     "test": "vp test run"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "catalog:"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:"
@@ -56,8 +56,8 @@ Use this manifest as the base:
 ```
 
 Add only the Pi peer packages that the source imports.
-Use `catalog:` for every shared Pi dependency.
-Keep runtime host packages in `peerDependencies` and `devDependencies`.
+Use `*` for host packages in `peerDependencies`.
+Use `catalog:` for their matching `devDependencies`.
 
 ## TypeScript configuration
 

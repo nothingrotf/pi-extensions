@@ -19,6 +19,12 @@ packages/
 Each extension owns its source, tests, documentation, and npm metadata.
 The root owns shared dependency versions, checks, formatting, and Git hooks.
 
+## Packages
+
+| Package                            | Purpose                                                                           |
+| ---------------------------------- | --------------------------------------------------------------------------------- |
+| [`@nothingrotf/hud`](packages/hud) | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
+
 ## Development
 
 Install Bun 1.4 or later.

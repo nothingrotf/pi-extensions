@@ -1,0 +1,50 @@
+{
+  "name": "@nothingrotf/hud",
+  "version": "0.1.0",
+  "description": "A compact one-line Pi footer with workspace, Git, model, usage, and context data.",
+  "keywords": [
+    "hud",
+    "pi-extension",
+    "pi-package",
+    "statusline",
+    "tui"
+  ],
+  "license": "MIT",
+  "author": "nothingrotf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nothingrotf/pi-extensions",
+    "directory": "packages/hud"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "check": "vp check",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "typebox": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
