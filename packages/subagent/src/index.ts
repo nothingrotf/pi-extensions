@@ -1,7 +1,10 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 
-import { SubagentRuntime, type RuntimeFailedResult } from './runtime.ts'
+import { formatUsage, statusIcon } from './format.ts'
+import { type RuntimeDetails, type RuntimeFailedResult, SubagentRuntime } from './runtime.ts'
 import { TaskInputSchema } from './schema.ts'
+import { SubagentTui } from './ui.ts'
 
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
@@ -10,27 +13,60 @@ function failedContent(result: RuntimeFailedResult): string {
 
 export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): SubagentRuntime {
   const runtime = new SubagentRuntime(pi, runTimeoutMs)
+  const tui = new SubagentTui(runtime)
 
+  pi.on('agent_start', (_event, ctx) => {
+    tui.agentStart(ctx)
+  })
   pi.on('session_start', (_event, ctx) => {
     runtime.restore(ctx)
+    tui.sessionStart(ctx)
   })
-  pi.on('session_before_switch', async () => {
+  pi.on('session_before_switch', async (_event, ctx) => {
     await runtime.shutdown('The parent session switched.')
+    tui.sessionShutdown(ctx)
   })
-  pi.on('session_before_fork', async () => {
+  pi.on('session_before_fork', async (_event, ctx) => {
     await runtime.shutdown('The parent session forked.')
+    tui.sessionShutdown(ctx)
   })
-  pi.on('session_before_tree', async () => {
+  pi.on('session_before_tree', async (_event, ctx) => {
     await runtime.shutdown('The parent session tree changed.')
+    tui.sessionShutdown(ctx)
   })
   pi.on('session_tree', (_event, ctx) => {
     runtime.restore(ctx)
+    tui.sessionStart(ctx)
   })
-  pi.on('session_shutdown', async () => {
+  pi.on('session_shutdown', async (_event, ctx) => {
     await runtime.shutdown()
+    tui.sessionShutdown(ctx)
   })
 
-  pi.registerTool({
+  pi.registerCommand('subagents', {
+    description: 'List subagents. Use `/subagents peek` to open the browsable pane.',
+    handler: async (args, ctx) => {
+      if (
+        String(args ?? '')
+          .trim()
+          .toLowerCase() === 'peek'
+      )
+        await tui.openPeek(ctx)
+      else tui.list(ctx)
+    },
+  })
+
+  pi.registerCommand('subagent-peek', {
+    description: 'Open the browsable subagent pane.',
+    handler: async (_args, ctx) => tui.openPeek(ctx),
+  })
+
+  pi.registerShortcut('ctrl+shift+a', {
+    description: 'Peek at running subagents',
+    handler: async (ctx) => tui.openPeek(ctx),
+  })
+
+  pi.registerTool<typeof TaskInputSchema, RuntimeDetails>({
     description:
       'Run an isolated subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default. Set run_in_background only for independent work.',
     execute: async (_callId, input, signal, _onUpdate, ctx) => {
@@ -67,6 +103,48 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     label: 'Task',
     name: 'Task',
     parameters: TaskInputSchema,
+    renderCall(args, theme) {
+      const mode = args.run_in_background === true ? 'bg' : 'fg'
+      const parts = [args.model, args.readonly === true ? 'read-only' : undefined].filter(
+        (part) => part !== undefined,
+      )
+      const metadata = parts.length === 0 ? '' : `\n  ${theme.fg('dim', parts.join(' · '))}`
+      return new Text(
+        `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', args.subagent_type)} ${theme.fg('muted', `[${mode}]`)}${metadata}\n  ${theme.fg('dim', args.description)}`,
+        0,
+        0,
+      )
+    },
+    renderResult(result, { expanded }, theme) {
+      const details = result.details
+      if (details === undefined) {
+        const text = result.content.find((content) => content.type === 'text')?.text ?? ''
+        return new Text(text, 0, 0)
+      }
+      if (details.status === 'background') {
+        return new Text(
+          `• ${theme.fg('accent', 'running')} ${theme.fg('muted', details.agentId)}`,
+          0,
+          0,
+        )
+      }
+      if (details.status === 'error') {
+        const id = 'agentId' in details ? ` ${theme.fg('muted', details.agentId)}` : ''
+        return new Text(`✗ ${theme.fg('error', details.error)}${id}`, 0, 0)
+      }
+      const usage = formatUsage(details.usage)
+      const header = `${statusIcon(details.status)} ${theme.fg('accent', details.agentId)}`
+      if (!expanded) {
+        return new Text(usage.length === 0 ? header : `${header}\n${theme.fg('dim', usage)}`, 0, 0)
+      }
+      return new Text(
+        [header, theme.fg('dim', details.finalMessage), theme.fg('dim', usage)]
+          .filter((line) => line.length > 0)
+          .join('\n'),
+        0,
+        0,
+      )
+    },
   })
 
   return runtime

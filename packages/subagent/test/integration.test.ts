@@ -530,6 +530,9 @@ describe('subagent Task integration', () => {
       })
       expect(agentId(second)).toBe(id)
       expect(second).toContain('child:first|second')
+      const snapshot = harness.runtime.listSnapshots().find((item) => item.agentId === id)
+      expect(snapshot?.endedAt).toBeDefined()
+      expect((snapshot?.endedAt ?? 0) - (snapshot?.startedAt ?? 0)).toBe(snapshot?.usage.durationMs)
 
       const wrongModel = await runTask(harness, {
         ...baseInput,
@@ -706,6 +709,31 @@ describe('subagent Task integration', () => {
       })
       expect(latestState(harness).records.at(-1)?.output).toBe('partial child output')
     } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports live snapshots and cancels a background child by Agent ID', async () => {
+    const harness = await createHarness()
+    try {
+      const result = await runTask(harness, {
+        ...baseInput,
+        prompt: 'BLOCK',
+        run_in_background: true,
+      })
+      const id = agentId(result)
+      await harness.state.blockedReady.promise
+      const running = harness.runtime.listSnapshots().find((snapshot) => snapshot.agentId === id)
+      expect(running?.running).toBe(true)
+      expect(running?.lastActivity).toBe('Thinking')
+      expect(await harness.runtime.cancel(id)).toBe(true)
+      await harness.state.notification.promise
+      const ended = harness.runtime.listSnapshots().find((snapshot) => snapshot.agentId === id)
+      expect(ended?.running).toBe(false)
+      expect(ended?.status).toBe('aborted')
+      expect(await harness.runtime.cancel(id)).toBe(false)
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
       await harness.close()
     }
   })

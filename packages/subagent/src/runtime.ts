@@ -1,5 +1,7 @@
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { AgentSession, ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { Type } from 'typebox'
+import { Value } from 'typebox/value'
 
 import {
   ChildSessionError,
@@ -7,6 +9,7 @@ import {
   createChildSession,
   syncChildProviders,
 } from './child.ts'
+import { activitySnippet, describeCall } from './format.ts'
 import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts'
 import { resolveRole } from './roles.ts'
 import type { Effort, RunRecord, RunUsage, TaskInput } from './schema.ts'
@@ -15,11 +18,50 @@ import { StateStore } from './state.ts'
 const MAX_OUTPUT_BYTES = 50 * 1024
 export const DEFAULT_RUN_TIMEOUT_MS = 6 * 60 * 60 * 1000
 
+const ActivityArgumentSchema = Type.Object(
+  {
+    command: Type.Optional(Type.String()),
+    file_path: Type.Optional(Type.String()),
+    filePath: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+    path: Type.Optional(Type.String()),
+    pattern: Type.Optional(Type.String()),
+    query: Type.Optional(Type.String()),
+    subject: Type.Optional(Type.String()),
+    task: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+)
+
 interface ActiveRun {
   abortPromise: Promise<void> | undefined
   abortReason: string | undefined
   completion: Promise<RuntimeTerminalResult> | undefined
+  cwd: string
+  lastActivity: string | undefined
+  messages: AssistantMessage[]
+  metrics: RunMetrics
   session: AgentSession
+  startedAt: number
+}
+
+export interface SubagentSnapshot {
+  agentId: string
+  description: string
+  effort: Effort
+  endedAt: number | undefined
+  error: string | undefined
+  lastActivity: string | undefined
+  model: string
+  output: string | undefined
+  readonly: boolean
+  running: boolean
+  sessionFile: string
+  startedAt: number
+  status: RunRecord['status']
+  subagentType: RunRecord['subagentType']
+  usage: RunUsage
 }
 
 export interface RuntimeCompletedDetails {
@@ -60,6 +102,7 @@ export interface RuntimeFailedResult {
 
 export type RuntimeTerminalResult = RuntimeCompletedResult | RuntimeFailedResult
 export type RuntimeResult = RuntimeBackgroundResult | RuntimeTerminalResult
+export type RuntimeDetails = RuntimeResult['details']
 
 interface StartOptions {
   ctx: ExtensionContext
@@ -70,6 +113,19 @@ interface StartOptions {
 interface RunMetrics {
   toolCalls: number
   turns: number
+}
+
+function emptyUsage(durationMs: number): RunUsage {
+  return {
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    durationMs,
+    input: 0,
+    output: 0,
+    toolCalls: 0,
+    turns: 0,
+  }
 }
 
 function errorMessage<Input>(error: Input): string {
@@ -157,6 +213,7 @@ function stopError(message: AssistantMessage | undefined): string | undefined {
 export class SubagentRuntime {
   private readonly active = new Map<string, ActiveRun>()
   private readonly leases = new Set<string>()
+  private readonly listeners = new Set<() => void>()
   private modelRuntimePromise: ReturnType<typeof createChildModelRuntime> | undefined
   private readonly state: StateStore
 
@@ -170,6 +227,64 @@ export class SubagentRuntime {
   restore(ctx: ExtensionContext): void {
     if (this.active.size === 0) this.modelRuntimePromise = undefined
     this.state.restore(ctx)
+    this.emitChange()
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  hasActiveRun(): boolean {
+    return this.active.size > 0
+  }
+
+  listSnapshots(): SubagentSnapshot[] {
+    return this.state
+      .all()
+      .map((record) => {
+        const active = this.active.get(record.agentId)
+        const durationMs =
+          active === undefined ? (record.durationMs ?? 0) : Date.now() - active.startedAt
+        const terminalStartedAt =
+          record.durationMs === undefined
+            ? record.createdAt
+            : Math.max(record.createdAt, record.updatedAt - record.durationMs)
+        return {
+          agentId: record.agentId,
+          description: record.description,
+          effort: record.effort,
+          endedAt:
+            active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
+          error: record.error,
+          lastActivity: active?.lastActivity,
+          model: record.model,
+          output: record.output,
+          readonly: record.readonly,
+          running: active !== undefined,
+          sessionFile: record.sessionFile,
+          startedAt: active?.startedAt ?? terminalStartedAt,
+          status: active === undefined ? record.status : 'running',
+          subagentType: record.subagentType,
+          usage:
+            active === undefined
+              ? (record.usage ?? emptyUsage(durationMs))
+              : collectUsage(active.messages, active.metrics, durationMs),
+        }
+      })
+      .reverse()
+  }
+
+  async cancel(agentId: string): Promise<boolean> {
+    const active = this.active.get(agentId)
+    if (active === undefined) return false
+    active.abortReason = 'The child was canceled from the subagent pane.'
+    active.abortPromise ??= active.session.abort().catch((error) => {
+      active.abortReason = errorMessage(error)
+    })
+    await active.abortPromise
+    if (active.completion !== undefined) await active.completion
+    return true
   }
 
   async run(options: StartOptions): Promise<RuntimeResult> {
@@ -306,9 +421,15 @@ export class SubagentRuntime {
       abortPromise: undefined,
       abortReason: undefined,
       completion: undefined,
+      cwd: options.ctx.cwd,
+      lastActivity: 'Starting',
+      messages: [],
+      metrics: { toolCalls: 0, turns: 0 },
       session,
+      startedAt: Date.now(),
     }
     this.active.set(record.agentId, active)
+    this.emitChange()
     const turn = this.completeRun(
       record,
       model,
@@ -381,15 +502,27 @@ export class SubagentRuntime {
     active: ActiveRun,
     signal: AbortSignal | undefined,
   ): Promise<RuntimeTerminalResult> {
-    const startedAt = Date.now()
-    const messages: AssistantMessage[] = []
-    const metrics: RunMetrics = { toolCalls: 0, turns: 0 }
     const unsubscribe = active.session.subscribe((event) => {
-      if (event.type === 'turn_start') metrics.turns += 1
-      if (event.type === 'tool_execution_start') metrics.toolCalls += 1
-      if (event.type === 'message_end' && event.message.role === 'assistant') {
-        messages.push(event.message)
+      if (event.type === 'turn_start') {
+        active.metrics.turns += 1
+        active.lastActivity = 'Thinking'
       }
+      if (event.type === 'tool_execution_start') {
+        active.metrics.toolCalls += 1
+        active.lastActivity = Value.Check(ActivityArgumentSchema, event.args)
+          ? describeCall(
+              event.toolName,
+              Value.Decode(ActivityArgumentSchema, event.args),
+              active.cwd,
+            )
+          : event.toolName.charAt(0).toUpperCase() + event.toolName.slice(1)
+      }
+      if (event.type === 'message_end' && event.message.role === 'assistant') {
+        active.messages.push(event.message)
+        const text = textFromMessage(event.message)
+        active.lastActivity = text.length === 0 ? 'Responding' : activitySnippet(text)
+      }
+      this.emitChange()
     })
     let timeout: ReturnType<typeof setTimeout> | undefined
     const abortFromSignal = () => {
@@ -419,15 +552,15 @@ export class SubagentRuntime {
         timeoutPromise,
       ])
 
-      const text = finalText(messages)
+      const text = finalText(active.messages)
       const output = truncateOutput(
         text.length === 0 ? 'The child completed without text output.' : text,
       )
-      const durationMs = Date.now() - startedAt
-      const usage = collectUsage(messages, metrics, durationMs)
-      const failure = stopError(messages.at(-1))
+      const durationMs = Date.now() - active.startedAt
+      const usage = collectUsage(active.messages, active.metrics, durationMs)
+      const failure = stopError(active.messages.at(-1))
       if (failure !== undefined) {
-        const status = messages.at(-1)?.stopReason === 'aborted' ? 'aborted' : 'failed'
+        const status = active.messages.at(-1)?.stopReason === 'aborted' ? 'aborted' : 'failed'
         return this.finishFailure(record, failure, status, durationMs, usage, output)
       }
 
@@ -448,9 +581,9 @@ export class SubagentRuntime {
           effort: model.effort,
           fast: model.fast,
           finalMessage: output,
-          model: actualModel(messages, model.modelRef),
+          model: actualModel(active.messages, model.modelRef),
           status: 'completed',
-          toolCallCount: metrics.toolCalls,
+          toolCallCount: active.metrics.toolCalls,
           transcriptPath: record.sessionFile,
           usage,
         },
@@ -458,9 +591,9 @@ export class SubagentRuntime {
       }
     } catch (error) {
       if (active.abortPromise !== undefined) await active.abortPromise
-      const output = truncateOutput(finalText(messages))
-      const durationMs = Date.now() - startedAt
-      const usage = collectUsage(messages, metrics, durationMs)
+      const output = truncateOutput(finalText(active.messages))
+      const durationMs = Date.now() - active.startedAt
+      const usage = collectUsage(active.messages, active.metrics, durationMs)
       const status = active.abortReason === undefined ? 'failed' : 'aborted'
       return this.finishFailure(
         record,
@@ -507,6 +640,15 @@ export class SubagentRuntime {
     this.active.delete(record.agentId)
     this.leases.delete(record.agentId)
     active.session.dispose()
+    this.emitChange()
+  }
+
+  private emitChange(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener()
+      } catch {}
+    }
   }
 
   private finishFailure(
