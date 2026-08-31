@@ -66,6 +66,22 @@
         "typebox": "*",
       },
     },
+    "packages/subagent": {
+      "name": "@nothingrotf/subagent",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-agent-core": "catalog:",
+        "@earendil-works/pi-ai": "catalog:",
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-agent-core": "*",
+        "@earendil-works/pi-ai": "*",
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
     "packages/task": {
       "name": "@nothingrotf/task",
       "version": "0.1.0",
@@ -250,6 +266,8 @@
     "@nothingrotf/hud": ["@nothingrotf/hud@workspace:packages/hud"],
 
     "@nothingrotf/loop": ["@nothingrotf/loop@workspace:packages/loop"],
+
+    "@nothingrotf/subagent": ["@nothingrotf/subagent@workspace:packages/subagent"],
 
     "@nothingrotf/task": ["@nothingrotf/task@workspace:packages/task"],
 
