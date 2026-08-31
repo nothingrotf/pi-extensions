@@ -1,0 +1,50 @@
+{
+  "name": "@nothingrotf/todo",
+  "version": "0.1.0",
+  "description": "A complete todo_write and todo_read lifecycle for Pi sessions.",
+  "keywords": [
+    "pi-extension",
+    "pi-package",
+    "todo"
+  ],
+  "license": "MIT",
+  "author": "nothingrotf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nothingrotf/pi-extensions",
+    "directory": "packages/todo"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "check": "vp check",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "typebox": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
