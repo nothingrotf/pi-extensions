@@ -1,0 +1,52 @@
+{
+  "name": "@nothingrotf/loop",
+  "version": "0.1.0",
+  "description": "A session loop for recurring and self-paced Pi prompts or skills.",
+  "keywords": [
+    "automation",
+    "loop",
+    "pi-extension",
+    "pi-package",
+    "scheduler"
+  ],
+  "license": "MIT",
+  "author": "nothingrotf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nothingrotf/pi-extensions",
+    "directory": "packages/loop"
+  },
+  "files": [
+    "src",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "check": "vp check",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "typebox": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

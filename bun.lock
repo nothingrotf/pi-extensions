@@ -28,6 +28,18 @@
         "typebox": "*",
       },
     },
+    "packages/loop": {
+      "name": "@nothingrotf/loop",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
@@ -178,6 +190,8 @@
     "@mariozechner/clipboard-win32-x64-msvc": ["@mariozechner/clipboard-win32-x64-msvc@0.3.9", "", { "os": "win32", "cpu": "x64" }, "sha512-ihQC3EufqEY81vhXBgVBtK4prL+wc62zJsSvxrgz7K1hsdt6OObz6v9p3Rn1OG3GJksTTKMJF0u/guMISHPhSA=="],
 
     "@nothingrotf/hud": ["@nothingrotf/hud@workspace:packages/hud"],
+
+    "@nothingrotf/loop": ["@nothingrotf/loop@workspace:packages/loop"],
 
     "@oxc-project/runtime": ["@oxc-project/runtime@0.146.0", "", {}, "sha512-lbXHIpZ1MmK6zuw5txlMdIZ2waLVUIU5Gnm3sEuwJOiqDfQfbtjeHscatmeBoxbv8+If9LFM6PGh/3DcDWYIYw=="],
 

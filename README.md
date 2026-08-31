@@ -21,9 +21,10 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 
 ## Packages
 
-| Package                            | Purpose                                                                           |
-| ---------------------------------- | --------------------------------------------------------------------------------- |
-| [`@nothingrotf/hud`](packages/hud) | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
+| Package                              | Purpose                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| [`@nothingrotf/hud`](packages/hud)   | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
+| [`@nothingrotf/loop`](packages/loop) | Session loop for recurring and self-paced prompts or skills                       |
 
 ## Development
 
