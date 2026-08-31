@@ -1,0 +1,44 @@
+{
+  "name": "@nothingrotf/pi-extensions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monorepo for Pi extension packages published under the @nothingrotf scope.",
+  "workspaces": {
+    "catalog": {
+      "@earendil-works/pi-agent-core": "^0.84.4",
+      "@earendil-works/pi-ai": "^0.84.4",
+      "@earendil-works/pi-coding-agent": "^0.84.4",
+      "@earendil-works/pi-tui": "^0.84.4"
+    },
+    "packages": [
+      "packages/*"
+    ]
+  },
+  "type": "module",
+  "scripts": {
+    "prepare": "vp config --no-agent",
+    "check": "vp check",
+    "test": "vp test run",
+    "lint": "vp lint .",
+    "fix": "vp check --fix",
+    "format": "vp fmt --write .",
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
+    "@oxlint/plugins": "1.79.0",
+    "@types/bun": "1.4.0",
+    "oxlint": "1.79.0",
+    "typescript": "7.0.2",
+    "vite-plus": "0.3.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "packageManager": "bun@1.4.0"
+}
