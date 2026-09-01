@@ -1,10 +1,29 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
-import { truncateToWidth, type Component } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, truncateToWidth, type Component } from '@earendil-works/pi-tui'
 
 import type { SubagentSnapshot } from './runtime.ts'
 import type { RunStatus, RunUsage } from './schema.ts'
 
 export type SubagentTheme = Pick<Theme, 'bg' | 'bold' | 'fg'>
+
+export function oneLineLabel(text: string, maxLength = 160): string {
+  const visible = Array.from(stripTerminalSequences(text))
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0
+      if (code < 32 || (code >= 127 && code <= 159)) return ' '
+      if (code === 0x061c) return ''
+      if (code >= 0xd800 && code <= 0xdfff) return ''
+      if (code >= 0x200b && code <= 0x200f) return ''
+      if (code >= 0x202a && code <= 0x202e) return ''
+      if (code >= 0x2060 && code <= 0x206f) return ''
+      return code === 0xfeff ? '' : character
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const characters = Array.from(visible)
+  return characters.length > maxLength ? `${characters.slice(0, maxLength - 1).join('')}…` : visible
+}
 
 export interface ToolActivityArguments {
   command?: string
@@ -33,14 +52,13 @@ export function describeCall(toolName: string, args: ToolActivityArguments, cwd:
     args.subject ??
     args.task
   if (value === undefined) return verb
-  let text = value.replace(/\s+/g, ' ').trim()
+  let text = oneLineLabel(value, 61)
   if (text.startsWith(`${cwd}/`)) text = text.slice(cwd.length + 1)
   return `${verb} ${text.length > 60 ? `${text.slice(0, 60)}…` : text}`
 }
 
 export function activitySnippet(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat
+  return oneLineLabel(text, 90)
 }
 
 function formatTokens(value: number): string {
@@ -86,7 +104,7 @@ function taskStats(snapshot: SubagentSnapshot): string {
 }
 
 export function taskLine(snapshot: SubagentSnapshot): string {
-  return `${statusIcon(snapshot.status)} ${snapshot.description} · ${taskStats(snapshot)} · ${taskDuration(snapshot)}`
+  return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${taskStats(snapshot)} · ${taskDuration(snapshot)}`
 }
 
 function colorNumbers(text: string, theme: SubagentTheme): string {
@@ -100,11 +118,14 @@ function colorNumbers(text: string, theme: SubagentTheme): string {
 function themedTaskLine(snapshot: SubagentSnapshot, theme: SubagentTheme): string {
   const tail = `${taskStats(snapshot)} · ${taskDuration(snapshot)}`
   if (!snapshot.running) {
-    return theme.fg('dim', `${statusIcon(snapshot.status)} ${snapshot.description} · ${tail}`)
+    return theme.fg(
+      'dim',
+      `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${tail}`,
+    )
   }
   const activity =
     snapshot.lastActivity === undefined ? '' : `${theme.fg('dim', `→ ${snapshot.lastActivity}`)} · `
-  return `${statusIcon(snapshot.status)} ${snapshot.description} · ${activity}${colorNumbers(tail, theme)}`
+  return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${activity}${colorNumbers(tail, theme)}`
 }
 
 const WIDGET_MAX_LINES = 10

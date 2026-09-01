@@ -1,11 +1,22 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
+import { Value } from 'typebox/value'
 
 import { acquireSubagentHost } from './controller.ts'
-import { formatUsage, statusIcon } from './format.ts'
+import { runBatch, type BatchItemResult } from './coordinator.ts'
+import { formatUsage, oneLineLabel, statusIcon } from './format.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
-import { TaskInputSchema } from './schema.ts'
+import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
 import { SubagentTui } from './ui.ts'
+
+interface BatchToolDetails {
+  items: readonly BatchItemResult[]
+  runId: string
+  status: 'batch'
+  succeeded: boolean
+}
+
+type TaskToolDetails = RuntimeDetails | BatchToolDetails
 
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
@@ -64,11 +75,26 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     handler: async (ctx) => tui.openPeek(ctx),
   })
 
-  pi.registerTool<typeof TaskInputSchema, RuntimeDetails>({
+  pi.registerTool<typeof TaskInputSchema, TaskToolDetails>({
     description:
       'Run an isolated subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default. Set run_in_background only for independent work.',
     execute: async (_callId, input, signal, _onUpdate, ctx) => {
-      const result = await runtime.run({ ctx, input, signal })
+      if ('tasks' in input) {
+        const decoded = Value.Decode(BatchTaskInputSchema, input)
+        const batch = await runBatch({ ctx, input: decoded, runtime, signal })
+        return {
+          content: [{ text: `Run ID: ${batch.runId}\n\n${batch.content}`, type: 'text' }],
+          details: {
+            items: batch.items,
+            runId: batch.runId,
+            status: 'batch',
+            succeeded: batch.status === 'completed',
+          },
+          isError: batch.status !== 'completed',
+        }
+      }
+      const decoded = Value.Decode(SingleTaskInputSchema, input)
+      const result = await runtime.run({ ctx, input: decoded, signal })
 
       if (result.kind === 'background') {
         return {
@@ -102,13 +128,20 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     name: 'Task',
     parameters: TaskInputSchema,
     renderCall(args, theme) {
+      if ('tasks' in args) {
+        return new Text(
+          `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', `${args.tasks.length} tasks`)} ${theme.fg('muted', '[fg]')}`,
+          0,
+          0,
+        )
+      }
       const mode = args.run_in_background === true ? 'bg' : 'fg'
       const parts = [args.model, args.readonly === true ? 'read-only' : undefined].filter(
         (part) => part !== undefined,
       )
       const metadata = parts.length === 0 ? '' : `\n  ${theme.fg('dim', parts.join(' · '))}`
       return new Text(
-        `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', args.subagent_type)} ${theme.fg('muted', `[${mode}]`)}${metadata}\n  ${theme.fg('dim', args.description)}`,
+        `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', args.subagent_type)} ${theme.fg('muted', `[${mode}]`)}${metadata}\n  ${theme.fg('dim', oneLineLabel(args.description))}`,
         0,
         0,
       )
@@ -118,6 +151,14 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       if (details === undefined) {
         const text = result.content.find((content) => content.type === 'text')?.text ?? ''
         return new Text(text, 0, 0)
+      }
+      if (details.status === 'batch') {
+        const summary = details.items
+          .map(
+            (item) => `${item.status === 'completed' ? '✓' : '✗'} ${item.taskId}: ${item.status}`,
+          )
+          .join('\n')
+        return new Text(`${theme.fg('accent', details.runId)}\n${summary}`, 0, 0)
       }
       if (details.status === 'background') {
         return new Text(
@@ -160,6 +201,12 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 export { acquireSubagentController } from './controller.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
 export type {
+  CapabilityProfile,
+  CapabilityRegistration,
+  CapabilityToolDefinition,
+} from './capabilities.ts'
+export type { BatchItemResult, BatchResult } from './coordinator.ts'
+export type {
   CancelReceipt,
   SteerReceipt,
   SubagentController,
@@ -170,7 +217,17 @@ export type {
   SubagentSnapshot,
   TaskReceipt,
 } from './runtime.ts'
-export type { TaskInput } from './schema.ts'
+export type {
+  ArtifactRef,
+  BatchTaskInput,
+  CapabilityContract,
+  CoordinationRunState,
+  GateDefinition,
+  GateResult,
+  StructuredOutput,
+  TaskInput,
+  TaskNodeInput,
+} from './schema.ts'
 
 export default function subagentExtension(pi: ExtensionAPI): void {
   registerSubagent(pi)

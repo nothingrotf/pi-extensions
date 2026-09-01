@@ -15,6 +15,7 @@ import { Value } from 'typebox/value'
 
 import {
   CHILD_INTERCOM_TOOL_NAMES,
+  CHILD_MAILBOX_TOOL_NAMES,
   createChildIntercomTools,
   type ChildIntercomHandlers,
 } from './intercom.ts'
@@ -85,6 +86,7 @@ export interface CreateChildOptions {
   ctx: ExtensionContext
   cwd: string
   description: string
+  extensions: readonly InlineExtension[]
   intercom: ChildIntercomHandlers
   model: ResolvedModel
   resumeFile: string | undefined
@@ -106,7 +108,7 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
     agentDir: getAgentDir(),
     appendSystemPrompt: [options.systemPrompt],
     cwd: options.cwd,
-    extensionFactories: options.model.fast ? [fastModeExtension] : [],
+    extensionFactories: [...(options.model.fast ? [fastModeExtension] : []), ...options.extensions],
     noExtensions: true,
     noThemes: true,
   })
@@ -114,6 +116,10 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
 
   const sessionManager = createSessionManager(options.ctx, options.cwd, options.resumeFile)
   const intercomTools = createChildIntercomTools(sessionManager.getSessionId(), options.intercom)
+  const intercomToolNames =
+    options.intercom.mailbox === undefined
+      ? CHILD_INTERCOM_TOOL_NAMES
+      : [...CHILD_INTERCOM_TOOL_NAMES, ...CHILD_MAILBOX_TOOL_NAMES]
   const created = await createAgentSession({
     customTools: intercomTools,
     cwd: options.cwd,
@@ -122,7 +128,7 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
     resourceLoader,
     sessionManager,
     thinkingLevel: toThinkingLevel(options.model.effort),
-    tools: [...options.tools, ...CHILD_INTERCOM_TOOL_NAMES],
+    tools: [...options.tools, ...intercomToolNames],
   })
 
   if (created.modelFallbackMessage !== undefined) {

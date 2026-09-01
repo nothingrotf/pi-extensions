@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vite-plus/test'
 import {
   activitySnippet,
   describeCall,
+  oneLineLabel,
   SubagentsWidget,
   type SubagentTheme,
 } from '../src/format.ts'
@@ -30,6 +31,7 @@ function snapshot(
   const running = status === 'running'
   return {
     agentId,
+    contextState: undefined,
     description,
     effort: 'high',
     endedAt: running ? undefined : 2_000,
@@ -48,6 +50,8 @@ function snapshot(
     model: 'openai-codex/gpt-5.6-sol',
     output: status === 'completed' ? 'Done' : undefined,
     readonly: true,
+    retryFailure: undefined,
+    retryState: undefined,
     running,
     sessionFile,
     startedAt: 1_000,
@@ -90,6 +94,10 @@ describe('subagent TUI', () => {
     expect(activitySnippet('A child\nreturned   a concise result.')).toBe(
       'A child returned a concise result.',
     )
+    expect(oneLineLabel('\u001B[31mUnsafe\u001B[0m\nlabel\u200B')).toBe('Unsafe label')
+    expect(oneLineLabel('left\u0085right')).toBe('left right')
+    expect(oneLineLabel('😀😀😀', 3)).toBe('😀😀😀')
+    expect(oneLineLabel('😀😀😀', 2)).toBe('😀…')
   })
 
   it('clears restored history and retains activity for one parent turn', () => {

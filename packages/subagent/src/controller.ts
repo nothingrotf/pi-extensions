@@ -27,7 +27,11 @@ function cloneSnapshot(snapshot: SubagentSnapshot): SubagentSnapshot {
 function cloneResult(result: SubagentResult): SubagentResult {
   return {
     ...result,
+    artifact: result.artifact === undefined ? undefined : { ...result.artifact },
+    gateResults: structuredClone(result.gateResults),
     intercomUsage: { ...result.intercomUsage },
+    structuredOutput:
+      result.structuredOutput === undefined ? undefined : structuredClone(result.structuredOutput),
     usage: { ...result.usage },
   }
 }

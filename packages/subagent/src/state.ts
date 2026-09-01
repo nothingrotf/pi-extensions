@@ -2,19 +2,41 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Value } from 'typebox/value'
 
 import {
+  type ArtifactRef,
+  type CoordinationRunState,
+  type CoordinationTaskState,
+  type CoordinationTaskStateV3,
+  type LegacyArtifactRef,
   type RunRecord,
+  type RunRecordV3,
   RuntimeStateSchema,
   RuntimeStateV1Schema,
+  RuntimeStateV2Schema,
+  RuntimeStateV3Schema,
   type RuntimeState,
+  type RuntimeStateV3,
 } from './schema.ts'
 
 const STATE_TYPE = 'pi-subagent-state'
-const MAX_RECORDS = 256
+const MAX_TERMINAL_RECORDS = 256
+const MAX_TERMINAL_RUNS = 128
 
 type OwnerContext = Pick<ExtensionContext, 'sessionManager'>
 
 export function recentRecords(records: readonly RunRecord[]): RunRecord[] {
-  return [...records].sort((left, right) => left.updatedAt - right.updatedAt).slice(-MAX_RECORDS)
+  const ordered = [...records].sort((left, right) => left.updatedAt - right.updatedAt)
+  const running = ordered.filter((record) => record.status === 'running')
+  const terminal = ordered
+    .filter((record) => record.status !== 'running')
+    .slice(-MAX_TERMINAL_RECORDS)
+  return [...running, ...terminal].sort((left, right) => left.updatedAt - right.updatedAt)
+}
+
+export function recentRuns(runs: readonly CoordinationRunState[]): CoordinationRunState[] {
+  const ordered = [...runs].sort((left, right) => left.updatedAt - right.updatedAt)
+  const running = ordered.filter((run) => run.status === 'running')
+  const terminal = ordered.filter((run) => run.status !== 'running').slice(-MAX_TERMINAL_RUNS)
+  return [...running, ...terminal].sort((left, right) => left.updatedAt - right.updatedAt)
 }
 
 interface DecodedState {
@@ -22,13 +44,48 @@ interface DecodedState {
   state: RuntimeState
 }
 
+function migrateArtifact(artifact: LegacyArtifactRef, attempt: number): ArtifactRef {
+  return { ...artifact, attempt }
+}
+
+function migrateRecord(record: RunRecordV3): RunRecord {
+  const { artifact, ...rest } = record
+  if (artifact === undefined) return rest
+  return { ...rest, artifact: migrateArtifact(artifact, record.runGeneration ?? 1) }
+}
+
+function migrateTask(task: CoordinationTaskStateV3): CoordinationTaskState {
+  const { artifact, ...rest } = task
+  if (artifact === undefined) return rest
+  return { ...rest, artifact: migrateArtifact(artifact, 1) }
+}
+
+function migrateV3(state: RuntimeStateV3): RuntimeState {
+  return {
+    ownerSessionId: state.ownerSessionId,
+    records: state.records.map((record) => migrateRecord(record)),
+    runs: (state.runs ?? []).map((run) => ({
+      ...run,
+      tasks: run.tasks.map((task) => migrateTask(task)),
+    })),
+    version: 4,
+  }
+}
+
 function decodeState<Input>(data: Input): DecodedState | undefined {
   try {
     return { migrated: false, state: Value.Decode(RuntimeStateSchema, data) }
   } catch {}
   try {
+    return { migrated: true, state: migrateV3(Value.Decode(RuntimeStateV3Schema, data)) }
+  } catch {}
+  try {
+    const legacy = Value.Decode(RuntimeStateV2Schema, data)
+    return { migrated: true, state: { ...legacy, records: legacy.records, version: 4 } }
+  } catch {}
+  try {
     const legacy = Value.Decode(RuntimeStateV1Schema, data)
-    return { migrated: true, state: { ...legacy, records: legacy.records, version: 2 } }
+    return { migrated: true, state: { ...legacy, records: legacy.records, version: 4 } }
   } catch {
     return undefined
   }
@@ -37,6 +94,7 @@ function decodeState<Input>(data: Input): DecodedState | undefined {
 export class StateStore {
   private ownerSessionId = ''
   private records = new Map<string, RunRecord>()
+  private runs = new Map<string, CoordinationRunState>()
 
   constructor(private readonly pi: ExtensionAPI) {}
 
@@ -57,8 +115,12 @@ export class StateStore {
 
     this.ownerSessionId = ownerSessionId
     this.records = new Map()
+    this.runs = new Map()
     for (const record of recentRecords(restored?.state.records ?? [])) {
       if (record.ownerSessionId === ownerSessionId) this.records.set(record.agentId, record)
+    }
+    for (const run of restored?.state.runs ?? []) {
+      if (run.ownerSessionId === ownerSessionId) this.runs.set(run.runId, run)
     }
 
     const now = Date.now()
@@ -74,7 +136,32 @@ export class StateStore {
       changed = true
     }
 
-    if (changed) this.persist()
+    for (const run of this.runs.values()) {
+      if (run.status !== 'running') continue
+      this.runs.set(run.runId, {
+        ...run,
+        status: 'aborted',
+        tasks: run.tasks.map((task) => {
+          if (task.status === 'running') {
+            return { ...task, error: 'Interrupted by session reload.', status: 'aborted' }
+          }
+          if (task.status === 'pending') {
+            return { ...task, error: 'Blocked by session reload.', status: 'blocked' }
+          }
+          return task
+        }),
+        updatedAt: now,
+      })
+      changed = true
+    }
+
+    const runCount = this.runs.size
+    this.pruneRuns()
+    if (this.runs.size !== runCount) changed = true
+    if (changed) {
+      this.prune()
+      this.persist()
+    }
   }
 
   ensureOwner(ctx: OwnerContext): void {
@@ -93,17 +180,15 @@ export class StateStore {
   }
 
   add(record: RunRecord): void {
-    if (this.records.size >= MAX_RECORDS) this.prune()
-    if (this.records.size >= MAX_RECORDS) {
-      throw new Error(`The parent session already contains ${MAX_RECORDS} child records.`)
-    }
     this.records.set(record.agentId, record)
+    this.prune()
     this.persist()
   }
 
   update(record: RunRecord): void {
     this.records.delete(record.agentId)
     this.records.set(record.agentId, record)
+    this.prune()
     this.persist()
   }
 
@@ -111,19 +196,43 @@ export class StateStore {
     return [...this.records.values()]
   }
 
+  maxRunGeneration(): number {
+    return this.all().reduce((maximum, record) => Math.max(maximum, record.runGeneration ?? 0), 0)
+  }
+
+  addRun(run: CoordinationRunState): void {
+    this.runs.set(run.runId, run)
+    this.pruneRuns()
+    this.persist()
+  }
+
+  getRun(runId: string): CoordinationRunState | undefined {
+    return this.runs.get(runId)
+  }
+
+  updateRun(run: CoordinationRunState): void {
+    if (!this.runs.has(run.runId))
+      throw new Error(`Coordination run "${run.runId}" does not exist.`)
+    this.runs.set(run.runId, run)
+    this.pruneRuns()
+    this.persist()
+  }
+
   private prune(): void {
-    for (const [agentId, record] of this.records) {
-      if (record.status === 'running') continue
-      this.records.delete(agentId)
-      if (this.records.size < MAX_RECORDS) return
-    }
+    const retained = recentRecords(this.all())
+    this.records = new Map(retained.map((record) => [record.agentId, record]))
+  }
+
+  private pruneRuns(): void {
+    this.runs = new Map(recentRuns([...this.runs.values()]).map((run) => [run.runId, run]))
   }
 
   private persist(): void {
     this.pi.appendEntry(STATE_TYPE, {
       ownerSessionId: this.ownerSessionId,
       records: this.all(),
-      version: 2,
+      runs: [...this.runs.values()],
+      version: 4,
     })
   }
 }

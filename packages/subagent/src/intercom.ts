@@ -14,6 +14,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
+import type { MailboxEndpoint } from './mailbox.ts'
 import type { RunUsage } from './schema.ts'
 
 const MAX_QUESTION_CHARS = 4_000
@@ -32,6 +33,7 @@ const SIDE_SYSTEM_PROMPT = [
 ].join('\n')
 
 export const CHILD_INTERCOM_TOOL_NAMES = ['ask_parent', 'notify_parent', 'update_progress']
+export const CHILD_MAILBOX_TOOL_NAMES = ['send_peer', 'receive_peers']
 
 const AskParentSchema = Type.Object({
   question: Type.String({ maxLength: MAX_QUESTION_CHARS, minLength: 1 }),
@@ -44,6 +46,14 @@ const NotifyParentSchema = Type.Object({
   message: Type.String({ maxLength: MAX_NOTICE_CHARS, minLength: 1 }),
 })
 
+const SendPeerSchema = Type.Object({
+  message: Type.String({ minLength: 1 }),
+  replyTo: Type.Optional(Type.String({ minLength: 1 })),
+  to: Type.String({ minLength: 1 }),
+})
+
+const ReceivePeersSchema = Type.Object({})
+
 const UpdateProgressSchema = Type.Object({
   note: Type.Optional(Type.String({ maxLength: 500 })),
   phase: Type.String({ maxLength: 120, minLength: 1 }),
@@ -51,6 +61,7 @@ const UpdateProgressSchema = Type.Object({
 
 export interface ChildIntercomHandlers {
   askParent(agentId: string, question: string): Promise<string>
+  mailbox: MailboxEndpoint | undefined
   notifyParent(agentId: string, message: string, level: 'info' | 'warning' | 'error'): void
   updateProgress(agentId: string, phase: string, note: string | undefined): void
 }
@@ -347,7 +358,7 @@ export function createChildIntercomTools(
   agentId: string,
   handlers: ChildIntercomHandlers,
 ): ToolDefinition[] {
-  return [
+  const tools: ToolDefinition[] = [
     defineTool({
       description:
         'Ask the parent model a focused question when you cannot safely continue. The parent model answers from its current conversation context.',
@@ -392,6 +403,41 @@ export function createChildIntercomTools(
       promptSnippet: 'Update the live task activity label.',
     }),
   ]
+  if (handlers.mailbox === undefined) return tools
+  const mailbox = handlers.mailbox
+  tools.push(
+    defineTool({
+      description: 'Send a message to a sibling Task in the current coordination run.',
+      async execute(_toolCallId, params) {
+        const message = mailbox.send(params.to, params.message, params.replyTo)
+        return { content: [{ text: `Sent ${message.id}.`, type: 'text' }], details: message }
+      },
+      label: 'Send Peer',
+      name: 'send_peer',
+      parameters: SendPeerSchema,
+      promptSnippet: 'Send a run-local message to a sibling Task.',
+    }),
+    defineTool({
+      description: 'Consume all pending sibling messages for this Task.',
+      async execute() {
+        const messages = mailbox.receive()
+        return {
+          content: [
+            {
+              text: messages.length === 0 ? 'No pending messages.' : JSON.stringify(messages),
+              type: 'text',
+            },
+          ],
+          details: { messages },
+        }
+      },
+      label: 'Receive Peers',
+      name: 'receive_peers',
+      parameters: ReceivePeersSchema,
+      promptSnippet: 'Consume pending run-local sibling messages.',
+    }),
+  )
+  return tools
 }
 
 export function recordAutomaticReply(
