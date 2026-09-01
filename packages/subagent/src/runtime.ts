@@ -17,10 +17,21 @@ import {
   type CapabilityRegistration,
   type ResolvedCapabilities,
 } from './capabilities.ts'
-import { ChildSessionError, createChildModelRuntime, createChildSession } from './child.ts'
+import {
+  ChildSessionError,
+  createChildModelRuntime,
+  createChildSession,
+  createChildSessionManager,
+} from './child.ts'
 import { resolveInvocationCwd, resolveTools } from './execution.ts'
 import { activitySnippet, describeCall, oneLineLabel } from './format.ts'
 import { ParentSideTurnError, recordAutomaticReply, runParentSideTurn } from './intercom.ts'
+import {
+  captureWriterIsolation,
+  createWriterIsolation,
+  integrateWriterIsolation,
+  type WriterIsolation,
+} from './isolation.ts'
 import type { MailboxEndpoint } from './mailbox.ts'
 import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts'
 import {
@@ -38,6 +49,7 @@ import type {
   Effort,
   ExecutionContract,
   GateResult,
+  IsolationReceipt,
   RetryFailure,
   RetryState,
   RunRecord,
@@ -80,6 +92,8 @@ interface ActiveRun {
   intercomController: AbortController
   intercomUsage: RunUsage
   handle: SubagentHandle
+  isolation: WriterIsolation | undefined
+  isolationReceipt: IsolationReceipt | undefined
   lastActivity: string | undefined
   messages: AssistantMessage[]
   partialMessage: AssistantMessage | undefined
@@ -106,6 +120,7 @@ export interface SubagentSnapshot {
   endedAt: number | undefined
   error: string | undefined
   intercomUsage: RunUsage
+  isolation?: IsolationReceipt | undefined
   lastActivity: string | undefined
   model: string
   output: string | undefined
@@ -149,6 +164,7 @@ export interface SubagentResult {
   error: string | undefined
   gateResults: readonly GateResult[]
   intercomUsage: RunUsage
+  isolation?: IsolationReceipt | undefined
   model: string
   output: string | undefined
   status: Exclude<RunRecord['status'], 'running'>
@@ -214,6 +230,7 @@ export interface RuntimeCompletedDetails {
   finalMessage: string
   gateResults: GateResult[]
   intercomUsage: RunUsage
+  isolation?: IsolationReceipt | undefined
   model: string
   runId: string
   status: 'completed'
@@ -250,6 +267,7 @@ export interface RuntimeFailedDetails {
   error: string
   finalMessage?: string
   gateResults?: GateResult[]
+  isolation?: IsolationReceipt | undefined
   runId?: string
   status: 'error'
   structuredOutput?: StructuredOutput
@@ -509,6 +527,7 @@ export class SubagentRuntime {
             active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
           error: record.error,
           intercomUsage: active?.intercomUsage ?? record.intercomUsage ?? emptyUsage(0),
+          isolation: active?.isolationReceipt ?? record.isolation,
           lastActivity: active?.lastActivity,
           model: record.model,
           output: record.output,
@@ -886,28 +905,46 @@ export class SubagentRuntime {
     const extensions = [...execution.capabilities.extensions]
     if (nestedExtension !== undefined) extensions.push(nestedExtension)
 
-    const session = await createChildSession({
-      ctx: options.ctx,
-      cwd: contract.cwd,
-      description,
-      extensions,
-      intercom: {
-        askParent: (agentId, question) =>
-          this.askParent(options.ctx, runtime, agentId, description, question),
-        mailbox: options.mailbox,
-        notifyParent: (agentId, message, level) => this.notifyParent(agentId, message, level),
-        updateProgress: (agentId, phase, note) => this.updateProgress(agentId, phase, note),
-      },
-      model,
-      resumeFile: prior?.sessionFile,
-      runtime,
-      systemPrompt: contract.systemPrompt,
-      tools: nestedExtension === undefined ? contract.tools : [...contract.tools, 'Task'],
-    })
+    const sessionManager = createChildSessionManager(options.ctx, contract.cwd, prior?.sessionFile)
+    const writerId = sessionManager.getSessionId()
+    const isolation =
+      contract.isolation === undefined
+        ? undefined
+        : await createWriterIsolation({
+            cwd: contract.cwd,
+            integration: contract.isolation.integration ?? 'apply',
+            writerId,
+          })
+    let session: AgentSession
+    try {
+      session = await createChildSession({
+        ctx: options.ctx,
+        cwd: isolation?.rootWorktree ?? contract.cwd,
+        description,
+        extensions,
+        intercom: {
+          askParent: (agentId, question) =>
+            this.askParent(options.ctx, runtime, agentId, description, question),
+          mailbox: options.mailbox,
+          notifyParent: (agentId, message, level) => this.notifyParent(agentId, message, level),
+          updateProgress: (agentId, phase, note) => this.updateProgress(agentId, phase, note),
+        },
+        model,
+        resumeFile: prior?.sessionFile,
+        runtime,
+        sessionManager,
+        systemPrompt: contract.systemPrompt,
+        tools: nestedExtension === undefined ? contract.tools : [...contract.tools, 'Task'],
+      })
+    } catch (error) {
+      if (isolation !== undefined) await captureWriterIsolation(isolation, false)
+      throw error
+    }
     try {
       this.assertOwnerFence(ownerFence)
     } catch (error) {
       session.dispose()
+      if (isolation !== undefined) await captureWriterIsolation(isolation, false)
       throw error
     }
     const sessionFile = session.sessionFile
@@ -987,10 +1024,12 @@ export class SubagentRuntime {
       abortPromise: undefined,
       abortReason: undefined,
       completion: undefined,
-      cwd: contract.cwd,
+      cwd: isolation?.rootWorktree ?? contract.cwd,
       intercomController: new AbortController(),
       handle,
       intercomUsage: emptyUsage(0),
+      isolation,
+      isolationReceipt: undefined,
       lastActivity: 'Starting',
       messages: [],
       metrics: { toolCalls: 0, turns: 0 },
@@ -1092,6 +1131,18 @@ export class SubagentRuntime {
       if (input.gates !== undefined && !jsonEquals(input.gates, contract.gates)) {
         throw new Error('A resumed Task must preserve the original output gates.')
       }
+      if (input.isolation !== undefined) {
+        const requestedIsolation = {
+          integration: input.isolation.integration ?? 'apply',
+          mode: input.isolation.mode,
+        }
+        if (
+          contract.isolation === undefined ||
+          !jsonEquals(requestedIsolation, contract.isolation)
+        ) {
+          throw new Error('A resumed Task must preserve the original isolation policy.')
+        }
+      }
       if (
         input.outputSchema !== undefined &&
         (contract.outputSchema === undefined ||
@@ -1148,6 +1199,12 @@ export class SubagentRuntime {
     }
     const readonly =
       attenuation?.readonly === true ? true : (input.readonly ?? discovered?.readonly ?? false)
+    if (readonly && input.isolation !== undefined) {
+      throw new Error('A read-only Task cannot request writer isolation.')
+    }
+    if (attenuation !== undefined && input.isolation !== undefined) {
+      throw new Error('A nested Task cannot request writer isolation.')
+    }
     let role: RoleDefinition
     if (discovered === undefined) role = resolveRole(input.subagent_type, readonly)
     else {
@@ -1198,6 +1255,12 @@ export class SubagentRuntime {
       systemPrompt,
       tools,
       version: 2,
+    }
+    if (input.isolation !== undefined) {
+      contract.isolation = {
+        integration: input.isolation.integration ?? 'apply',
+        mode: 'worktree',
+      }
     }
     if (input.outputSchema !== undefined) contract.outputSchema = input.outputSchema
     validateOutputPolicy(contract)
@@ -1319,6 +1382,21 @@ export class SubagentRuntime {
 
   private getModelRuntime(ctx: ExtensionContext) {
     return createChildModelRuntime(ctx)
+  }
+
+  private async captureIsolation(
+    active: ActiveRun,
+    allowIntegration: boolean,
+  ): Promise<IsolationReceipt | undefined> {
+    if (active.isolation === undefined) return active.isolationReceipt
+    active.lastActivity = allowIntegration
+      ? 'Integrating isolated changes'
+      : 'Capturing isolated changes'
+    this.emitChange()
+    const receipt = await captureWriterIsolation(active.isolation, allowIntegration)
+    active.isolation = undefined
+    active.isolationReceipt = receipt
+    return receipt
   }
 
   private async createOutputState(
@@ -1444,6 +1522,7 @@ export class SubagentRuntime {
           : active.messages.at(-1)?.stopReason === 'aborted'
             ? 'aborted'
             : 'failed'
+      const isolationReceipt = await this.captureIsolation(active, false)
       outputState = await this.createOutputState(record, fullOutput, terminalStatus)
       const { artifact, gateResults, structuredOutput } = outputState
       const durationMs = Date.now() - active.startedAt
@@ -1461,7 +1540,7 @@ export class SubagentRuntime {
           outputState,
         )
       }
-      const policyError =
+      const acceptanceError =
         structuredOutput !== undefined &&
         structuredOutput.mode === 'strict' &&
         structuredOutput.status !== 'valid'
@@ -1469,10 +1548,30 @@ export class SubagentRuntime {
           : gateResults.some((gate) => !gate.passed)
             ? 'A deterministic output gate failed.'
             : undefined
-      if (policyError !== undefined) {
+      if (acceptanceError !== undefined) {
         return this.finishFailure(
           record,
-          policyError,
+          acceptanceError,
+          'failed',
+          durationMs,
+          usage,
+          output,
+          active,
+          outputState,
+        )
+      }
+      if (isolationReceipt?.integration === 'apply') {
+        active.isolationReceipt = await integrateWriterIsolation(isolationReceipt)
+      }
+      const integrationError =
+        active.isolationReceipt?.status === 'conflict' ||
+        active.isolationReceipt?.status === 'partial'
+          ? 'The isolated changes could not be integrated without a conflict.'
+          : undefined
+      if (integrationError !== undefined) {
+        return this.finishFailure(
+          record,
+          integrationError,
           'failed',
           durationMs,
           usage,
@@ -1495,6 +1594,7 @@ export class SubagentRuntime {
       }
       const contextState = active.session.getSessionStats().contextUsage
       if (contextState !== undefined) completedRecord.contextState = contextState
+      if (active.isolationReceipt !== undefined) completedRecord.isolation = active.isolationReceipt
       if (active.retryFailure !== undefined) completedRecord.retryFailure = active.retryFailure
       if (structuredOutput !== undefined) completedRecord.structuredOutput = structuredOutput
       this.state.update(completedRecord)
@@ -1509,6 +1609,7 @@ export class SubagentRuntime {
           finalMessage: output,
           gateResults,
           intercomUsage: active.intercomUsage,
+          isolation: active.isolationReceipt,
           model: actualModel(active.messages, model.modelRef),
           runId: record.runId ?? record.agentId,
           status: 'completed',
@@ -1527,6 +1628,11 @@ export class SubagentRuntime {
       const durationMs = Date.now() - active.startedAt
       const usage = collectUsage(active.messages, active.metrics, durationMs)
       const status = active.abortReason === undefined ? 'failed' : 'aborted'
+      if (active.isolationReceipt === undefined) {
+        try {
+          await this.captureIsolation(active, false)
+        } catch {}
+      }
       if (outputState === undefined) {
         try {
           outputState = await this.createOutputState(record, fullOutput, status)
@@ -1601,6 +1707,7 @@ export class SubagentRuntime {
       error: record.error,
       gateResults: structuredClone(record.gateResults ?? []),
       intercomUsage: { ...(record.intercomUsage ?? emptyUsage(0)) },
+      isolation: record.isolation === undefined ? undefined : structuredClone(record.isolation),
       model: record.model,
       output: record.output,
       status: record.status,
@@ -1647,6 +1754,9 @@ export class SubagentRuntime {
     if (active.retryFailure !== undefined) {
       failedRecord = { ...failedRecord, retryFailure: active.retryFailure }
     }
+    if (active.isolationReceipt !== undefined) {
+      failedRecord = { ...failedRecord, isolation: active.isolationReceipt }
+    }
     if (outputState !== undefined) {
       failedRecord = {
         ...failedRecord,
@@ -1662,6 +1772,7 @@ export class SubagentRuntime {
       agentId: record.agentId,
       error,
       finalMessage: output,
+      isolation: active.isolationReceipt,
       runId: record.runId ?? record.agentId,
       status: 'error',
       taskId: record.itemId ?? 'task',

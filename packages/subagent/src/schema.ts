@@ -15,6 +15,20 @@ export const EffortSchema = Type.Union([
 
 export const SchemaModeSchema = Type.Union([Type.Literal('permissive'), Type.Literal('strict')])
 
+export const IsolationIntegrationSchema = Type.Union([
+  Type.Literal('apply'),
+  Type.Literal('branch'),
+  Type.Literal('manual'),
+])
+
+export const IsolationRequestSchema = Type.Object(
+  {
+    integration: Type.Optional(IsolationIntegrationSchema),
+    mode: Type.Literal('worktree'),
+  },
+  { additionalProperties: false },
+)
+
 const JsonNullSchema = Type.Null()
 const JsonBooleanSchema = Type.Boolean()
 const JsonNumberSchema = Type.Number()
@@ -108,6 +122,7 @@ const SingleTaskFields = {
   cwd: Type.Optional(Type.String({ minLength: 1 })),
   description: Type.String({ minLength: 1 }),
   gates: Type.Optional(Type.Array(GateDefinitionSchema)),
+  isolation: Type.Optional(IsolationRequestSchema),
   model: Type.Optional(Type.String({ minLength: 1 })),
   outputSchema: Type.Optional(JsonValueSchema),
   prompt: Type.String({ minLength: 1 }),
@@ -219,6 +234,54 @@ export const GateResultSchema = Type.Object({
   passed: Type.Boolean(),
 })
 
+export const IsolationPatchRefSchema = Type.Object({
+  byteLength: Type.Number({ minimum: 0 }),
+  sha256: Type.String({ minLength: 64, maxLength: 64 }),
+  uri: Type.String({ minLength: 1 }),
+})
+
+export const IsolationChangedFileSchema = Type.Object({
+  path: Type.String({ minLength: 1 }),
+  status: Type.String({ minLength: 1 }),
+})
+
+export const IsolationRepositoryReceiptSchema = Type.Object({
+  baselineCommit: Type.String({ minLength: 1 }),
+  baselineTree: Type.String({ minLength: 1 }),
+  branch: Type.Optional(Type.String({ minLength: 1 })),
+  changedFiles: Type.Array(IsolationChangedFileSchema),
+  destinationHeadAfter: Type.Optional(Type.String({ minLength: 1 })),
+  destinationHeadBefore: Type.String({ minLength: 1 }),
+  diffstat: Type.String(),
+  error: Type.Optional(Type.String()),
+  patch: IsolationPatchRefSchema,
+  relativePath: Type.String(),
+  repoRoot: Type.String({ minLength: 1 }),
+  resultCommit: Type.String({ minLength: 1 }),
+  resultTree: Type.String({ minLength: 1 }),
+  status: Type.Union([
+    Type.Literal('captured'),
+    Type.Literal('integrated'),
+    Type.Literal('conflict'),
+  ]),
+})
+
+export const IsolationReceiptSchema = Type.Object({
+  attemptId: Type.String({ minLength: 1 }),
+  cleanupDebt: Type.Boolean(),
+  error: Type.Optional(Type.String()),
+  integration: IsolationIntegrationSchema,
+  repositories: Type.Array(IsolationRepositoryReceiptSchema),
+  retainedPath: Type.Optional(Type.String({ minLength: 1 })),
+  status: Type.Union([
+    Type.Literal('captured'),
+    Type.Literal('integrated'),
+    Type.Literal('partial'),
+    Type.Literal('conflict'),
+  ]),
+  writerId: Type.String({ minLength: 1 }),
+})
+
 export const AgentSourceSchema = Type.Union([
   Type.Object({ kind: Type.Literal('bundled') }),
   Type.Object({ id: Type.String({ minLength: 1 }), kind: Type.Literal('extension') }),
@@ -276,6 +339,7 @@ export const ExecutionContractSchema = Type.Object({
   effort: EffortSchema,
   fast: Type.Boolean(),
   gates: Type.Array(GateDefinitionSchema),
+  isolation: Type.Optional(IsolationRequestSchema),
   lineage: Type.Optional(LineageContractSchema),
   model: Type.String({ minLength: 1 }),
   modelSelector: Type.String({ minLength: 1 }),
@@ -301,6 +365,7 @@ const RunRecordFields = {
   fast: Type.Boolean(),
   gateResults: Type.Optional(Type.Array(GateResultSchema)),
   intercomUsage: Type.Optional(RunUsageSchema),
+  isolation: Type.Optional(IsolationReceiptSchema),
   itemId: Type.Optional(Type.String({ minLength: 1 })),
   model: Type.String({ minLength: 1 }),
   modelSelector: Type.String({ minLength: 1 }),
@@ -353,6 +418,7 @@ export const CoordinationTaskStateSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1 })),
   artifact: Type.Optional(ArtifactRefSchema),
   error: Type.Optional(Type.String()),
+  isolation: Type.Optional(IsolationReceiptSchema),
   needs: Type.Array(Type.String({ minLength: 1 })),
   status: Type.Union([
     Type.Literal('pending'),
@@ -416,11 +482,18 @@ export const RuntimeStateV3Schema = Type.Object({
   version: Type.Literal(3),
 })
 
-export const RuntimeStateSchema = Type.Object({
+export const RuntimeStateV4Schema = Type.Object({
   ownerSessionId: Type.String({ minLength: 1 }),
   records: Type.Array(RunRecordSchema),
   runs: Type.Optional(Type.Array(CoordinationRunStateSchema)),
   version: Type.Literal(4),
+})
+
+export const RuntimeStateSchema = Type.Object({
+  ownerSessionId: Type.String({ minLength: 1 }),
+  records: Type.Array(RunRecordSchema),
+  runs: Type.Optional(Type.Array(CoordinationRunStateSchema)),
+  version: Type.Literal(5),
 })
 
 export type AgentSource = StaticDecode<typeof AgentSourceSchema>
@@ -436,8 +509,15 @@ export type ExecutionContract = StaticDecode<typeof ExecutionContractSchema>
 export type ExecutionContractV1 = StaticDecode<typeof ExecutionContractV1Schema>
 export type GateDefinition = StaticDecode<typeof GateDefinitionSchema>
 export type GateResult = StaticDecode<typeof GateResultSchema>
+export type IsolationChangedFile = StaticDecode<typeof IsolationChangedFileSchema>
+export type IsolationIntegration = StaticDecode<typeof IsolationIntegrationSchema>
+export type IsolationPatchRef = StaticDecode<typeof IsolationPatchRefSchema>
+export type IsolationReceipt = StaticDecode<typeof IsolationReceiptSchema>
+export type IsolationRepositoryReceipt = StaticDecode<typeof IsolationRepositoryReceiptSchema>
+export type IsolationRequest = StaticDecode<typeof IsolationRequestSchema>
 export type LegacyArtifactRef = StaticDecode<typeof LegacyArtifactRefSchema>
 export type RuntimeStateV3 = StaticDecode<typeof RuntimeStateV3Schema>
+export type RuntimeStateV4 = StaticDecode<typeof RuntimeStateV4Schema>
 export type RetryFailure = StaticDecode<typeof RetryFailureSchema>
 export type RetryState = StaticDecode<typeof RetryStateSchema>
 export type RunRecord = StaticDecode<typeof RunRecordSchema>

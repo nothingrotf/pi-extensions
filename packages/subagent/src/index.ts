@@ -224,10 +224,18 @@ export type {
   CoordinationRunState,
   GateDefinition,
   GateResult,
+  IsolationChangedFile,
+  IsolationIntegration,
+  IsolationPatchRef,
+  IsolationReceipt,
+  IsolationRepositoryReceipt,
+  IsolationRequest,
   StructuredOutput,
   TaskInput,
   TaskNodeInput,
 } from './schema.ts'
+export { recoverWriterIsolations } from './isolation.ts'
+export type { IsolationRecovery } from './isolation.ts'
 
 export default function subagentExtension(pi: ExtensionAPI): void {
   registerSubagent(pi)

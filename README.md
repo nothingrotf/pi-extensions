@@ -28,7 +28,6 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 | [`@nothingrotf/hud`](packages/hud)           | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
 | [`@nothingrotf/loop`](packages/loop)         | Session loop for recurring and self-paced prompts or skills                       |
 | [`@nothingrotf/subagent`](packages/subagent) | In-process Task runtime with isolated, persistent Pi child sessions               |
-| [`@nothingrotf/task`](packages/task)         | Task compatibility adapter that delegates child work to `pi-subagents`            |
 | [`@nothingrotf/todo`](packages/todo)         | Structured todo lifecycle with session state and a persistent tree                |
 
 ## Development

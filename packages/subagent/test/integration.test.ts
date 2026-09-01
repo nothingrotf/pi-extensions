@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 
 import type {
   Api,
@@ -36,6 +38,8 @@ import {
 import { redactSensitiveText } from '../src/intercom.ts'
 import type { SubagentRuntime } from '../src/runtime.ts'
 import { RuntimeStateSchema, TaskInputSchema, type TaskInput } from '../src/schema.ts'
+
+const execFileAsync = promisify(execFile)
 
 interface Deferred {
   promise: Promise<void>
@@ -203,6 +207,33 @@ function parentMessage(
 function childMessage(model: Model<Api>, context: Context): AssistantMessage {
   const prompts = userPrompts(context)
   const prompt = prompts.at(-1) ?? ''
+  if (prompt === 'WRITE_ISOLATED' || prompt === 'WRITE_INVALID') {
+    const written = toolResultText(context, 'write')
+    if (written !== undefined) {
+      return assistant(
+        model,
+        [
+          {
+            text: prompt === 'WRITE_INVALID' ? 'not json' : 'isolated write complete',
+            type: 'text',
+          },
+        ],
+        'stop',
+      )
+    }
+    return assistant(
+      model,
+      [
+        {
+          arguments: { content: 'isolated content\n', path: 'isolated.txt' },
+          id: `write-isolated-${Date.now()}`,
+          name: 'write',
+          type: 'toolCall',
+        },
+      ],
+      'toolUse',
+    )
+  }
   if (prompt === 'RETURN_TOOLS') {
     const tools =
       context.tools
@@ -616,6 +647,17 @@ async function runTask(harness: Harness, input: TaskInput): Promise<string> {
   return result
 }
 
+async function initializeHarnessRepository(harness: Harness): Promise<void> {
+  await writeFile(join(harness.dir, '.gitignore'), 'agent/\nsessions/\n', 'utf8')
+  await execFileAsync('git', ['init', '-q'], { cwd: harness.dir })
+  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: harness.dir })
+  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], {
+    cwd: harness.dir,
+  })
+  await execFileAsync('git', ['add', 'AGENTS.md', '.gitignore'], { cwd: harness.dir })
+  await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: harness.dir })
+}
+
 function agentId(text: string): string {
   const marker = 'Agent ID: '
   const start = text.indexOf(marker)
@@ -667,6 +709,51 @@ describe('subagent Task integration', () => {
     expect(redacted).not.toContain('eyJheader.payload.signature')
     expect(redacted).not.toContain('database-password')
   })
+
+  it('runs a writer in a worktree and applies the captured delta', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const result = await runTask(harness, {
+        description: 'Write in isolation',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+      })
+      expect(result).toContain('isolated write complete')
+      expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+      const record = latestState(harness).records.at(-1)
+      expect(record?.status).toBe('completed')
+      expect(record?.isolation?.status).toBe('integrated')
+      expect(record?.isolation?.repositories[0]?.changedFiles).toEqual([
+        { path: 'isolated.txt', status: 'A' },
+      ])
+    } finally {
+      await harness.close()
+    }
+  }, 30_000)
+
+  it('does not integrate a writer whose strict output policy fails', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const result = await runTask(harness, {
+        description: 'Reject isolated output',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        outputSchema: { type: 'object' },
+        prompt: 'WRITE_INVALID',
+        schemaMode: 'strict',
+        subagent_type: 'generalPurpose',
+      })
+      expect(result).toContain('Task failed')
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+      const record = latestState(harness).records.at(-1)
+      expect(record?.status).toBe('failed')
+      expect(record?.isolation?.status).toBe('captured')
+    } finally {
+      await harness.close()
+    }
+  }, 30_000)
 
   it('registers only Task and runs a persistent read-only child', async () => {
     const harness = await createHarness()
@@ -1218,7 +1305,7 @@ describe('subagent Task integration', () => {
     }
   })
 
-  it('migrates valid v2 state to v4', async () => {
+  it('migrates valid v2 state to v5', async () => {
     const harness = await createHarness()
     try {
       await runTask(harness, baseInput)
@@ -1228,7 +1315,24 @@ describe('subagent Task integration', () => {
         version: 2,
       })
       harness.runtime.restore(harness.context())
-      expect(latestState(harness)).toMatchObject({ records: [], version: 4 })
+      expect(latestState(harness)).toMatchObject({ records: [], version: 5 })
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('migrates v4 records and coordination state to v5', async () => {
+    const harness = await createHarness()
+    try {
+      const result = await runTask(harness, baseInput)
+      const id = agentId(result)
+      const state = latestState(harness)
+      harness.pi.appendEntry('pi-subagent-state', { ...state, version: 4 })
+      harness.runtime.restore(harness.context())
+      const migrated = latestState(harness)
+      expect(migrated.version).toBe(5)
+      expect(migrated.records.some((record) => record.agentId === id)).toBe(true)
+      expect(migrated.runs).toEqual(state.runs)
     } finally {
       await harness.close()
     }

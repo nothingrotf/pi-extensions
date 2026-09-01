@@ -15,6 +15,7 @@ import {
   resolveStructuredOutput,
   validateOutputSchema,
 } from '../src/output.ts'
+import { resolveRole } from '../src/roles.ts'
 import {
   type CoordinationRunState,
   SingleTaskInputSchema,
@@ -40,6 +41,13 @@ const node = {
 }
 
 describe('coordination primitives', () => {
+  it('preserves legacy local Task role aliases', () => {
+    expect(resolveRole('general-purpose', false).name).toBe('generalPurpose')
+    expect(resolveRole('general_purpose', false).name).toBe('generalPurpose')
+    expect(resolveRole('unspecified', false).name).toBe('generalPurpose')
+    expect(resolveRole('bash', false).name).toBe('shell')
+  })
+
   it('builds declared-order waves and rejects graph defects', () => {
     const graph = buildTaskGraph([
       { ...node, id: 'a' },

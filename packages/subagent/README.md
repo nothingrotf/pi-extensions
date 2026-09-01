@@ -115,9 +115,9 @@ The artifact metadata includes:
 - byte and line counts.
 - a media type.
 
-Graph state, node state, artifact metadata, and child records enter version 4 of the persisted parent state.
+Graph state, node state, artifact metadata, isolation receipts, and child records enter version 5 of the persisted parent state.
 
-The version 4 migration preserves artifact references from version 3 state.
+The version 5 migration preserves version 4 records and version 3 artifact references.
 
 Graph children also receive these private tools:
 
@@ -129,6 +129,73 @@ The mailbox rejects targets and reply IDs from another run. It also validates bo
 The mailbox rejects self-delivery and terminal targets. It removes closed endpoints and limits retained reply correlations.
 
 Each message can contain 64 KiB. Each Task mailbox can hold 1,000 pending messages.
+
+## Writer isolation
+
+Set `isolation.mode` to `worktree` for a child that can modify files.
+
+```ts
+Task({
+  description: 'Implement the fix',
+  prompt: 'Implement the requested change and run the focused tests.',
+  subagent_type: 'generalPurpose',
+  isolation: { mode: 'worktree', integration: 'apply' },
+})
+```
+
+The runtime requires a Git repository with a HEAD commit.
+
+It creates a detached Git worktree from a synthetic baseline commit.
+
+The synthetic baseline includes tracked, staged, unstaged, and untracked source content.
+
+The provider links ignored `node_modules` directories from the source checkout.
+
+Each physical attempt uses a unique directory and an atomic owner lease.
+
+The stable child Agent ID remains the writer identity across resume attempts.
+
+The runtime captures changes after completed, failed, and aborted turns.
+
+Each repository receipt contains:
+
+- baseline and result tree IDs.
+- destination HEAD values.
+- changed files and diffstat.
+- a retained patch URI and SHA-256 digest.
+- an integration status and error.
+
+The runtime discovers nested Git repositories and excludes submodules.
+
+The receipt contains one ordered ledger entry for each repository.
+
+The runtime rejects new, removed, or moved nested repository boundaries through capture or integration failure.
+
+`integration: 'apply'` applies successful work after a compare-and-swap check.
+
+The check verifies the destination HEAD and synthetic source tree under a cross-process repository lock.
+
+A repository conflict preserves its patch and internal Git reference without modifying that repository.
+
+Earlier repository entries can remain integrated when a later nested repository conflicts.
+
+`integration: 'manual'` captures patches without source changes.
+
+`integration: 'branch'` also creates an artifact branch for each repository.
+
+Artifact branches use the synthetic baseline commit. Use the patch for integration into a dirty source tree.
+
+Failed and aborted turns never apply changes. Their patches remain available in the terminal result.
+
+A cleanup failure keeps the worktree path and sets `cleanupDebt`.
+
+After a process crash, `recoverWriterIsolations()` lists dead or ambiguous owner leases.
+
+The recovery scan captures recoverable worktrees as patches, then removes clean worktree registrations.
+
+An ambiguous worktree stays in place with a recovery marker.
+
+Read-only and nested Tasks cannot request writer isolation.
 
 ## Structured output and gates
 
@@ -328,6 +395,22 @@ Run `/subagents` to show a compact status list.
 - `explore`
 - `shell`
 - `debug`
+
+## Migration from `@nothingrotf/task`
+
+`@nothingrotf/subagent` replaces the local `@nothingrotf/task` package.
+
+The common local fields remain available. Legacy role aliases also remain available.
+
+The replacement does not accept `attachments`, cloud fields, `machine`, or `interrupt`.
+
+Those fields represented unsupported compatibility paths in the removed adapter.
+
+Custom `subagent_type` values now require a discovered or registered agent definition.
+
+Old retained Agent IDs used the external RPC runtime. They cannot resume in this runtime.
+
+This package replacement is incompatible with consumers of those paths.
 
 ## Development
 

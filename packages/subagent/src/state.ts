@@ -13,8 +13,10 @@ import {
   RuntimeStateV1Schema,
   RuntimeStateV2Schema,
   RuntimeStateV3Schema,
+  RuntimeStateV4Schema,
   type RuntimeState,
   type RuntimeStateV3,
+  type RuntimeStateV4,
 } from './schema.ts'
 
 const STATE_TYPE = 'pi-subagent-state'
@@ -68,8 +70,12 @@ function migrateV3(state: RuntimeStateV3): RuntimeState {
       ...run,
       tasks: run.tasks.map((task) => migrateTask(task)),
     })),
-    version: 4,
+    version: 5,
   }
+}
+
+function migrateV4(state: RuntimeStateV4): RuntimeState {
+  return { ...state, version: 5 }
 }
 
 function decodeState<Input>(data: Input): DecodedState | undefined {
@@ -77,15 +83,18 @@ function decodeState<Input>(data: Input): DecodedState | undefined {
     return { migrated: false, state: Value.Decode(RuntimeStateSchema, data) }
   } catch {}
   try {
+    return { migrated: true, state: migrateV4(Value.Decode(RuntimeStateV4Schema, data)) }
+  } catch {}
+  try {
     return { migrated: true, state: migrateV3(Value.Decode(RuntimeStateV3Schema, data)) }
   } catch {}
   try {
     const legacy = Value.Decode(RuntimeStateV2Schema, data)
-    return { migrated: true, state: { ...legacy, records: legacy.records, version: 4 } }
+    return { migrated: true, state: { ...legacy, records: legacy.records, version: 5 } }
   } catch {}
   try {
     const legacy = Value.Decode(RuntimeStateV1Schema, data)
-    return { migrated: true, state: { ...legacy, records: legacy.records, version: 4 } }
+    return { migrated: true, state: { ...legacy, records: legacy.records, version: 5 } }
   } catch {
     return undefined
   }
@@ -232,7 +241,7 @@ export class StateStore {
       ownerSessionId: this.ownerSessionId,
       records: this.all(),
       runs: [...this.runs.values()],
-      version: 4,
+      version: 5,
     })
   }
 }

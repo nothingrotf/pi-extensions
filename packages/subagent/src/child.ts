@@ -70,7 +70,7 @@ export async function createChildModelRuntime(ctx: ExtensionContext): Promise<Mo
   return runtime
 }
 
-function createSessionManager(
+export function createChildSessionManager(
   ctx: ExtensionContext,
   cwd: string,
   resumeFile: string | undefined,
@@ -91,6 +91,7 @@ export interface CreateChildOptions {
   model: ResolvedModel
   resumeFile: string | undefined
   runtime: ModelRuntime
+  sessionManager?: SessionManager
   systemPrompt: string
   tools: readonly string[]
 }
@@ -114,7 +115,9 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
   })
   await resourceLoader.reload()
 
-  const sessionManager = createSessionManager(options.ctx, options.cwd, options.resumeFile)
+  const sessionManager =
+    options.sessionManager ??
+    createChildSessionManager(options.ctx, options.cwd, options.resumeFile)
   const intercomTools = createChildIntercomTools(sessionManager.getSessionId(), options.intercom)
   const intercomToolNames =
     options.intercom.mailbox === undefined

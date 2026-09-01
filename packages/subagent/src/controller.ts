@@ -20,6 +20,7 @@ function cloneSnapshot(snapshot: SubagentSnapshot): SubagentSnapshot {
   return {
     ...snapshot,
     intercomUsage: { ...snapshot.intercomUsage },
+    isolation: snapshot.isolation === undefined ? undefined : structuredClone(snapshot.isolation),
     usage: { ...snapshot.usage },
   }
 }
@@ -30,6 +31,7 @@ function cloneResult(result: SubagentResult): SubagentResult {
     artifact: result.artifact === undefined ? undefined : { ...result.artifact },
     gateResults: structuredClone(result.gateResults),
     intercomUsage: { ...result.intercomUsage },
+    isolation: result.isolation === undefined ? undefined : structuredClone(result.isolation),
     structuredOutput:
       result.structuredOutput === undefined ? undefined : structuredClone(result.structuredOutput),
     usage: { ...result.usage },

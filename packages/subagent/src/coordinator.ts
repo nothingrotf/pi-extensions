@@ -12,6 +12,7 @@ import type {
   CoordinationRunState,
   CoordinationTaskState,
   GateResult,
+  IsolationReceipt,
   StructuredOutput,
   TaskInput,
   TaskNodeInput,
@@ -24,6 +25,7 @@ export interface BatchItemResult {
   artifact: ArtifactRef | undefined
   error: string | undefined
   gateResults: readonly GateResult[]
+  isolation: IsolationReceipt | undefined
   output: string | undefined
   status: BatchItemStatus
   structuredOutput: StructuredOutput | undefined
@@ -46,6 +48,7 @@ function taskInput(node: TaskNodeInput, prompt: string): TaskInput {
   if (node.capability_profile !== undefined) input.capability_profile = node.capability_profile
   if (node.cwd !== undefined) input.cwd = node.cwd
   if (node.gates !== undefined) input.gates = node.gates
+  if (node.isolation !== undefined) input.isolation = node.isolation
   if (node.model !== undefined) input.model = node.model
   if (node.outputSchema !== undefined) input.outputSchema = node.outputSchema
   if (node.readonly !== undefined) input.readonly = node.readonly
@@ -81,6 +84,7 @@ function blockedResult(
     artifact: undefined,
     error: `Blocked by: ${failed.map((dependency) => dependency.taskId).join(', ')}.`,
     gateResults: [],
+    isolation: undefined,
     output: undefined,
     status: 'blocked',
     structuredOutput: undefined,
@@ -97,6 +101,7 @@ function taskState(result: BatchItemResult, needs: readonly string[]): Coordinat
   if (result.agentId !== undefined) state.agentId = result.agentId
   if (result.artifact !== undefined) state.artifact = result.artifact
   if (result.error !== undefined) state.error = result.error
+  if (result.isolation !== undefined) state.isolation = result.isolation
   return state
 }
 
@@ -108,6 +113,7 @@ function failedResult(node: TaskNodeInput, result: RuntimeResult): BatchItemResu
     artifact: result.details.artifact,
     error: result.details.error,
     gateResults: result.details.gateResults ?? [],
+    isolation: result.details.isolation,
     output: result.details.finalMessage,
     status: result.outcome,
     structuredOutput: result.details.structuredOutput,
@@ -186,6 +192,7 @@ export async function runBatch(options: {
             artifact: result.details.artifact,
             error: undefined,
             gateResults: result.details.gateResults,
+            isolation: result.details.isolation,
             output: result.content,
             status: 'completed',
             structuredOutput: result.details.structuredOutput,
@@ -197,6 +204,7 @@ export async function runBatch(options: {
             artifact: undefined,
             error: error instanceof Error ? error.message : String(error),
             gateResults: [],
+            isolation: undefined,
             output: undefined,
             status: options.signal?.aborted === true ? 'aborted' : 'failed',
             structuredOutput: undefined,

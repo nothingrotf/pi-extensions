@@ -84,18 +84,6 @@
         "typebox": "*",
       },
     },
-    "packages/task": {
-      "name": "@nothingrotf/task",
-      "version": "0.1.0",
-      "devDependencies": {
-        "@earendil-works/pi-coding-agent": "catalog:",
-        "typebox": "catalog:",
-      },
-      "peerDependencies": {
-        "@earendil-works/pi-coding-agent": "*",
-        "typebox": "*",
-      },
-    },
     "packages/todo": {
       "name": "@nothingrotf/todo",
       "version": "0.1.0",
@@ -270,8 +258,6 @@
     "@nothingrotf/loop": ["@nothingrotf/loop@workspace:packages/loop"],
 
     "@nothingrotf/subagent": ["@nothingrotf/subagent@workspace:packages/subagent"],
-
-    "@nothingrotf/task": ["@nothingrotf/task@workspace:packages/task"],
 
     "@nothingrotf/todo": ["@nothingrotf/todo@workspace:packages/todo"],
 

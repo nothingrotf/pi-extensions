@@ -49,16 +49,24 @@ const READONLY: RoleDefinition = {
 
 const promptCache = new Map<string, string>()
 
+function canonicalRole(name: string): string {
+  if (name === 'general-purpose' || name === 'general_purpose' || name === 'unspecified')
+    return 'generalPurpose'
+  if (name === 'bash') return 'shell'
+  return name
+}
+
 export function isBuiltInRole(name: string): boolean {
-  return ['generalPurpose', 'explore', 'shell', 'debug'].includes(name)
+  return ['generalPurpose', 'explore', 'shell', 'debug'].includes(canonicalRole(name))
 }
 
 export function resolveRole(subagentType: SubagentType, readonly: boolean): RoleDefinition {
   if (readonly) return READONLY
-  if (subagentType === 'explore') return EXPLORE
-  if (subagentType === 'shell') return SHELL
-  if (subagentType === 'debug') return DEBUG
-  if (subagentType === 'generalPurpose') return GENERAL_PURPOSE
+  const role = canonicalRole(subagentType)
+  if (role === 'explore') return EXPLORE
+  if (role === 'shell') return SHELL
+  if (role === 'debug') return DEBUG
+  if (role === 'generalPurpose') return GENERAL_PURPOSE
   throw new Error(`Subagent type "${subagentType}" does not exist.`)
 }
 
