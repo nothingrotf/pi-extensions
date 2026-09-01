@@ -66,6 +66,18 @@
         "typebox": "*",
       },
     },
+    "packages/session-history": {
+      "name": "@nothingrotf/session-history",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
     "packages/subagent": {
       "name": "@nothingrotf/subagent",
       "version": "0.1.0",
@@ -256,6 +268,8 @@
     "@nothingrotf/hud": ["@nothingrotf/hud@workspace:packages/hud"],
 
     "@nothingrotf/loop": ["@nothingrotf/loop@workspace:packages/loop"],
+
+    "@nothingrotf/session-history": ["@nothingrotf/session-history@workspace:packages/session-history"],
 
     "@nothingrotf/subagent": ["@nothingrotf/subagent@workspace:packages/subagent"],
 
