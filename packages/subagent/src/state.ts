@@ -1,18 +1,34 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { Value } from 'typebox/value'
 
-import { type RunRecord, RuntimeStateSchema } from './schema.ts'
+import {
+  type RunRecord,
+  RuntimeStateSchema,
+  RuntimeStateV1Schema,
+  type RuntimeState,
+} from './schema.ts'
 
 const STATE_TYPE = 'pi-subagent-state'
 const MAX_RECORDS = 256
+
+type OwnerContext = Pick<ExtensionContext, 'sessionManager'>
 
 export function recentRecords(records: readonly RunRecord[]): RunRecord[] {
   return [...records].sort((left, right) => left.updatedAt - right.updatedAt).slice(-MAX_RECORDS)
 }
 
-function decodeState<Input>(data: Input) {
+interface DecodedState {
+  migrated: boolean
+  state: RuntimeState
+}
+
+function decodeState<Input>(data: Input): DecodedState | undefined {
   try {
-    return Value.Decode(RuntimeStateSchema, data)
+    return { migrated: false, state: Value.Decode(RuntimeStateSchema, data) }
+  } catch {}
+  try {
+    const legacy = Value.Decode(RuntimeStateV1Schema, data)
+    return { migrated: true, state: { ...legacy, records: legacy.records, version: 2 } }
   } catch {
     return undefined
   }
@@ -28,24 +44,25 @@ export class StateStore {
     return this.ownerSessionId
   }
 
-  restore(ctx: ExtensionContext): void {
+  restore(ctx: OwnerContext): void {
     const ownerSessionId = ctx.sessionManager.getSessionId()
     let restored: ReturnType<typeof decodeState>
 
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type !== 'custom' || entry.customType !== STATE_TYPE) continue
-      const state = decodeState(entry.data)
-      if (state?.ownerSessionId === ownerSessionId) restored = state
+      const decoded = decodeState(entry.data)
+      if (decoded === undefined) throw new Error('The persisted subagent state is invalid.')
+      if (decoded.state.ownerSessionId === ownerSessionId) restored = decoded
     }
 
     this.ownerSessionId = ownerSessionId
     this.records = new Map()
-    for (const record of recentRecords(restored?.records ?? [])) {
+    for (const record of recentRecords(restored?.state.records ?? [])) {
       if (record.ownerSessionId === ownerSessionId) this.records.set(record.agentId, record)
     }
 
     const now = Date.now()
-    let changed = false
+    let changed = restored?.migrated ?? false
     for (const record of this.records.values()) {
       if (record.status !== 'running') continue
       this.records.set(record.agentId, {
@@ -60,8 +77,15 @@ export class StateStore {
     if (changed) this.persist()
   }
 
-  ensureOwner(ctx: ExtensionContext): void {
-    if (this.ownerSessionId !== ctx.sessionManager.getSessionId()) this.restore(ctx)
+  ensureOwner(ctx: OwnerContext): void {
+    const ownerSessionId = ctx.sessionManager.getSessionId()
+    if (this.ownerSessionId.length === 0) {
+      this.restore(ctx)
+      return
+    }
+    if (this.ownerSessionId !== ownerSessionId) {
+      throw new Error('The extension context does not belong to the active parent session.')
+    }
   }
 
   get(agentId: string): RunRecord | undefined {
@@ -99,7 +123,7 @@ export class StateStore {
     this.pi.appendEntry(STATE_TYPE, {
       ownerSessionId: this.ownerSessionId,
       records: this.all(),
-      version: 1,
+      version: 2,
     })
   }
 }

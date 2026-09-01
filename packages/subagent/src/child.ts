@@ -19,7 +19,6 @@ import {
   type ChildIntercomHandlers,
 } from './intercom.ts'
 import { toThinkingLevel, type ResolvedModel } from './model.ts'
-import { loadRolePrompt, type RoleDefinition } from './roles.ts'
 
 const ProviderPayloadSchema = Type.Object({}, { additionalProperties: true })
 
@@ -72,23 +71,26 @@ export async function createChildModelRuntime(ctx: ExtensionContext): Promise<Mo
 
 function createSessionManager(
   ctx: ExtensionContext,
+  cwd: string,
   resumeFile: string | undefined,
 ): SessionManager {
-  if (resumeFile !== undefined) return SessionManager.open(resumeFile, undefined, ctx.cwd)
+  if (resumeFile !== undefined) return SessionManager.open(resumeFile, undefined, cwd)
 
   const parentSession = ctx.sessionManager.getSessionFile()
-  if (parentSession === undefined) return SessionManager.create(ctx.cwd)
-  return SessionManager.create(ctx.cwd, undefined, { parentSession })
+  if (parentSession === undefined) return SessionManager.create(cwd)
+  return SessionManager.create(cwd, undefined, { parentSession })
 }
 
 export interface CreateChildOptions {
   ctx: ExtensionContext
+  cwd: string
   description: string
   intercom: ChildIntercomHandlers
   model: ResolvedModel
   resumeFile: string | undefined
-  role: RoleDefinition
   runtime: ModelRuntime
+  systemPrompt: string
+  tools: readonly string[]
 }
 
 export async function createChildSession(options: CreateChildOptions): Promise<AgentSession> {
@@ -100,26 +102,27 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
     }
   }
 
-  const rolePrompt = await loadRolePrompt(options.role)
   const resourceLoader = new DefaultResourceLoader({
     agentDir: getAgentDir(),
-    appendSystemPrompt: [rolePrompt],
-    cwd: options.ctx.cwd,
+    appendSystemPrompt: [options.systemPrompt],
+    cwd: options.cwd,
     extensionFactories: options.model.fast ? [fastModeExtension] : [],
     noExtensions: true,
     noThemes: true,
   })
   await resourceLoader.reload()
 
-  const sessionManager = createSessionManager(options.ctx, options.resumeFile)
+  const sessionManager = createSessionManager(options.ctx, options.cwd, options.resumeFile)
+  const intercomTools = createChildIntercomTools(sessionManager.getSessionId(), options.intercom)
   const created = await createAgentSession({
-    customTools: createChildIntercomTools(sessionManager.getSessionId(), options.intercom),
-    cwd: options.ctx.cwd,
+    customTools: intercomTools,
+    cwd: options.cwd,
     model: options.model.model,
     modelRuntime: options.runtime,
     resourceLoader,
     sessionManager,
     thinkingLevel: toThinkingLevel(options.model.effort),
+    tools: [...options.tools, ...CHILD_INTERCOM_TOOL_NAMES],
   })
 
   if (created.modelFallbackMessage !== undefined) {
@@ -142,9 +145,6 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
   }
 
   try {
-    if (options.role.tools !== undefined) {
-      created.session.setActiveToolsByName([...options.role.tools, ...CHILD_INTERCOM_TOOL_NAMES])
-    }
     created.session.setSessionName(`Task: ${options.description}`)
     return created.session
   } catch (error) {

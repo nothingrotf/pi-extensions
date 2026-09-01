@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import type {
   Api,
@@ -15,6 +16,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionAPI,
+  type ExtensionContext,
   type ProviderConfig,
   ModelRuntime,
   SessionManager,
@@ -23,7 +25,13 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 import { describe, expect, it } from 'vite-plus/test'
 
-import { registerSubagent } from '../src/index.ts'
+import { acquireSubagentHost } from '../src/controller.ts'
+import {
+  acquireSubagentController,
+  registerSubagent,
+  type SubagentController,
+  type SubagentEvent,
+} from '../src/index.ts'
 import { redactSensitiveText } from '../src/intercom.ts'
 import type { SubagentRuntime } from '../src/runtime.ts'
 import { RuntimeStateSchema, TaskInputSchema, type TaskInput } from '../src/schema.ts'
@@ -50,6 +58,8 @@ interface ProviderState {
 
 interface Harness {
   close: () => Promise<void>
+  context: () => ExtensionContext
+  controller: SubagentController
   dir: string
   pi: ExtensionAPI
   runtime: SubagentRuntime
@@ -254,6 +264,22 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
     const present = (context.systemPrompt ?? '').includes('PROJECT_CONTEXT_SENTINEL')
     return assistant(model, [{ text: `project-context:${present}`, type: 'text' }], 'stop')
   }
+  if (prompt === 'RETURN_PROFILE') {
+    const systemPrompt = context.systemPrompt ?? ''
+    const marker = systemPrompt.includes('CUSTOM_AGENT_SENTINEL')
+      ? 'custom'
+      : systemPrompt.includes('FILE_AGENT_SENTINEL')
+        ? 'file'
+        : systemPrompt.includes('ALT_CONTEXT_SENTINEL')
+          ? 'cwd'
+          : 'none'
+    const tools =
+      context.tools
+        ?.map((tool) => tool.name)
+        .sort()
+        .join(',') ?? ''
+    return assistant(model, [{ text: `profile:${marker};tools:${tools}`, type: 'text' }], 'stop')
+  }
   if (prompt === 'FAIL') {
     return assistant(model, [{ text: 'partial child output', type: 'text' }], 'length')
   }
@@ -423,10 +449,14 @@ async function createHarness(restoreRecordCount = 0, runTimeoutMs?: number): Pro
   if (model === undefined) throw new Error('The test model was not registered.')
 
   let extensionApi: ExtensionAPI | undefined
+  let extensionContext: ExtensionContext | undefined
   let subagentRuntime: SubagentRuntime | undefined
   const extension = (pi: ExtensionAPI) => {
     extensionApi = pi
     subagentRuntime = registerSubagent(pi, runTimeoutMs)
+    pi.on('tool_call', (_event, ctx) => {
+      extensionContext = ctx
+    })
   }
   const resourceLoader = new DefaultResourceLoader({
     agentDir: join(dir, 'agent'),
@@ -484,6 +514,11 @@ async function createHarness(restoreRecordCount = 0, runTimeoutMs?: number): Pro
       await Promise.all(state.requests)
       await rm(dir, { force: true, recursive: true })
     },
+    context: () => {
+      if (extensionContext === undefined) throw new Error('No extension context was captured.')
+      return extensionContext
+    },
+    controller: acquireSubagentController(pi),
     dir,
     pi,
     runtime,
@@ -526,7 +561,9 @@ function latestState(harness: Harness) {
   let state: ReturnType<typeof Value.Decode<typeof RuntimeStateSchema>> | undefined
   for (const entry of harness.session.sessionManager.getBranch()) {
     if (entry.type !== 'custom' || entry.customType !== 'pi-subagent-state') continue
-    state = Value.Decode(RuntimeStateSchema, entry.data)
+    try {
+      state = Value.Decode(RuntimeStateSchema, entry.data)
+    } catch {}
   }
   if (state === undefined) throw new Error('The parent contains no subagent state.')
   return state
@@ -600,6 +637,391 @@ describe('subagent Task integration', () => {
       })
       expect(context).toContain('project-context:true')
     } finally {
+      await harness.close()
+    }
+  })
+
+  it('acquires one controller and keeps registration idempotent', async () => {
+    const harness = await createHarness()
+    try {
+      expect(acquireSubagentController(harness.pi)).toBe(harness.controller)
+      expect(registerSubagent(harness.pi)).toBe(harness.runtime)
+      const names = harness.pi.getAllTools().map((tool) => tool.name)
+      expect(names.filter((name) => name === 'Task')).toEqual(['Task'])
+      expect(names).not.toContain('ask_parent')
+      expect(names).not.toContain('notify_parent')
+      expect(names).not.toContain('update_progress')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('documents the controller boundary across physical package copies', async () => {
+    const harness = await createHarness()
+    const packageRoot = join(import.meta.dirname, '..')
+    const copyRoot = await mkdtemp(join(packageRoot, '.physical-copy-'))
+    try {
+      await cp(join(packageRoot, 'src'), join(copyRoot, 'src'), { recursive: true })
+      const moduleUrl = pathToFileURL(join(copyRoot, 'src', 'controller.ts')).href
+      const PhysicalControllerSchema = Type.Object(
+        { acquireSubagentController: Type.Function([Type.Unknown()], Type.Unknown()) },
+        { additionalProperties: true },
+      )
+      const physical = Value.Decode(PhysicalControllerSchema, await import(moduleUrl))
+      const first = acquireSubagentController(harness.pi)
+      const second = physical.acquireSubagentController(harness.pi)
+      expect(second).not.toBe(first)
+    } finally {
+      await rm(copyRoot, { force: true, recursive: true })
+      await harness.close()
+    }
+  })
+
+  it('runs registered agents and freezes their contract for resume', async () => {
+    const harness = await createHarness()
+    const unregister = harness.controller.registerAgents('integration', [
+      {
+        description: 'Custom integration agent',
+        effort: 'low',
+        name: 'custom-agent',
+        readonly: true,
+        systemPrompt: 'CUSTOM_AGENT_SENTINEL',
+        tools: ['read', 'bash'],
+      },
+    ])
+    try {
+      const first = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RETURN_PROFILE',
+        subagent_type: 'custom-agent',
+      })
+      expect(first).toContain('profile:custom;tools:ask_parent,notify_parent,read,update_progress')
+      const id = agentId(first)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.execution).toMatchObject({
+        agentName: 'custom-agent',
+        agentSource: { id: 'integration', kind: 'extension' },
+        readonly: true,
+        systemPrompt: 'CUSTOM_AGENT_SENTINEL',
+        tools: ['read'],
+      })
+
+      unregister()
+      const resumed = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RETURN_PROFILE',
+        resume: id,
+        subagent_type: 'custom-agent',
+      })
+      expect(resumed).toContain(
+        'profile:custom;tools:ask_parent,notify_parent,read,update_progress',
+      )
+    } finally {
+      unregister()
+      await harness.close()
+    }
+  })
+
+  it('discovers project agent files from the effective cwd', async () => {
+    const harness = await createHarness()
+    const nested = join(harness.dir, 'nested')
+    const agents = join(nested, '.pi', 'agents')
+    await mkdir(agents, { recursive: true })
+    await writeFile(join(nested, 'AGENTS.md'), 'ALT_CONTEXT_SENTINEL\n')
+    await writeFile(
+      join(agents, 'file-agent.md'),
+      [
+        '---',
+        'name: file-agent',
+        'description: File integration agent',
+        'effort: low',
+        'tools:',
+        '  - read',
+        '  - grep',
+        '---',
+        'FILE_AGENT_SENTINEL',
+      ].join('\n'),
+    )
+    try {
+      const first = await runTask(harness, {
+        ...baseInput,
+        cwd: 'nested',
+        prompt: 'RETURN_PROFILE',
+        subagent_type: 'file-agent',
+      })
+      expect(first).toContain(
+        'profile:file;tools:ask_parent,grep,notify_parent,read,update_progress',
+      )
+      const id = agentId(first)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.execution?.cwd).toBe(await realpath(nested))
+      expect(record?.execution?.agentSource).toMatchObject({ kind: 'project' })
+
+      const changedCwd = await runTask(harness, {
+        ...baseInput,
+        cwd: '.',
+        prompt: 'RETURN_PROFILE',
+        resume: id,
+        subagent_type: 'file-agent',
+      })
+      expect(changedCwd).toContain('must preserve the original cwd')
+      const changedTools = await runTask(harness, {
+        ...baseInput,
+        cwd: 'nested',
+        prompt: 'RETURN_PROFILE',
+        resume: id,
+        subagent_type: 'file-agent',
+        tools: ['read'],
+      })
+      expect(changedTools).toContain('must preserve the original tool policy')
+
+      await rm(join(agents, 'file-agent.md'))
+      const resumed = await runTask(harness, {
+        ...baseInput,
+        cwd: 'nested',
+        prompt: 'RETURN_PROFILE',
+        resume: id,
+        subagent_type: 'file-agent',
+        tools: ['read', 'grep'],
+      })
+      expect(resumed).toContain('profile:file')
+
+      await rm(nested, { recursive: true })
+      const missingCwd = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RETURN_PROFILE',
+        resume: id,
+        subagent_type: 'file-agent',
+      })
+      expect(missingCwd).toContain('The Task cwd does not exist:')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('validates cwd, agent files, and tool policies before session creation', async () => {
+    const harness = await createHarness()
+    const invalidFileDir = join(harness.dir, '.agents', 'agents')
+    await mkdir(invalidFileDir, { recursive: true })
+    await writeFile(
+      join(invalidFileDir, 'broken-agent.md'),
+      '---\ndescription: Broken\nunknown: true\n---\nPrompt',
+    )
+    const plainFile = join(harness.dir, 'plain-file')
+    await writeFile(plainFile, 'not a directory')
+    try {
+      const missing = await runTask(harness, { ...baseInput, cwd: 'missing' })
+      expect(missing).toContain('The Task cwd does not exist:')
+      const file = await runTask(harness, { ...baseInput, cwd: plainFile })
+      expect(file).toContain('The Task cwd is not a directory:')
+      const malformed = await runTask(harness, {
+        ...baseInput,
+        subagent_type: 'broken-agent',
+      })
+      expect(malformed).toContain('Agent frontmatter is invalid')
+      const unknown = await runTask(harness, { ...baseInput, tools: ['unknown'] })
+      expect(unknown).toContain('Task tool "unknown" is unknown.')
+      const privateTool = await runTask(harness, { ...baseInput, tools: ['ask_parent'] })
+      expect(privateTool).toContain('Task tool "ask_parent" is private')
+      const duplicate = await runTask(harness, { ...baseInput, tools: ['read', 'read'] })
+      expect(duplicate).toContain('Task tool "read" is duplicated.')
+      const disallowed = await runTask(harness, { ...baseInput, tools: ['bash'] })
+      expect(disallowed).toContain('Task tool "bash" is not permitted by agent "explore".')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('steers, observes, waits for, and cancels through the controller', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, baseInput)
+      const ctx = harness.context()
+      const events: SubagentEvent[] = []
+      const mutatingUnsubscribe = harness.controller.subscribe(
+        ctx.sessionManager.getSessionId(),
+        (event) => {
+          if (event.type === 'created') event.receipt.handle.agentId = 'mutated'
+          if (event.type === 'updated') event.snapshot.usage.input = 999
+          if (event.type === 'terminal') event.result.usage.input = 999
+        },
+      )
+      const unsubscribe = harness.controller.subscribe(ctx.sessionManager.getSessionId(), (event) =>
+        events.push(event),
+      )
+      const immediate = await harness.controller.start({ ctx, input: baseInput })
+      expect(immediate.handle.agentId).not.toBe('mutated')
+      expect((await harness.controller.wait(immediate.handle)).status).toBe('completed')
+      expect(
+        events.some(
+          (event) => event.type === 'terminal' && event.handle.agentId === immediate.handle.agentId,
+        ),
+      ).toBe(true)
+
+      const receipt = await harness.controller.start({
+        ctx,
+        input: { ...baseInput, prompt: 'BLOCK' },
+      })
+      await harness.state.blockedReady.promise
+      const activeSnapshot = harness.controller.snapshot(receipt.handle)
+      expect(activeSnapshot?.running).toBe(true)
+      if (activeSnapshot === undefined) throw new Error('The active snapshot is missing.')
+      activeSnapshot.usage.input = 999
+      expect(harness.controller.snapshot(receipt.handle)?.usage.input).not.toBe(999)
+      const steered = await harness.controller.steer(receipt.handle, 'redirect')
+      expect(steered.status).toBe('queued')
+      for (const release of harness.state.blocked.splice(0)) release()
+      const result = await harness.controller.wait(receipt.handle)
+      expect(result.output).toContain('child:BLOCK|redirect')
+      const completedResult = harness.controller.result(receipt.handle)
+      expect(completedResult?.status).toBe('completed')
+      if (completedResult === undefined) throw new Error('The terminal result is missing.')
+      completedResult.usage.input = 999
+      expect(harness.controller.result(receipt.handle)?.usage.input).not.toBe(999)
+      expect(events[0]?.type).toBe('created')
+      expect(events.some((event) => event.type === 'terminal')).toBe(true)
+      const revisions = events.map((event) => event.revision)
+      expect(revisions).toEqual([...revisions].sort((left, right) => left - right))
+      expect((await harness.controller.steer(receipt.handle, 'late')).status).toBe('rejected')
+
+      harness.state.blockedReady = deferred()
+      const cancellable = await harness.controller.start({
+        ctx,
+        input: { ...baseInput, prompt: 'BLOCK' },
+      })
+      await harness.state.blockedReady.promise
+      expect((await harness.controller.cancel(cancellable.handle)).status).toBe('requested')
+      expect((await harness.controller.wait(cancellable.handle)).status).toBe('aborted')
+
+      harness.state.blockedReady = deferred()
+      const abortController = new AbortController()
+      const signaled = await harness.controller.start({
+        ctx,
+        input: { ...baseInput, prompt: 'BLOCK' },
+        signal: abortController.signal,
+      })
+      await harness.state.blockedReady.promise
+      abortController.abort()
+      expect((await harness.controller.wait(signaled.handle)).status).toBe('aborted')
+      expect(
+        events.some((event) => event.type === 'updated' && event.snapshot.usage.input === 999),
+      ).toBe(false)
+      expect(
+        events.some((event) => event.type === 'terminal' && event.result.usage.input === 999),
+      ).toBe(false)
+      mutatingUnsubscribe()
+      unsubscribe()
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('invalidates stale lifecycle callbacks and handles across session replacements', async () => {
+    const first = await createHarness()
+    const second = await createHarness()
+    try {
+      await runTask(first, baseInput)
+      const lifecycleEvents: SubagentEvent[] = []
+      const unsubscribe = first.controller.subscribe(
+        first.session.sessionManager.getSessionId(),
+        (event) => lifecycleEvents.push(event),
+      )
+      const receipt = await first.controller.start({
+        ctx: first.context(),
+        input: { ...baseInput, prompt: 'BLOCK' },
+      })
+      await first.state.blockedReady.promise
+      const host = acquireSubagentHost(first.pi)
+      const staleStop = host.stopSession(first.context(), 'The parent session switched.')
+      const replacement = host.replaceSession({ sessionManager: second.session.sessionManager })
+      for (const release of first.state.blocked.splice(0)) release()
+      expect(await staleStop).toBe(false)
+      expect(await replacement).toBe(true)
+      expect(first.controller.snapshot(receipt.handle)).toBeUndefined()
+      expect(first.controller.result(receipt.handle)).toBeUndefined()
+      expect((await first.controller.cancel(receipt.handle)).status).toBe('stale-handle')
+      expect((await first.controller.steer(receipt.handle, 'late')).status).toBe('rejected')
+      expect(first.runtime.ownerSessionId).toBe(second.session.sessionManager.getSessionId())
+      expect(
+        lifecycleEvents.some(
+          (event) =>
+            event.type === 'owner-invalidated' &&
+            event.ownerGeneration === receipt.handle.ownerGeneration,
+        ),
+      ).toBe(true)
+      expect(await host.stopSession(first.context(), 'A delayed stale callback.')).toBe(false)
+      expect(await host.replaceSession({ sessionManager: first.session.sessionManager })).toBe(
+        false,
+      )
+      await expect(
+        first.controller.start({ ctx: first.context(), input: baseInput }),
+      ).rejects.toThrow('does not belong to the active parent session')
+
+      expect(
+        await host.stopSession(
+          { sessionManager: second.session.sessionManager },
+          'The parent session forked.',
+        ),
+      ).toBe(true)
+      expect(await host.replaceSession({ sessionManager: first.session.sessionManager })).toBe(true)
+      expect(await host.stopSession(first.context(), 'The parent session tree changed.')).toBe(true)
+      expect(await host.replaceSession({ sessionManager: second.session.sessionManager })).toBe(
+        true,
+      )
+      const secondContext = { sessionManager: second.session.sessionManager }
+      const earlierShutdown = host.stopSession(secondContext, 'The parent session stopped.')
+      const latestShutdown = host.stopSession(secondContext, 'The parent session stopped.')
+      expect(await earlierShutdown).toBe(false)
+      expect(await latestShutdown).toBe(true)
+      unsubscribe()
+    } finally {
+      for (const release of first.state.blocked.splice(0)) release()
+      await first.close()
+      await second.close()
+    }
+  })
+
+  it('invalidates active handles during a real extension reload', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, baseInput)
+      const receipt = await harness.controller.start({
+        ctx: harness.context(),
+        input: { ...baseInput, prompt: 'BLOCK' },
+      })
+      await harness.state.blockedReady.promise
+      const reload = harness.session.reload()
+      for (const release of harness.state.blocked.splice(0)) release()
+      await reload
+      expect(harness.controller.snapshot(receipt.handle)).toBeUndefined()
+      expect((await harness.controller.cancel(receipt.handle)).status).toBe('stale-handle')
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('invalidates active handles during real tree navigation', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, baseInput)
+      const target = harness.session.sessionManager
+        .getBranch()
+        .find((entry) => entry.type === 'message' && entry.message.role === 'user')
+      if (target === undefined) throw new Error('The tree target is missing.')
+      const receipt = await harness.controller.start({
+        ctx: harness.context(),
+        input: { ...baseInput, prompt: 'BLOCK' },
+      })
+      await harness.state.blockedReady.promise
+      const navigation = harness.session.navigateTree(target.id)
+      for (const release of harness.state.blocked.splice(0)) release()
+      await navigation
+      expect(harness.controller.snapshot(receipt.handle)).toBeUndefined()
+      expect((await harness.controller.cancel(receipt.handle)).status).toBe('stale-handle')
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
       await harness.close()
     }
   })
@@ -705,6 +1127,48 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it('rejects legacy resume records without a persisted execution contract', async () => {
+    const harness = await createHarness()
+    try {
+      const first = await runTask(harness, baseInput)
+      const id = agentId(first)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      if (record === undefined) throw new Error('The child record is missing.')
+      const legacy = { ...record }
+      delete legacy.execution
+      harness.pi.appendEntry('pi-subagent-state', {
+        ownerSessionId: harness.session.sessionManager.getSessionId(),
+        records: [legacy],
+        version: 1,
+      })
+      harness.runtime.restore(harness.context())
+
+      const resumed = await runTask(harness, { ...baseInput, prompt: 'second', resume: id })
+      expect(resumed).toContain(
+        'A legacy Task record cannot resume without a persisted execution contract.',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports malformed persisted state instead of dropping records', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, baseInput)
+      harness.pi.appendEntry('pi-subagent-state', {
+        ownerSessionId: harness.session.sessionManager.getSessionId(),
+        records: 'invalid',
+        version: 2,
+      })
+      expect(() => harness.runtime.restore(harness.context())).toThrow(
+        'The persisted subagent state is invalid.',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('caps oversized restored state by update recency', async () => {
     const harness = await createHarness(258)
     try {
@@ -745,6 +1209,102 @@ describe('subagent Task integration', () => {
       })
       expect(wrongModel).toContain('Task failed: A resumed Task must preserve the original model.')
       expect(wrongModel).toContain(`Agent ID: ${id}`)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects foreign ownership without exposing foreign record details', async () => {
+    const harness = await createHarness()
+    try {
+      const first = await runTask(harness, baseInput)
+      const id = agentId(first)
+      const state = latestState(harness)
+      const record = state.records.find((candidate) => candidate.agentId === id)
+      if (record === undefined) throw new Error('The child record is missing.')
+      harness.pi.appendEntry('pi-subagent-state', {
+        ownerSessionId: state.ownerSessionId,
+        records: [{ ...record, ownerSessionId: 'foreign-owner' }],
+        version: 1,
+      })
+      harness.runtime.restore({ sessionManager: harness.session.sessionManager })
+      const result = await runTask(harness, { ...baseInput, prompt: 'foreign', resume: id })
+      expect(result).toContain(
+        'Task failed: The requested Agent ID does not belong to the current parent session.',
+      )
+      expect(result).not.toContain(record.sessionFile)
+      expect(result).not.toContain(`Agent ID: ${id}`)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects role and read-only policy changes during resume', async () => {
+    const harness = await createHarness()
+    try {
+      const mutable = agentId(await runTask(harness, baseInput))
+      const wrongRole = await runTask(harness, {
+        ...baseInput,
+        prompt: 'wrong role',
+        resume: mutable,
+        subagent_type: 'shell',
+      })
+      expect(wrongRole).toContain('A resumed Task must use the original subagent_type.')
+      const addReadonly = await runTask(harness, {
+        ...baseInput,
+        prompt: 'add readonly',
+        readonly: true,
+        resume: mutable,
+      })
+      expect(addReadonly).toContain('A resumed Task must preserve the original readonly policy.')
+
+      const readonly = agentId(await runTask(harness, { ...baseInput, readonly: true }))
+      const removeReadonly = await runTask(harness, {
+        ...baseInput,
+        prompt: 'remove readonly',
+        readonly: false,
+        resume: readonly,
+      })
+      expect(removeReadonly).toContain('A resumed Task must preserve the original readonly policy.')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects missing transcripts and divergent transcript session IDs', async () => {
+    const harness = await createHarness()
+    try {
+      const missingId = agentId(await runTask(harness, baseInput))
+      const missingRecord = latestState(harness).records.find(
+        (candidate) => candidate.agentId === missingId,
+      )
+      if (missingRecord === undefined) throw new Error('The child record is missing.')
+      await rm(missingRecord.sessionFile, { force: true })
+      const missing = await runTask(harness, {
+        ...baseInput,
+        prompt: 'missing transcript',
+        resume: missingId,
+      })
+      expect(missing).toContain('The child transcript does not exist:')
+      expect(missing).toContain(`Agent ID: ${missingId}`)
+
+      const divergentId = agentId(await runTask(harness, baseInput))
+      const divergentRecord = latestState(harness).records.find(
+        (candidate) => candidate.agentId === divergentId,
+      )
+      if (divergentRecord === undefined) throw new Error('The child record is missing.')
+      const transcript = await readFile(divergentRecord.sessionFile, 'utf8')
+      await writeFile(
+        divergentRecord.sessionFile,
+        transcript.replace(divergentId, 'different-session-id'),
+      )
+      const divergent = await runTask(harness, {
+        ...baseInput,
+        prompt: 'divergent transcript',
+        resume: divergentId,
+      })
+      expect(divergent).toContain('The resumed transcript returned a different Agent ID.')
+      expect(divergent).toContain(`Agent ID: ${divergentId}`)
     } finally {
       await harness.close()
     }
@@ -808,8 +1368,17 @@ describe('subagent Task integration', () => {
         .slice(disabledPayloadStart)
         .map((payload) => Value.Decode(PayloadSchema, payload))
       expect(disabledPayloads.some((payload) => payload.service_tier === 'priority')).toBe(false)
-      expect(latestState(harness).records.at(-1)?.effort).toBe('low')
-      expect(latestState(harness).records.at(-1)?.fast).toBe(false)
+      expect(disabled).toContain('A resumed Task must preserve the original effort.')
+
+      const removeFast = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-5.6-sol',
+        prompt: 'disable fast',
+        resume: id,
+      })
+      expect(removeFast).toContain('A resumed Task must preserve the original fast mode.')
+      expect(latestState(harness).records.at(-1)?.effort).toBe('medium')
+      expect(latestState(harness).records.at(-1)?.fast).toBe(true)
 
       const rejected = await runTask(harness, {
         ...baseInput,
@@ -824,6 +1393,23 @@ describe('subagent Task integration', () => {
       })
       expect(invalidEffort).toContain('does not support reasoning effort "high"')
       expect(invalidEffort).not.toContain('Agent ID:')
+
+      for (const model of [
+        'openai-codex/gpt-5.6-sol [fast] [fast]',
+        'openai-codex/gpt-5.6-sol [fast]:high',
+        'openai-codex/gpt-5.6-sol [fast] trailing',
+        'openai-codex/gpt-5.6-sol prefix [fast] suffix',
+      ]) {
+        const invalidFast = await runTask(harness, { ...baseInput, model })
+        expect(invalidFast).toContain('The [fast] marker must be the final model selector token.')
+        expect(invalidFast).not.toContain('Agent ID:')
+      }
+      const spacedFast = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-5.6-sol [ fast ]',
+      })
+      expect(spacedFast).toContain('is not available in the active Pi runtime')
+      expect(spacedFast).not.toContain('Agent ID:')
     } finally {
       await harness.close()
     }

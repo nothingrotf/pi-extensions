@@ -3,17 +3,19 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from '@earendil-wor
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { SubagentResolver, type SubagentDefinition } from './agents.ts'
 import {
   ChildSessionError,
   createChildModelRuntime,
   createChildSession,
   syncChildProviders,
 } from './child.ts'
+import { resolveInvocationCwd, resolveTools } from './execution.ts'
 import { activitySnippet, describeCall } from './format.ts'
 import { ParentSideTurnError, recordAutomaticReply, runParentSideTurn } from './intercom.ts'
 import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts'
-import { resolveRole } from './roles.ts'
-import type { Effort, RunRecord, RunUsage, TaskInput } from './schema.ts'
+import { isBuiltInRole, loadRolePrompt, resolveRole, type RoleDefinition } from './roles.ts'
+import type { Effort, ExecutionContract, RunRecord, RunUsage, TaskInput } from './schema.ts'
 import { StateStore } from './state.ts'
 
 const MAX_OUTPUT_BYTES = 50 * 1024
@@ -42,12 +44,20 @@ interface ActiveRun {
   cwd: string
   intercomController: AbortController
   intercomUsage: RunUsage
+  handle: SubagentHandle
   lastActivity: string | undefined
   messages: AssistantMessage[]
   pendingQuestion: ReturnType<typeof runParentSideTurn> | undefined
   metrics: RunMetrics
   session: AgentSession
   startedAt: number
+}
+
+export interface SubagentHandle {
+  agentId: string
+  ownerGeneration: number
+  ownerSessionId: string
+  runGeneration: number
 }
 
 export interface SubagentSnapshot {
@@ -69,6 +79,70 @@ export interface SubagentSnapshot {
   usage: RunUsage
 }
 
+export interface TaskReceipt {
+  background: true
+  createdAt: number
+  handle: SubagentHandle
+  revision: number
+  status: 'running'
+  transcriptPath: string
+}
+
+export interface SteerReceipt {
+  handle?: SubagentHandle
+  queuedAt?: number
+  reason?: 'empty' | 'invalid-owner' | 'not-active' | 'stale-handle' | 'terminal'
+  revision: number
+  status: 'queued' | 'rejected'
+}
+
+export interface CancelReceipt {
+  handle?: SubagentHandle
+  revision: number
+  status: 'requested' | 'not-found' | 'stale-handle' | 'already-terminal'
+}
+
+export interface SubagentResult {
+  agentId: string
+  error: string | undefined
+  intercomUsage: RunUsage
+  model: string
+  output: string | undefined
+  status: Exclude<RunRecord['status'], 'running'>
+  transcriptPath: string
+  usage: RunUsage
+}
+
+export type SubagentEvent =
+  | { receipt: TaskReceipt; revision: number; type: 'created' }
+  | { handle: SubagentHandle; revision: number; snapshot: SubagentSnapshot; type: 'updated' }
+  | { handle: SubagentHandle; result: SubagentResult; revision: number; type: 'terminal' }
+  | { ownerGeneration: number; ownerSessionId: string; revision: number; type: 'owner-invalidated' }
+
+export interface SubagentInvocation {
+  ctx: ExtensionContext
+  input: TaskInput
+  signal?: AbortSignal
+}
+
+export interface SubagentController {
+  cancel(handle: SubagentHandle): Promise<CancelReceipt>
+  invalidateAgentCache(): void
+  registerAgents(sourceId: string, definitions: readonly SubagentDefinition[]): () => void
+  result(handle: SubagentHandle): SubagentResult | undefined
+  snapshot(handle: SubagentHandle): SubagentSnapshot | undefined
+  start(invocation: SubagentInvocation): Promise<TaskReceipt>
+  steer(handle: SubagentHandle, message: string): Promise<SteerReceipt>
+  subscribe(ownerSessionId: string, listener: (event: SubagentEvent) => void): () => void
+  wait(handle: SubagentHandle, signal?: AbortSignal): Promise<SubagentResult>
+}
+
+interface ResolvedExecution {
+  contract: ExecutionContract
+  model: ResolvedModel
+  role: RoleDefinition
+}
+
 export interface RuntimeCompletedDetails {
   agentId: string
   durationMs: number
@@ -86,10 +160,13 @@ export interface RuntimeCompletedDetails {
 export interface RuntimeBackgroundResult {
   details: {
     agentId: string
+    createdAt: number
     effort: Effort
     fast: boolean
+    handle: SubagentHandle
     model: string
     status: 'background'
+    transcriptPath: string
   }
   kind: 'background'
 }
@@ -113,6 +190,7 @@ export type RuntimeDetails = RuntimeResult['details']
 interface StartOptions {
   ctx: ExtensionContext
   input: TaskInput
+  retainBackgroundSignal?: boolean
   signal: AbortSignal | undefined
 }
 
@@ -234,6 +312,10 @@ export class SubagentRuntime {
   private readonly leases = new Set<string>()
   private readonly listeners = new Set<() => void>()
   private modelRuntimePromise: ReturnType<typeof createChildModelRuntime> | undefined
+  private ownerGeneration = 0
+  private revision = 0
+  private runGeneration = 0
+  private readonly resolver = new SubagentResolver()
   private readonly state: StateStore
 
   constructor(
@@ -243,10 +325,24 @@ export class SubagentRuntime {
     this.state = new StateStore(pi)
   }
 
-  restore(ctx: ExtensionContext): void {
+  restore(ctx: Pick<ExtensionContext, 'sessionManager'>): void {
     if (this.active.size === 0) this.modelRuntimePromise = undefined
+    this.ownerGeneration += 1
     this.state.restore(ctx)
     this.emitChange()
+  }
+
+  invalidateHandles(): void {
+    this.ownerGeneration += 1
+    this.emitChange()
+  }
+
+  registerAgents(sourceId: string, definitions: readonly SubagentDefinition[]): () => void {
+    return this.resolver.register(sourceId, definitions)
+  }
+
+  invalidateAgentCache(): void {
+    this.resolver.invalidateCache()
   }
 
   subscribe(listener: () => void): () => void {
@@ -295,7 +391,109 @@ export class SubagentRuntime {
       .reverse()
   }
 
-  async cancel(agentId: string): Promise<boolean> {
+  get currentRevision(): number {
+    return this.revision
+  }
+
+  get currentOwnerGeneration(): number {
+    return this.ownerGeneration
+  }
+
+  get ownerSessionId(): string {
+    return this.state.owner
+  }
+
+  handle(agentId: string): SubagentHandle | undefined {
+    return this.active.get(agentId)?.handle
+  }
+
+  snapshotFor(handle: SubagentHandle): SubagentSnapshot | undefined {
+    if (!this.matchesHandle(handle)) return undefined
+    return this.listSnapshots().find((snapshot) => snapshot.agentId === handle.agentId)
+  }
+
+  resultFor(handle: SubagentHandle): SubagentResult | undefined {
+    if (
+      handle.ownerSessionId !== this.state.owner ||
+      handle.ownerGeneration !== this.ownerGeneration
+    )
+      return undefined
+    const active = this.active.get(handle.agentId)
+    if (active !== undefined && active.handle.runGeneration !== handle.runGeneration)
+      return undefined
+    const record = this.state.get(handle.agentId)
+    if (
+      record === undefined ||
+      record.status === 'running' ||
+      record.runGeneration !== handle.runGeneration
+    )
+      return undefined
+    return this.recordResult(record)
+  }
+
+  async waitFor(handle: SubagentHandle, signal?: AbortSignal): Promise<SubagentResult> {
+    if (!this.matchesHandle(handle)) {
+      const terminal = this.resultFor(handle)
+      if (terminal !== undefined) return terminal
+      throw new Error('The subagent handle is stale.')
+    }
+    const completion = this.active.get(handle.agentId)?.completion
+    if (completion === undefined) throw new Error('The subagent completion is unavailable.')
+    if (signal === undefined) await completion
+    else {
+      if (signal.aborted) throw new Error('The wait was aborted.')
+      await Promise.race([
+        completion,
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('The wait was aborted.')), {
+            once: true,
+          })
+        }),
+      ])
+    }
+    const result = this.resultFor(handle)
+    if (result === undefined) throw new Error('The subagent result is unavailable.')
+    return result
+  }
+
+  async steer(handle: SubagentHandle, message: string): Promise<SteerReceipt> {
+    const text = message.trim()
+    if (text.length === 0) return { reason: 'empty', revision: this.revision, status: 'rejected' }
+    if (handle.ownerSessionId !== this.state.owner) {
+      return { reason: 'invalid-owner', revision: this.revision, status: 'rejected' }
+    }
+    if (handle.ownerGeneration !== this.ownerGeneration) {
+      return { reason: 'stale-handle', revision: this.revision, status: 'rejected' }
+    }
+    const active = this.active.get(handle.agentId)
+    if (active === undefined) {
+      const reason = this.state.get(handle.agentId) === undefined ? 'not-active' : 'terminal'
+      return { reason, revision: this.revision, status: 'rejected' }
+    }
+    if (!this.matchesHandle(handle)) {
+      return { reason: 'stale-handle', revision: this.revision, status: 'rejected' }
+    }
+    if (!active.session.isStreaming) {
+      return { reason: 'not-active', revision: this.revision, status: 'rejected' }
+    }
+    try {
+      await active.session.steer(text)
+    } catch {
+      return { reason: 'not-active', revision: this.revision, status: 'rejected' }
+    }
+    if (!this.matchesHandle(handle)) {
+      return { reason: 'stale-handle', revision: this.revision, status: 'rejected' }
+    }
+    this.emitChange()
+    return {
+      handle: { ...handle },
+      queuedAt: Date.now(),
+      revision: this.revision,
+      status: 'queued',
+    }
+  }
+
+  requestCancel(agentId: string): boolean {
     const active = this.active.get(agentId)
     if (active === undefined) return false
     active.abortReason = 'The child was canceled from the subagent pane.'
@@ -303,7 +501,13 @@ export class SubagentRuntime {
     active.abortPromise ??= active.session.abort().catch((error) => {
       active.abortReason = errorMessage(error)
     })
-    await active.abortPromise
+    return true
+  }
+
+  async cancel(agentId: string): Promise<boolean> {
+    const active = this.active.get(agentId)
+    if (active === undefined || !this.requestCancel(agentId)) return false
+    if (active.abortPromise !== undefined) await active.abortPromise
     if (active.completion !== undefined) await active.completion
     return true
   }
@@ -377,18 +581,14 @@ export class SubagentRuntime {
     prior: RunRecord | undefined,
   ): Promise<RuntimeResult> {
     const input = options.input
-    const readonly = input.readonly ?? prior?.readonly ?? false
-    const role = resolveRole(input.subagent_type, readonly)
     const runtime = await this.getModelRuntime(options.ctx)
-    const selector = input.model ?? (prior === undefined ? role.model : undefined)
-    const model =
-      prior !== undefined && input.model === undefined
-        ? resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
-        : resolveModel(selector, role, options.ctx, runtime)
-    if (prior !== undefined) this.validateResumeSelection(prior, model)
+    const execution = await this.resolveExecution(options.ctx, input, prior, runtime)
+    const model = execution.model
+    const contract = execution.contract
 
     const session = await createChildSession({
       ctx: options.ctx,
+      cwd: contract.cwd,
       description,
       intercom: {
         askParent: (agentId, question) =>
@@ -398,8 +598,9 @@ export class SubagentRuntime {
       },
       model,
       resumeFile: prior?.sessionFile,
-      role,
       runtime,
+      systemPrompt: contract.systemPrompt,
+      tools: contract.tools,
     })
     const sessionFile = session.sessionFile
     if (sessionFile === undefined) {
@@ -417,17 +618,20 @@ export class SubagentRuntime {
 
     const now = Date.now()
     const background = input.run_in_background ?? false
+    this.runGeneration += 1
     const record: RunRecord = {
       agentId: session.sessionId,
       background,
       createdAt: prior?.createdAt ?? now,
       description,
       effort: model.effort,
+      execution: contract,
       fast: model.fast,
       model: model.modelRef,
       modelSelector: model.selector,
       ownerSessionId: this.state.owner,
-      readonly,
+      readonly: contract.readonly,
+      runGeneration: this.runGeneration,
       sessionFile,
       status: 'running',
       subagentType: input.subagent_type,
@@ -445,12 +649,19 @@ export class SubagentRuntime {
       throw new ChildSessionError(errorMessage(error), agentId)
     }
 
+    const handle: SubagentHandle = {
+      agentId: record.agentId,
+      ownerGeneration: this.ownerGeneration,
+      ownerSessionId: this.state.owner,
+      runGeneration: this.runGeneration,
+    }
     const active: ActiveRun = {
       abortPromise: undefined,
       abortReason: undefined,
       completion: undefined,
-      cwd: options.ctx.cwd,
+      cwd: contract.cwd,
       intercomController: new AbortController(),
+      handle,
       intercomUsage: emptyUsage(0),
       lastActivity: 'Starting',
       messages: [],
@@ -466,7 +677,7 @@ export class SubagentRuntime {
       model,
       prompt,
       active,
-      background ? undefined : options.signal,
+      background && options.retainBackgroundSignal !== true ? undefined : options.signal,
     )
     const completion = turn.then(
       (result) => this.finalizeRun(record, active, background, result),
@@ -483,12 +694,103 @@ export class SubagentRuntime {
     return {
       details: {
         agentId: record.agentId,
+        createdAt: record.createdAt,
+        effort: model.effort,
+        fast: model.fast,
+        handle: { ...handle },
+        model: model.modelRef,
+        status: 'background',
+        transcriptPath: record.sessionFile,
+      },
+      kind: 'background',
+    }
+  }
+
+  private async resolveExecution(
+    ctx: ExtensionContext,
+    input: TaskInput,
+    prior: RunRecord | undefined,
+    runtime: Awaited<ReturnType<typeof createChildModelRuntime>>,
+  ): Promise<ResolvedExecution> {
+    if (prior?.execution !== undefined) {
+      const contract = prior.execution
+      const persistedCwd = await resolveInvocationCwd(ctx.cwd, contract.cwd)
+      if (persistedCwd !== contract.cwd) {
+        throw new Error('The persisted Task cwd no longer resolves to its original directory.')
+      }
+      if (input.cwd !== undefined) {
+        const cwd = await resolveInvocationCwd(ctx.cwd, input.cwd)
+        if (cwd !== contract.cwd) throw new Error('A resumed Task must preserve the original cwd.')
+      }
+      if (input.tools !== undefined) {
+        const tools = resolveTools(
+          { name: contract.agentName, tools: contract.tools },
+          input.tools,
+          contract.readonly,
+        )
+        if (
+          tools.length !== contract.tools.length ||
+          tools.some((name, index) => contract.tools[index] !== name)
+        ) {
+          throw new Error('A resumed Task must preserve the original tool policy.')
+        }
+      }
+      const role: RoleDefinition = {
+        effort: contract.effort,
+        model: contract.modelSelector,
+        name: contract.agentName,
+        tools: contract.tools,
+      }
+      const model =
+        input.model === undefined
+          ? resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
+          : resolveModel(input.model, role, ctx, runtime)
+      this.validateResumeSelection(prior, model)
+      return { contract, model, role }
+    }
+
+    if (prior !== undefined) {
+      throw new Error('A legacy Task record cannot resume without a persisted execution contract.')
+    }
+
+    const cwd = await resolveInvocationCwd(ctx.cwd, input.cwd)
+    const discovered = await this.resolver.resolve(input.subagent_type, cwd)
+    if (discovered === undefined && !isBuiltInRole(input.subagent_type)) {
+      throw new Error(`Subagent type "${input.subagent_type}" does not exist.`)
+    }
+    const readonly = input.readonly ?? discovered?.readonly ?? false
+    let role: RoleDefinition
+    if (discovered === undefined) role = resolveRole(input.subagent_type, readonly)
+    else {
+      role = {
+        effort: discovered.effort,
+        name: discovered.name,
+        tools: discovered.tools,
+      }
+      if (discovered.model !== undefined) role.model = discovered.model
+    }
+    const systemPrompt =
+      discovered === undefined ? await loadRolePrompt(role) : discovered.systemPrompt
+    const selector = input.model ?? role.model
+    const model = resolveModel(selector, role, ctx, runtime)
+    const tools = resolveTools(role, input.tools, readonly)
+    return {
+      contract: {
+        agentDescription: discovered?.description ?? input.subagent_type,
+        agentName: discovered?.name ?? input.subagent_type,
+        agentSource: discovered?.source ?? { kind: 'bundled' },
+        cwd,
         effort: model.effort,
         fast: model.fast,
         model: model.modelRef,
-        status: 'background',
+        modelSelector: model.selector,
+        readonly,
+        systemPrompt,
+        tools,
+        version: 1,
       },
-      kind: 'background',
+      model,
+      role,
     }
   }
 
@@ -499,7 +801,7 @@ export class SubagentRuntime {
     }
     const record = this.state.get(agentId)
     if (record === undefined || record.ownerSessionId !== this.state.owner) {
-      throw new Error(`Agent ID "${agentId}" does not belong to the current parent session.`)
+      throw new Error('The requested Agent ID does not belong to the current parent session.')
     }
     if (this.leases.has(agentId) || this.active.has(agentId) || record.status === 'running') {
       throw new Error(`Agent ID "${agentId}" already has an active run.`)
@@ -516,6 +818,12 @@ export class SubagentRuntime {
   private validateResumeSelection(record: RunRecord, model: ResolvedModel): void {
     if (record.model !== model.modelRef) {
       throw new Error('A resumed Task must preserve the original model.')
+    }
+    if (record.effort !== model.effort) {
+      throw new Error('A resumed Task must preserve the original effort.')
+    }
+    if (record.fast !== model.fast) {
+      throw new Error('A resumed Task must preserve the original fast mode.')
     }
   }
 
@@ -759,7 +1067,32 @@ export class SubagentRuntime {
     this.emitChange()
   }
 
+  private matchesHandle(handle: SubagentHandle): boolean {
+    const active = this.active.get(handle.agentId)
+    return (
+      active !== undefined &&
+      active.handle.ownerSessionId === handle.ownerSessionId &&
+      active.handle.ownerGeneration === handle.ownerGeneration &&
+      active.handle.runGeneration === handle.runGeneration
+    )
+  }
+
+  private recordResult(record: RunRecord): SubagentResult {
+    if (record.status === 'running') throw new Error('The subagent result is not terminal.')
+    return {
+      agentId: record.agentId,
+      error: record.error,
+      intercomUsage: { ...(record.intercomUsage ?? emptyUsage(0)) },
+      model: record.model,
+      output: record.output,
+      status: record.status,
+      transcriptPath: record.sessionFile,
+      usage: { ...(record.usage ?? emptyUsage(record.durationMs ?? 0)) },
+    }
+  }
+
   private emitChange(): void {
+    this.revision += 1
     for (const listener of this.listeners) {
       try {
         listener()

@@ -140,6 +140,74 @@ describe('subagent TUI', () => {
     ])
   })
 
+  it('discards a partial oversized JSONL entry and renders later complete entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'subagent-peek-tail-'))
+    const sessionFile = join(dir, 'child.jsonl')
+    const oversized = JSON.stringify({
+      message: {
+        content: [{ text: 'x'.repeat(70 * 1024), type: 'text' }],
+        role: 'assistant',
+      },
+    })
+    const complete = JSON.stringify({
+      message: {
+        content: [{ text: 'Visible complete entry', type: 'text' }],
+        role: 'assistant',
+      },
+    })
+    await writeFile(sessionFile, `${oversized}\n${complete}\n`)
+    const pane = createPeekPane(
+      () => [snapshot('active', 'Inspect tail', 'running', sessionFile)],
+      theme,
+      () => {},
+      () => {},
+      () => {},
+    )
+    try {
+      pane.handleInput('\r')
+      const rendered = pane.render(80).join('\n')
+      expect(rendered).toContain('Visible complete entry')
+      expect(rendered).not.toContain('xxxxxxxx')
+    } finally {
+      pane.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
+
+  it('keeps a complete entry that starts exactly at the tail boundary', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'subagent-peek-boundary-'))
+    const sessionFile = join(dir, 'child.jsonl')
+    const boundary = JSON.stringify({
+      message: {
+        content: [{ text: 'Boundary entry remains visible', type: 'text' }],
+        role: 'assistant',
+      },
+    })
+    const emptyFiller = JSON.stringify({
+      message: { content: [{ text: '', type: 'text' }], role: 'assistant' },
+    })
+    const fillerLength = 64 * 1024 - Buffer.byteLength(`${boundary}\n${emptyFiller}\n`)
+    const filler = JSON.stringify({
+      message: { content: [{ text: 'x'.repeat(fillerLength), type: 'text' }], role: 'assistant' },
+    })
+    await writeFile(sessionFile, `{}\n${boundary}\n${filler}\n`)
+    const pane = createPeekPane(
+      () => [snapshot('active', 'Inspect boundary', 'running', sessionFile)],
+      theme,
+      () => {},
+      () => {},
+      () => {},
+    )
+    try {
+      pane.handleInput('\r')
+      pane.handleInput('g')
+      expect(pane.render(80).join('\n')).toContain('Boundary entry remains visible')
+    } finally {
+      pane.dispose()
+      await rm(dir, { force: true, recursive: true })
+    }
+  })
+
   it('keeps cancellation bound to the selected Agent ID after reordering', () => {
     const first = snapshot('first', 'First task', 'running', '/tmp/first.jsonl')
     const second = snapshot('second', 'Second task', 'running', '/tmp/second.jsonl')

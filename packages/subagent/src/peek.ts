@@ -69,7 +69,13 @@ function readTail(path: string): string {
     const start = Math.max(0, size - TAIL_BYTES)
     const buffer = Buffer.alloc(size - start)
     readSync(descriptor, buffer, 0, buffer.length, start)
-    return buffer.toString('utf8')
+    const text = buffer.toString('utf8')
+    if (start === 0) return text
+    const previous = Buffer.alloc(1)
+    readSync(descriptor, previous, 0, 1, start - 1)
+    if (previous[0] === 0x0a) return text
+    const firstCompleteEntry = text.indexOf('\n')
+    return firstCompleteEntry < 0 ? '' : text.slice(firstCompleteEntry + 1)
   } finally {
     closeSync(descriptor)
   }

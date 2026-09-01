@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
+import { acquireSubagentHost } from './controller.ts'
 import { formatUsage, statusIcon } from './format.ts'
-import { type RuntimeDetails, type RuntimeFailedResult, SubagentRuntime } from './runtime.ts'
+import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { TaskInputSchema } from './schema.ts'
 import { SubagentTui } from './ui.ts'
 
@@ -12,35 +13,32 @@ function failedContent(result: RuntimeFailedResult): string {
 }
 
 export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): SubagentRuntime {
-  const runtime = new SubagentRuntime(pi, runTimeoutMs)
+  const host = acquireSubagentHost(pi, runTimeoutMs)
+  const runtime = host.runtime
+  if (host.registered) return runtime
+  host.registered = true
   const tui = new SubagentTui(runtime)
 
   pi.on('agent_start', (_event, ctx) => {
     tui.agentStart(ctx)
   })
-  pi.on('session_start', (_event, ctx) => {
-    runtime.restore(ctx)
-    tui.sessionStart(ctx)
+  pi.on('session_start', async (_event, ctx) => {
+    if (await host.replaceSession(ctx)) tui.sessionStart(ctx)
   })
   pi.on('session_before_switch', async (_event, ctx) => {
-    await runtime.shutdown('The parent session switched.')
-    tui.sessionShutdown(ctx)
+    if (await host.stopSession(ctx, 'The parent session switched.')) tui.sessionShutdown(ctx)
   })
   pi.on('session_before_fork', async (_event, ctx) => {
-    await runtime.shutdown('The parent session forked.')
-    tui.sessionShutdown(ctx)
+    if (await host.stopSession(ctx, 'The parent session forked.')) tui.sessionShutdown(ctx)
   })
   pi.on('session_before_tree', async (_event, ctx) => {
-    await runtime.shutdown('The parent session tree changed.')
-    tui.sessionShutdown(ctx)
+    if (await host.stopSession(ctx, 'The parent session tree changed.')) tui.sessionShutdown(ctx)
   })
-  pi.on('session_tree', (_event, ctx) => {
-    runtime.restore(ctx)
-    tui.sessionStart(ctx)
+  pi.on('session_tree', async (_event, ctx) => {
+    if (await host.replaceSession(ctx)) tui.sessionStart(ctx)
   })
   pi.on('session_shutdown', async (_event, ctx) => {
-    await runtime.shutdown()
-    tui.sessionShutdown(ctx)
+    if (await host.stopSession(ctx)) tui.sessionShutdown(ctx)
   })
 
   pi.registerCommand('subagents', {
@@ -158,6 +156,21 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   return runtime
 }
+
+export { acquireSubagentController } from './controller.ts'
+export type { AgentSource, SubagentDefinition } from './agents.ts'
+export type {
+  CancelReceipt,
+  SteerReceipt,
+  SubagentController,
+  SubagentEvent,
+  SubagentHandle,
+  SubagentInvocation,
+  SubagentResult,
+  SubagentSnapshot,
+  TaskReceipt,
+} from './runtime.ts'
+export type { TaskInput } from './schema.ts'
 
 export default function subagentExtension(pi: ExtensionAPI): void {
   registerSubagent(pi)
