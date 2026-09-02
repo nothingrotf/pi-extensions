@@ -148,13 +148,13 @@ export default function ask(pi: ExtensionAPI): void {
   const asyncInvalidators = new Map<string, () => void>()
 
   pi.registerTool({
-    name: 'ask_question',
+    name: 'AskQuestion',
     label: 'Ask question',
     description,
     promptSnippet: 'Ask the user one or more questions with selectable and freeform answers',
     promptGuidelines: [
-      'Use ask_question when a user choice materially changes the result and context does not contain the answer.',
-      'Do not use ask_question for information that another tool can discover.',
+      'Use AskQuestion when a user choice materially changes the result and context does not contain the answer.',
+      'Do not use AskQuestion for information that another tool can discover.',
       'Use concise prompts, stable IDs, and distinct options.',
     ],
     parameters: AskQuestionSchema,
@@ -213,7 +213,7 @@ export default function ask(pi: ExtensionAPI): void {
     renderCall(args, theme) {
       const title = normalizedTitle(args.title)
       return new Text(
-        `${theme.fg('toolTitle', theme.bold('ask_question'))} ${theme.fg('muted', `${title} (${args.questions.length})`)}`,
+        `${theme.fg('toolTitle', theme.bold('AskQuestion'))} ${theme.fg('muted', `${title} (${args.questions.length})`)}`,
         0,
         0,
       )
@@ -232,7 +232,7 @@ export default function ask(pi: ExtensionAPI): void {
       }
       const text = result.content.find((item) => item.type === 'text')
       return new Text(
-        theme.fg('error', text?.type === 'text' ? text.text : 'Unknown ask_question error'),
+        theme.fg('error', text?.type === 'text' ? text.text : 'Unknown AskQuestion error'),
         0,
         0,
       )

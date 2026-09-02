@@ -49,9 +49,9 @@ function harness(mode = 'tui') {
     },
   }
   ask(api)
-  const tool = tools.get('ask_question')
+  const tool = tools.get('AskQuestion')
   if (tool === undefined) {
-    throw new Error('ask_question was not registered')
+    throw new Error('AskQuestion was not registered')
   }
   return {
     tool,
@@ -83,10 +83,10 @@ function harness(mode = 'tui') {
   }
 }
 
-describe('ask_question lifecycle', () => {
+describe('AskQuestion lifecycle', () => {
   it('registers the Pi tool name and schema', () => {
     const instance = harness()
-    expect(instance.tool.name).toBe('ask_question')
+    expect(instance.tool.name).toBe('AskQuestion')
     expect(instance.tool.parameters.required).toEqual(['title', 'questions'])
     expect(instance.tool.parameters.properties.questions.items.required).toEqual([
       'id',
@@ -159,6 +159,6 @@ describe('ask_question lifecycle', () => {
 
   it('renders the call title and question count', () => {
     const instance = harness()
-    expect(instance.renderCall(params)).toEqual(['ask_question Language (1)'])
+    expect(instance.renderCall(params)).toEqual(['AskQuestion Language (1)'])
   })
 })

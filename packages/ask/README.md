@@ -1,6 +1,6 @@
 # @nothingrotf/ask
 
-`@nothingrotf/ask` adds the `ask_question` tool to Pi.
+`@nothingrotf/ask` adds the `AskQuestion` tool to Pi.
 
 The form supports multiple questions, single selection, multiple selection, and a freeform `Other` answer.
 
