@@ -177,16 +177,19 @@ export async function withTimeout<ValueType>(
   }
 }
 
-export function authFilePath(): string {
+export function agentDir(): string {
   const configured = process.env.PI_CODING_AGENT_DIR
-  const directory = !configured
+  return !configured
     ? join(homedir(), '.pi', 'agent')
     : configured === '~'
       ? homedir()
       : configured.startsWith('~/') || configured.startsWith('~\\')
         ? join(homedir(), configured.slice(2))
         : configured
-  return join(directory, 'auth.json')
+}
+
+export function authFilePath(): string {
+  return join(agentDir(), 'auth.json')
 }
 
 async function loadAuth(signal: AbortSignal | undefined): Promise<AuthData | undefined> {

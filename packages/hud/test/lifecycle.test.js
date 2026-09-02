@@ -15,6 +15,9 @@ function harness() {
     getThinkingLevel() {
       return 'medium'
     },
+    registerCommand() {},
+    registerEntryRenderer() {},
+    appendEntry() {},
   }
   const ctx = {
     hasUI: true,
@@ -33,6 +36,9 @@ function harness() {
           return
         }
         footerFactory = value
+      },
+      onTerminalInput() {
+        return () => undefined
       },
     },
   }

@@ -21,7 +21,7 @@ export type HudState = {
   usage: UsageSnapshot | null
 }
 
-export const goalStatusKey = 'codex-goal'
+export const goalStatusKey = 'pi-goal'
 
 function color(theme: HudTheme, token: HudColor, text: string): string {
   try {
@@ -96,7 +96,7 @@ export function goalSegment(theme: HudTheme, statuses: ReadonlyMap<string, strin
   }
   const token = /achieved|complete/iu.test(text)
     ? 'success'
-    : /unmet|abandoned|paused|attention/iu.test(text)
+    : /unmet|abandoned|dropped|paused|budget-limited|attention/iu.test(text)
       ? 'warning'
       : 'accent'
   return `${color(theme, token, '⚑')} ${color(theme, 'muted', text)}`

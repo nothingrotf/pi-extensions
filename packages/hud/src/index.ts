@@ -3,6 +3,26 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { buildContextLabel, contextPercent, prettyEffort, prettyModel } from './format.ts'
 import { emptyGitStatus, readGitStatus } from './git.ts'
 import { renderHud, type HudState } from './render.ts'
+import {
+  choiceValue,
+  defaultSoundSettings,
+  FocusTracker,
+  focusChoiceRows,
+  isAskTool,
+  isFocusMode,
+  loadSoundSettings,
+  normalizeSoundValue,
+  parseSoundCommand,
+  playSound,
+  previewSound,
+  saveSoundSettings,
+  soundChoiceRows,
+  soundCompletions,
+  type SoundFocusMode,
+  type SoundSettings,
+  stopSoundPlayback,
+} from './sound.ts'
+import { registerTimestamps } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
 
 const gitRefreshMs = 30_000
@@ -13,6 +33,8 @@ function start(task: Promise<void>): void {
 }
 
 export default function hud(pi: ExtensionAPI): void {
+  registerTimestamps(pi)
+
   const state: HudState = {
     cwd: process.cwd(),
     git: emptyGitStatus(),
@@ -33,8 +55,32 @@ export default function hud(pi: ExtensionAPI): void {
   let usageTimer: ReturnType<typeof setTimeout> | undefined
   let gitController: AbortController | undefined
   let usageController: AbortController | undefined
+  let sound: SoundSettings = { ...defaultSoundSettings }
+  let unsubscribeInput: (() => void) | undefined
+  const focus = new FocusTracker()
 
   const render = () => requestRender?.()
+
+  const syncFocusReporting = () => {
+    if (sound.soundFocusMode === 'always') {
+      focus.disable()
+    } else {
+      focus.enable()
+    }
+  }
+
+  const play = (ctx: ExtensionContext, value: string) => {
+    if (active && ctx.hasUI && ctx.mode === 'tui') {
+      start(playSound(value, sound.soundFocusMode, focus.isFocused))
+    }
+  }
+
+  const applySoundSettings = (ctx: ExtensionContext, next: SoundSettings, message: string) => {
+    sound = next
+    syncFocusReporting()
+    start(saveSoundSettings(next))
+    ctx.ui.notify(`hud: ${message}`, 'info')
+  }
 
   const sync = (ctx: ExtensionContext) => {
     state.cwd = ctx.cwd
@@ -131,6 +177,10 @@ export default function hud(pi: ExtensionAPI): void {
     usageController = undefined
     gitRevision += 1
     usageRevision += 1
+    unsubscribeInput?.()
+    unsubscribeInput = undefined
+    focus.disable()
+    stopSoundPlayback()
   }
 
   pi.on('session_start', (_event, ctx) => {
@@ -165,6 +215,24 @@ export default function hud(pi: ExtensionAPI): void {
     start(refreshGit(ctx, life))
     refreshUsage(ctx, life)
     gitTimer = setInterval(() => start(refreshGit(ctx, life)), gitRefreshMs)
+    unsubscribeInput = ctx.ui.onTerminalInput((data) => {
+      focus.handleInput(data)
+      return undefined
+    })
+    start(
+      loadSoundSettings().then((settings) => {
+        if (active && life === generation) {
+          sound = settings
+          syncFocusReporting()
+        }
+      }),
+    )
+  })
+
+  pi.on('tool_execution_start', (event, ctx) => {
+    if (isAskTool(event.toolName)) {
+      play(ctx, sound.awaitingInputSound)
+    }
   })
 
   pi.on('model_select', (_event, ctx) => {
@@ -198,7 +266,90 @@ export default function hud(pi: ExtensionAPI): void {
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
+      play(ctx, sound.completionSound)
     }
+  })
+
+  pi.registerCommand('hud-sound', {
+    description:
+      'Configure sounds: <off|bell|fx-ok01|fx-ack01|/path.wav>, ask <sound>, focus <always|focused|unfocused>, or test',
+    getArgumentCompletions: (prefix) => soundCompletions(prefix),
+    async handler(args, ctx) {
+      const command = parseSoundCommand(args)
+      const rejectSound = () => {
+        ctx.ui.notify('hud: invalid sound, use a known id or an absolute file path', 'error')
+      }
+      const setCompletion = (raw: string) => {
+        const value = normalizeSoundValue(raw)
+        if (value === undefined) {
+          rejectSound()
+          return
+        }
+        applySoundSettings(ctx, { ...sound, completionSound: value }, `completion sound = ${value}`)
+        start(previewSound(value))
+      }
+      const setAwaiting = (raw: string) => {
+        const value = normalizeSoundValue(raw)
+        if (value === undefined) {
+          rejectSound()
+          return
+        }
+        applySoundSettings(
+          ctx,
+          { ...sound, awaitingInputSound: value },
+          `awaiting-input sound = ${value}`,
+        )
+        start(previewSound(value))
+      }
+      const setFocus = (mode: SoundFocusMode) => {
+        applySoundSettings(ctx, { ...sound, soundFocusMode: mode }, `sound focus mode = ${mode}`)
+      }
+      switch (command.kind) {
+        case 'preview':
+          start(previewSound(sound.completionSound))
+          ctx.ui.notify(`hud: playing ${sound.completionSound}`, 'info')
+          return
+        case 'setCompletion':
+          setCompletion(command.value)
+          return
+        case 'setAwaiting':
+          setAwaiting(command.value)
+          return
+        case 'setFocus':
+          setFocus(command.mode)
+          return
+        case 'pickCompletion': {
+          const pick = choiceValue(
+            await ctx.ui.select('Select completion sound', soundChoiceRows(sound.completionSound)),
+          )
+          if (pick) {
+            setCompletion(pick)
+          }
+          return
+        }
+        case 'pickAwaiting': {
+          const pick = choiceValue(
+            await ctx.ui.select(
+              'Select awaiting-input sound',
+              soundChoiceRows(sound.awaitingInputSound),
+            ),
+          )
+          if (pick) {
+            setAwaiting(pick)
+          }
+          return
+        }
+        case 'pickFocus': {
+          const pick = choiceValue(
+            await ctx.ui.select('Select sound focus mode', focusChoiceRows(sound.soundFocusMode)),
+          )
+          if (isFocusMode(pick)) {
+            setFocus(pick)
+          }
+          return
+        }
+      }
+    },
   })
 
   pi.on('session_compact', (_event, ctx) => {
