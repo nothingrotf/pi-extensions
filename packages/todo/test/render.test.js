@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { orderedVisibleTodos, renderHeader } from '../src/index.ts'
+import { renderHeader, renderTodoLines } from '../src/index.ts'
 
 const theme = {
   bold(text) {
@@ -8,6 +8,9 @@ const theme = {
   },
   fg(_color, text) {
     return text
+  },
+  strikethrough(text) {
+    return `~${text}~`
   },
 }
 
@@ -36,13 +39,21 @@ describe('todo rendering', () => {
     ).toBe('Working on 2 to-dos • 1 done')
   })
 
-  test('groups completed, active, and pending items', () => {
-    const ordered = orderedVisibleTodos([
-      item('pending', 'pending'),
-      item('cancelled', 'cancelled'),
-      item('active', 'in_progress'),
-      item('done', 'completed'),
-    ])
-    expect(ordered.map((todo) => todo.id)).toEqual(['done', 'active', 'pending'])
+  test('renders checkbox tree rows below the header', () => {
+    expect(
+      renderTodoLines(
+        [item('done', 'completed'), item('active', 'in_progress'), item('next', 'pending')],
+        theme,
+        { expanded: false },
+      ),
+    ).toEqual(['Working on 2 to-dos • 1 done', '├─ ☑ ~done~', '├─ ☐ active', '└─ ☐ next'])
+  })
+
+  test('collapses long lists and expands on request', () => {
+    const todos = Array.from({ length: 12 }, (_, index) => item(String(index), 'pending'))
+    const collapsed = renderTodoLines(todos, theme, { expanded: false })
+    expect(collapsed).toHaveLength(10)
+    expect(collapsed.at(-1)).toBe('└─ … 4 more todos')
+    expect(renderTodoLines(todos, theme, { expanded: true })).toHaveLength(13)
   })
 })

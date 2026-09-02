@@ -49,7 +49,7 @@ import {
   type TodoStatus,
 } from './domain.ts'
 import { markdownToTodos, todosToMarkdown } from './markdown.ts'
-import { TodoOverlay } from './overlay.ts'
+import { formatTodoLine, selectCollapsedTodos, TodoOverlay } from './overlay.ts'
 import {
   createReminderCycle,
   decideMidRunNudge,
@@ -164,41 +164,30 @@ export function renderHeader(todos: readonly Todo[], theme: Theme): string {
   return `${theme.fg('toolTitle', theme.bold(title))}${theme.fg('dim', ` • ${completed} done`)}`
 }
 
-function renderTodo(todo: Todo, theme: Theme): string | null {
-  if (todo.status === 'cancelled') {
-    return null
-  }
-  if (todo.status === 'completed') {
-    return `${theme.fg('success', '✔')} ${theme.fg('dim', theme.strikethrough(todo.content))}`
-  }
-  if (todo.status === 'in_progress') {
-    return `${theme.fg('warning', '◐')} ${theme.fg('warning', todo.content)}`
-  }
-  if (todo.status === 'blocked') {
-    const note = todo.blocker === undefined ? '' : theme.fg('dim', ` (${todo.blocker})`)
-    return `${theme.fg('muted', '⊘')} ${theme.fg('muted', todo.content)}${note}`
-  }
-  return `${theme.fg('text', '○')} ${theme.fg('dim', todo.content)}`
-}
+const toolResultCap = 8
 
-export function orderedVisibleTodos(todos: readonly Todo[]): Todo[] {
-  return [
-    ...todos.filter((todo) => todo.status === 'completed'),
-    ...todos.filter((todo) => todo.status === 'in_progress'),
-    ...todos.filter((todo) => todo.status === 'pending'),
-    ...todos.filter((todo) => todo.status === 'blocked'),
-  ]
-}
-
-function renderTodoList(todos: readonly Todo[], theme: Theme): Text {
+export function renderTodoLines(
+  todos: readonly Todo[],
+  theme: Theme,
+  options: { expanded: boolean },
+): string[] {
   const lines = [renderHeader(todos, theme)]
-  for (const todo of orderedVisibleTodos(todos)) {
-    const line = renderTodo(todo, theme)
-    if (line !== null) {
-      lines.push(line)
-    }
+  if (todos.length === 0) return lines
+  const selection = options.expanded
+    ? { items: [...todos], summary: '' }
+    : selectCollapsedTodos([...todos], toolResultCap)
+  selection.items.forEach((todo, index) => {
+    const last = selection.summary === '' && index === selection.items.length - 1
+    lines.push(`${theme.fg('dim', last ? '└─' : '├─')} ${formatTodoLine(todo, theme)}`)
+  })
+  if (selection.summary !== '') {
+    lines.push(`${theme.fg('dim', '└─')} ${theme.fg('muted', selection.summary)}`)
   }
-  return new Text(lines.join('\n'), 0, 0)
+  return lines
+}
+
+function renderTodoList(todos: readonly Todo[], theme: Theme, expanded: boolean): Text {
+  return new Text(renderTodoLines(todos, theme, { expanded }).join('\n'), 0, 0)
 }
 
 interface AssistantSummary {
@@ -529,7 +518,7 @@ export default function todo(pi: ExtensionAPI): void {
         !args.merge && args.todos.length === 0 ? 'Clearing' : args.merge ? 'Updating' : 'Creating'
       return new Text(theme.fg('warning', `${action} to-dos...`), 0, 0)
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, options, theme) {
       const details = decodeTodoWriteDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
@@ -539,7 +528,7 @@ export default function todo(pi: ExtensionAPI): void {
       if (!details.wasMerge && details.todos.length === 0) {
         return new Text(theme.fg('success', 'Cleared to-dos'), 0, 0)
       }
-      return renderTodoList(details.todos, theme)
+      return renderTodoList(details.todos, theme, options.expanded)
     },
   })
 
@@ -560,14 +549,14 @@ export default function todo(pi: ExtensionAPI): void {
     renderCall(args, theme) {
       return new Text(theme.fg('warning', `Reading to-dos...${readFilterSuffix(args)}`), 0, 0)
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, options, theme) {
       const details = decodeTodoReadDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Unknown error'
         return new Text(theme.fg('error', `Error reading to-dos: ${message}`), 0, 0)
       }
-      return renderTodoList(details.todos, theme)
+      return renderTodoList(details.todos, theme, options.expanded)
     },
   })
   pi.registerMessageRenderer('todo-reminder', (message, _options, theme) => {
@@ -583,7 +572,7 @@ export default function todo(pi: ExtensionAPI): void {
         ),
       ),
       ...details.todos.map((todo) =>
-        theme.fg('warning', `  ○ ${sanitizeTerminalText(todo.content)}`),
+        theme.fg('warning', `  ☐ ${sanitizeTerminalText(todo.content)}`),
       ),
     ]
     return new Text(lines.join('\n'), 0, 0)

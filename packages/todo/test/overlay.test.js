@@ -3,6 +3,9 @@ import { describe, expect, test } from 'vite-plus/test'
 import { TodoOverlay } from '../src/overlay.ts'
 
 const theme = {
+  bold(text) {
+    return text
+  },
   fg(_color, text) {
     return text
   },
@@ -66,20 +69,20 @@ describe('persistent todo tree', () => {
       options: { placement: 'aboveEditor' },
     })
     expect(instance.render()).toEqual([
-      '● Todos (1/3)',
-      '├─ ✓ #done ~done~',
-      '├─ ◐ #active active',
-      '└─ ○ #pending pending ⛓ #done',
       '',
+      ' TODO · 1/3',
+      '  ├─ ☑ ~done~',
+      '  ├─ ☐ active',
+      '  └─ ☐ pending',
     ])
   })
 
   test('hides completed rows after the next agent run', () => {
     const instance = harness([todo('done', 'completed'), todo('next', 'pending')])
     instance.overlay.update()
-    expect(instance.render()).toContain('├─ ✓ ~done~')
+    expect(instance.render()).toContain('  ├─ ☑ ~done~')
     instance.overlay.hideCompletedFromPreviousRun()
-    expect(instance.render()).toEqual(['● Todos (0/1)', '└─ ○ next', ''])
+    expect(instance.render()).toEqual(['', ' TODO · 0/1', '  └─ ☐ next'])
   })
 
   test('keeps active rows within the row budget', () => {
@@ -88,8 +91,19 @@ describe('persistent todo tree', () => {
     )
     instance.overlay.update()
     const lines = instance.render()
-    expect(lines).toContain('└─ +3 more (3 pending)')
-    expect(lines.filter((line) => line.includes('○')).length).toBe(11)
+    expect(lines).toContain('  └─ … 9 more todos')
+    expect(lines.filter((line) => line.includes('☐')).length).toBe(5)
+  })
+
+  test('lights the progress path from closed todos', () => {
+    const instance = harness([
+      todo('a', 'completed'),
+      todo('b', 'completed'),
+      todo('c', 'cancelled'),
+      todo('d', 'in_progress'),
+    ])
+    instance.overlay.update()
+    expect(instance.render()).toEqual(['', ' TODO · 3/4', '  ├─ ☐ ~c~', '  └─ ☐ d'])
   })
 
   test('removes the widget when no visible rows remain', () => {
@@ -107,6 +121,6 @@ describe('persistent todo tree', () => {
   test('sanitizes terminal control sequences', () => {
     const instance = harness([todo('\u001b[31munsafe', 'pending')])
     instance.overlay.update()
-    expect(instance.render()).toContain('└─ ○ unsafe')
+    expect(instance.render()).toContain('  └─ ☐ unsafe')
   })
 })

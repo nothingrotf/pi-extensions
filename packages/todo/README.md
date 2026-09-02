@@ -120,18 +120,22 @@ Filter by status, ID, or both.
 
 ## Persistent tree
 
-The tree uses this layout above the editor:
+The tree uses a flat version of the oh-my-pi HUD layout above the editor:
 
 ```text
-● Todos (1/3)
-├─ ✓ #inspect Inspect code
-├─ ◐ #implement Implement change
-└─ ○ #verify Verify behavior ⛓ #implement
+ TODO · 1/3
+  ├─ ☑ Inspect code
+  ├─ ☐ Implement change
+  └─ ☐ Verify behavior
 ```
 
-The tree displays at most 12 rows. It retains active rows before completed rows when space is limited.
+The tree connectors form a progress path. The accent part of the path grows with the closed task count.
 
-Completed rows remain visible for one agent run. The next agent run hides those rows from the tree.
+Rows use one color per status: success for completed, accent for in progress, dim for pending, warning for blocked, and error for cancelled. Completed and cancelled rows use strikethrough text.
+
+The tree shows the last closed task, then the task in progress, then the next pending tasks. It shows at most 5 open rows and a `… n more todos` summary for the rest.
+
+Closed rows remain visible for one agent run. The next agent run hides those rows from the tree.
 
 The state remains available through `todo_read` after the tree hides a completed row.
 

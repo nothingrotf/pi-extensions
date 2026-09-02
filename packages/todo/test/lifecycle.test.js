@@ -502,11 +502,13 @@ describe('todo reminders', () => {
     expect(unblocked.details.todos[0].blocker).toBeUndefined()
     expect(instance.renderResult('todo_write', unblocked)).toEqual([
       'Working on 2 to-dos',
-      '◐ Work',
-      '○ Ask user',
+      '├─ ☐ Ask user',
+      '└─ ☐ Work',
     ])
     expect(instance.renderResult('todo_write', result)[0]).toBe('Working on 2 to-dos')
-    expect(instance.renderResult('todo_write', result).at(-1)).toBe('⊘ Ask user (user decision)')
+    expect(instance.renderResult('todo_write', result)[1]).toBe(
+      '├─ ☐ Ask user (blocked: user decision)',
+    )
   })
 })
 
@@ -673,7 +675,7 @@ describe('/todo command', () => {
     await instance.emit('before_agent_start', { prompt: 'go', systemPrompt: '' })
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
     expect(instance.renderMessage(instance.messages.at(-1).message)).toBe(
-      'Todo reminder 1/3: 1 incomplete\n  ○ Inspect',
+      'Todo reminder 1/3: 1 incomplete\n  ☐ Inspect',
     )
     expect(instance.renderMessage({ customType: 'todo-reminder', content: 'x' })).toBe(
       'Todo reminder',
