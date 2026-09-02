@@ -394,8 +394,11 @@ describe('writer isolation', () => {
     try {
       await command(directory, ['git', 'init', '-q', '-b', 'trunk'])
       await writeFile(join(directory, 'seed.txt'), 'seed\n', 'utf8')
+      await writeFile(join(directory, 'keep.txt'), 'keep\n', 'utf8')
       const isolation = await writer(directory, 'writer-unborn')
       expect(isolation.repositories[0]?.headState).toBe('unborn')
+      expect(await readFile(join(isolation.rootWorktree, 'seed.txt'), 'utf8')).toBe('seed\n')
+      expect(await readFile(join(isolation.rootWorktree, 'keep.txt'), 'utf8')).toBe('keep\n')
       await writeFile(join(isolation.rootWorktree, 'seed.txt'), 'seed\nwriter\n', 'utf8')
       const environment = await harness(directory)
       const integrated = await integrateStagedReceipt(
@@ -405,6 +408,7 @@ describe('writer isolation', () => {
       )
       expect(integrated.status).toBe('integrated')
       expect(await readFile(join(directory, 'seed.txt'), 'utf8')).toBe('seed\nwriter\n')
+      expect(await readFile(join(directory, 'keep.txt'), 'utf8')).toBe('keep\n')
       await cleanupWorkspaceArtifacts(isolation)
     } finally {
       await rm(parent, { force: true, recursive: true })

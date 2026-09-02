@@ -132,6 +132,15 @@ function failedResult(node: TaskNodeInput, result: RuntimeResult): BatchItemResu
   }
 }
 
+function itemContent(item: BatchItemResult): string {
+  const header = `${item.taskId}: ${item.status}${item.error === undefined ? '' : ` - ${item.error}`}`
+  const agent = item.agentId === undefined ? '' : ` (Agent ID: ${item.agentId})`
+  const output = item.output?.trim()
+  return output === undefined || output.length === 0
+    ? `${header}${agent}`
+    : `${header}${agent}\n${output}`
+}
+
 export async function runBatch(options: {
   ctx: ExtensionContext
   input: BatchTaskInput
@@ -382,11 +391,8 @@ export async function runBatch(options: {
   const aggregateStatus =
     aggregateError === undefined ? status : status === 'aborted' ? 'aborted' : 'failed'
   const content = items
-    .map(
-      (item) =>
-        `${item.taskId}: ${item.status}${item.error === undefined ? '' : ` - ${item.error}`}`,
-    )
+    .map(itemContent)
     .concat(aggregateError === undefined ? [] : [`aggregate: failed - ${aggregateError}`])
-    .join('\n')
+    .join('\n\n')
   return { content, items, runId, status: aggregateStatus }
 }

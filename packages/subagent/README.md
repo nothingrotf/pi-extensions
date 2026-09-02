@@ -521,7 +521,7 @@ A foreground or batch Task call streams a job tree into its tool result while th
 ```
 
 The tree updates on every child change and once per second for the durations.
-The working status shows the same title while at least one child runs.
+The working loader shows the same title while at least one child runs.
 After the call settles, the tree keeps only the settled rows.
 A background Task returns at once and does not stream a tree.
 

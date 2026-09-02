@@ -142,10 +142,10 @@ describe('job progress', () => {
           return () => listeners.delete(listener)
         },
       }
-      const statuses = new Map<string, string | undefined>()
+      const messages: (string | undefined)[] = []
       const ctx = {
         hasUI: true,
-        ui: { setStatus: (key: string, text: string | undefined) => statuses.set(key, text) },
+        ui: { setWorkingMessage: (message?: string) => messages.push(message) },
       }
       const updates: string[] = []
       const progress = new JobProgress(runtime, ctx, (partial) => {
@@ -154,14 +154,14 @@ describe('job progress', () => {
       expect(updates).toEqual([])
       progress.started('a')
       expect(updates).toEqual(['a'])
-      expect(statuses.get('subagent')).toBe('waiting on 1 job')
+      expect(messages.at(-1)).toBe('Waiting on 1 job')
       for (const listener of listeners) listener()
       expect(updates).toEqual(['a', 'a'])
       vi.advanceTimersByTime(1_000)
       expect(updates).toHaveLength(3)
       progress.stop()
       expect(listeners.size).toBe(0)
-      expect(statuses.get('subagent')).toBeUndefined()
+      expect(messages.at(-1)).toBeUndefined()
       vi.advanceTimersByTime(5_000)
       expect(updates).toHaveLength(3)
     } finally {

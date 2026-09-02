@@ -336,6 +336,16 @@ async function sparseCheckoutState(
   }
 }
 
+async function checkoutTreeWithoutHead(target: string, tree: string): Promise<void> {
+  const indexPath = join(await mkdtemp(join(tmpdir(), 'pi-subagent-index-')), 'index')
+  try {
+    await gitWithIndex(target, indexPath, ['read-tree', tree])
+    await gitWithIndex(target, indexPath, ['checkout-index', '-a', '-f'])
+  } finally {
+    await rm(dirname(indexPath), { force: true, recursive: true })
+  }
+}
+
 async function materializeRepository(baseline: RepositoryEntry, target: string): Promise<void> {
   await mkdir(target, { recursive: true })
   if (baseline.headState === 'unborn') {
@@ -346,7 +356,10 @@ async function materializeRepository(baseline: RepositoryEntry, target: string):
   const alternatesPath = join(target, '.git', 'objects', 'info', 'alternates')
   await mkdir(dirname(alternatesPath), { recursive: true })
   await writeFile(alternatesPath, `${join(baseline.durableCommonDir, 'objects')}\n`, 'utf8')
-  if (baseline.headState === 'unborn') return
+  if (baseline.headState === 'unborn') {
+    await checkoutTreeWithoutHead(target, baseline.baselineTree)
+    return
+  }
   await git(target, ['update-ref', 'HEAD', baseline.baselineCommit])
   const sparse = await sparseCheckoutState(baseline.physicalRepoRoot)
   if (sparse.enabled && sparse.patterns !== undefined) {

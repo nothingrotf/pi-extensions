@@ -2666,6 +2666,10 @@ describe('subagent Task integration', () => {
       })
       expect(result.status).toBe('completed')
       expect(result.items.map((item) => item.taskId)).toEqual(['upstream', 'dependent'])
+      for (const item of result.items) {
+        expect(result.content).toContain(`${item.taskId}: completed (Agent ID: ${item.agentId})`)
+        expect(result.content).toContain(item.output?.trim() ?? 'missing output')
+      }
       const records = latestState(harness).records.filter((record) => record.runId === result.runId)
       expect(records).toHaveLength(2)
       expect(records.map((record) => record.itemId)).toEqual(['upstream', 'dependent'])

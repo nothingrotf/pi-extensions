@@ -4,7 +4,6 @@ import { type JobProgressDetails, type JobSnapshot, jobTitle, toJobSnapshot } fr
 import type { SubagentRuntime } from './runtime.ts'
 
 const TICK_MS = 1000
-const STATUS_KEY = 'subagent'
 
 export interface JobProgressSource {
   listSnapshots: SubagentRuntime['listSnapshots']
@@ -13,7 +12,7 @@ export interface JobProgressSource {
 
 export interface JobProgressHost {
   hasUI: boolean
-  ui: Pick<ExtensionUIContext, 'setStatus'>
+  ui: Pick<ExtensionUIContext, 'setWorkingMessage'>
 }
 
 export class JobProgress {
@@ -53,7 +52,7 @@ export class JobProgress {
     this.unsubscribe()
     if (this.timer !== undefined) clearInterval(this.timer)
     this.timer = undefined
-    if (this.ctx.hasUI) this.ctx.ui.setStatus(STATUS_KEY, undefined)
+    if (this.ctx.hasUI) this.ctx.ui.setWorkingMessage()
   }
 
   private publish(): void {
@@ -62,7 +61,9 @@ export class JobProgress {
     const title = jobTitle(jobs)
     if (this.ctx.hasUI) {
       const running = jobs.some((job) => job.status === 'running')
-      this.ctx.ui.setStatus(STATUS_KEY, running ? title : undefined)
+      if (running)
+        this.ctx.ui.setWorkingMessage(`${title[0]?.toUpperCase() ?? ''}${title.slice(1)}`)
+      else this.ctx.ui.setWorkingMessage()
     }
     this.onUpdate?.({
       content: [{ text: title, type: 'text' }],

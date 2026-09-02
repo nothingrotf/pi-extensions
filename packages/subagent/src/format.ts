@@ -96,7 +96,7 @@ function taskStats(snapshot: SubagentSnapshot): string {
   const usage = formatUsage(snapshot.usage)
   const intercom = formatUsage(snapshot.intercomUsage)
   return [
-    `${snapshot.usage.toolCalls} tools${usage.length > 0 ? ` · ${usage}` : ''}`,
+    `${snapshot.usage.toolCalls} tool${snapshot.usage.toolCalls === 1 ? '' : 's'}${usage.length > 0 ? ` · ${usage}` : ''}`,
     intercom.length > 0 ? `parent ↔ ${intercom}` : undefined,
   ]
     .filter((part) => part !== undefined)
