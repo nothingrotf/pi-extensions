@@ -192,6 +192,7 @@ export interface TaskWaitDetails {
 }
 
 export interface TaskControlExecution {
+  events?: JobProgressHost['events']
   onUpdate: AgentToolUpdateCallback<JobProgressDetails> | undefined
   signal: AbortSignal | undefined
 }
@@ -319,7 +320,7 @@ export async function waitForJobs(
       listSnapshots: () => scope.snapshots(),
       subscribe: (listener) => runtime.subscribe(listener),
     },
-    host,
+    { events: execution.events, hasUI: host.hasUI, ui: host.ui },
     execution.onUpdate,
   )
   for (const id of ids) progress.started(id)
@@ -577,7 +578,7 @@ export function registerTaskControl(
         ctx,
         runtime,
         scope,
-        { onUpdate, signal },
+        { events: pi.events, onUpdate, signal },
       )
       return { content: [{ text: serializeTaskControl(details), type: 'text' }], details }
     },

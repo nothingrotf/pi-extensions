@@ -1030,7 +1030,7 @@ export class SubagentRuntime {
               ctx,
               this,
               scope,
-              { onUpdate, signal },
+              { events: pi.events, onUpdate, signal },
             )
             return {
               content: [{ text: serializeTaskControl(details), type: 'text' }],

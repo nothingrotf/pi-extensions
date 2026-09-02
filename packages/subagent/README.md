@@ -546,7 +546,7 @@ The `Subagents` widget above the editor lists the running children with the same
 ```
 
 Each row shows the bold description, the agent type badge, and the last activity in muted text.
-The widget shows at most 8 rows and clears when the last child settles.
+The widget shows at most 8 rows and renders nothing when no child runs. The widget registers on the first agent turn, after the `todo` widget, so the two keep a stable order.
 
 A foreground or batch Task call streams a job tree into its tool result while the children run:
 
@@ -559,7 +559,7 @@ A foreground or batch Task call streams a job tree into its tool result while th
 
 Running rows show a braille spinner and a shimmer sweep across the label.
 The tree updates on every child change and once per second for the durations.
-The working loader shows the same title while at least one child runs.
+The working loader shows the same title while at least one child runs. The runtime also emits the title on the `hud:working-message` event, so `@nothingrotf/hud` can render it in its own loader.
 After the call settles, the tree keeps only the settled rows.
 A background Task returns at once and does not stream a tree.
 

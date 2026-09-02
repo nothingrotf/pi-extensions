@@ -183,3 +183,38 @@ describe('shimmer', () => {
     expect(stripTerminalSequences(swept.replace(/<[a-z]+>/g, ''))).toBe('abcdefghijklmnop')
   })
 })
+
+describe('working message ownership', () => {
+  it('lets only the latest publisher clear the shared working message', () => {
+    const listeners = new Set<() => void>()
+    const snapshots = [snapshot('a', 'running'), snapshot('b', 'running')]
+    const runtime = {
+      listSnapshots: () => snapshots,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    }
+    const messages: (string | undefined)[] = []
+    const events: (string | null)[] = []
+    const ctx = {
+      events: {
+        emit: (_channel: string, data: string | null) => {
+          events.push(data)
+        },
+      },
+      hasUI: true,
+      ui: { setWorkingMessage: (message?: string) => messages.push(message) },
+    }
+    const first = new JobProgress(runtime, ctx, undefined)
+    const second = new JobProgress(runtime, ctx, undefined)
+    first.started('a')
+    second.started('b')
+    expect(messages).toEqual(['Waiting on 1 job', 'Waiting on 1 job'])
+    first.stop()
+    expect(messages).toHaveLength(2)
+    second.stop()
+    expect(messages.at(-1)).toBeUndefined()
+    expect(events).toEqual(['Waiting on 1 job', 'Waiting on 1 job', null])
+  })
+})

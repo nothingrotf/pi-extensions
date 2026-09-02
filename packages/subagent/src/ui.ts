@@ -7,46 +7,22 @@ import type { SubagentRuntime } from './runtime.ts'
 
 const WIDGET_THROTTLE_MS = 160
 
-export class WidgetLifecycle {
-  private turnActivity = false
-
-  changed(): void {
-    this.turnActivity = true
-  }
-
-  restored(): void {
-    this.turnActivity = false
-  }
-
-  agentStarted(hasActiveRun: boolean): boolean {
-    const clear = !this.turnActivity && !hasActiveRun
-    this.turnActivity = false
-    return clear
-  }
-}
-
 export class SubagentTui {
   private context: ExtensionContext | undefined
-  private readonly lifecycle = new WidgetLifecycle()
   private timer: ReturnType<typeof setTimeout> | undefined
   private widgetTui: TUI | undefined
 
   constructor(private readonly runtime: SubagentRuntime) {
-    runtime.subscribe(() => {
-      this.lifecycle.changed()
-      this.scheduleWidget()
-    })
+    runtime.subscribe(() => this.scheduleWidget())
   }
 
   sessionStart(ctx: ExtensionContext): void {
     this.context = ctx
-    this.lifecycle.restored()
-    if (this.runtime.listSnapshots().length > 0) this.scheduleWidget()
   }
 
   agentStart(ctx: ExtensionContext): void {
     this.context = ctx
-    if (this.lifecycle.agentStarted(this.runtime.hasActiveRun())) this.clearWidget(ctx)
+    this.ensureWidget(ctx)
   }
 
   sessionShutdown(ctx: ExtensionContext): void {
@@ -119,7 +95,7 @@ export class SubagentTui {
   }
 
   private ensureWidget(ctx: ExtensionContext): void {
-    if (this.widgetTui !== undefined || this.runtime.listSnapshots().length === 0) return
+    if (this.widgetTui !== undefined || !ctx.hasUI) return
     ctx.ui.setWidget(
       'subagents',
       (tui, theme) => {

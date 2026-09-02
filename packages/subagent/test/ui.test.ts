@@ -14,7 +14,6 @@ import {
 } from '../src/format.ts'
 import { createPeekPane, eventLines } from '../src/peek.ts'
 import type { SubagentSnapshot } from '../src/runtime.ts'
-import { WidgetLifecycle } from '../src/ui.ts'
 
 const theme: SubagentTheme = {
   bg: (_color, text) => text,
@@ -98,17 +97,6 @@ describe('subagent TUI', () => {
     expect(oneLineLabel('left\u0085right')).toBe('left right')
     expect(oneLineLabel('😀😀😀', 3)).toBe('😀😀😀')
     expect(oneLineLabel('😀😀😀', 2)).toBe('😀…')
-  })
-
-  it('clears restored history and retains activity for one parent turn', () => {
-    const lifecycle = new WidgetLifecycle()
-    lifecycle.restored()
-    expect(lifecycle.agentStarted(false)).toBe(true)
-    lifecycle.changed()
-    expect(lifecycle.agentStarted(false)).toBe(false)
-    expect(lifecycle.agentStarted(false)).toBe(true)
-    lifecycle.changed()
-    expect(lifecycle.agentStarted(true)).toBe(false)
   })
 
   it('parses transcript calls, results, and errors for the tail pane', () => {

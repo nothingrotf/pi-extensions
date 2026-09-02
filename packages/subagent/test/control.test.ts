@@ -111,17 +111,25 @@ describe('task control wait', () => {
 
   it('streams the job tree and returns on the first settled job', async () => {
     const state = fixture([snapshot('a', true), snapshot('b', true)])
+    const events: (string | null)[] = []
     const pending = waitForJobs({ action: 'wait' }, state.host, state.runtime, state.scope, {
+      events: {
+        emit: (_channel: string, data: string | null) => {
+          events.push(data)
+        },
+      },
       onUpdate: state.onUpdate,
       signal: undefined,
     })
     expect(state.messages.at(-1)).toBe('Waiting on 2 jobs')
+    expect(events.at(-1)).toBe('Waiting on 2 jobs')
     expect(state.updates.at(-1)?.jobs.map((job) => job.agentId)).toEqual(['a', 'b'])
     state.settle('b')
     const details = await pending
     expect(details.outcome).toBe('settled')
     expect(details.settled).toEqual(['b'])
     expect(state.messages.at(-1)).toBeUndefined()
+    expect(events.at(-1)).toBeNull()
     expect(serializeTaskControl(details)).toContain('Settled: b.')
     expect(serializeTaskControl(details)).toContain('- a running "a lane"')
   })

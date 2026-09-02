@@ -141,7 +141,11 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     description:
       'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default unless the selected agent defines background mode.',
     execute: async (_callId, input, signal, onUpdate, ctx) => {
-      const progress = new JobProgress(runtime, ctx, onUpdate)
+      const progress = new JobProgress(
+        runtime,
+        { events: pi.events, hasUI: ctx.hasUI, ui: ctx.ui },
+        onUpdate,
+      )
       try {
         return await executeTask(runtime, input, signal, ctx, progress)
       } finally {
