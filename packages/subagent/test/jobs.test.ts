@@ -1,4 +1,4 @@
-import { visibleWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it, vi } from 'vite-plus/test'
 
 import type { SubagentTheme } from '../src/format.ts'
@@ -13,11 +13,13 @@ import {
 } from '../src/jobs.ts'
 import { JobProgress } from '../src/progress.ts'
 import type { SubagentSnapshot } from '../src/runtime.ts'
+import { shimmerText } from '../src/shimmer.ts'
 
 const theme: SubagentTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   fg: (_color, text) => text,
+  getFgAnsi: () => '',
 }
 
 function job(
@@ -66,7 +68,9 @@ function snapshot(agentId: string, status: SubagentSnapshot['status']): Subagent
 
 describe('job tree', () => {
   it('formats durations like the hub rows', () => {
-    expect(formatJobDuration(4_400)).toBe('4s')
+    expect(formatJobDuration(0)).toBe('0ms')
+    expect(formatJobDuration(480)).toBe('480ms')
+    expect(formatJobDuration(4_400)).toBe('4.4s')
     expect(formatJobDuration(488_000)).toBe('8m8s')
     expect(formatJobDuration(3_720_000)).toBe('1h2m')
   })
@@ -92,9 +96,9 @@ describe('job tree', () => {
   it('renders the live tree and drops running rows once settled', () => {
     const jobs = [job('ampere', 'running', 488_000, 'Read file'), job('ada', 'completed', 2_000)]
     const live = renderJobTree(jobs, { expanded: false, isPartial: true, now: 0, width: 80 }, theme)
-    expect(live[0]).toBe('ⓘ waiting on 1 of 2 jobs · 1 done')
-    expect(live[1]).toBe('├─ ⠋ [task] ampere lane 8m8s → Read file')
-    expect(live[2]).toBe('└─ ✓ [task] ada lane 2s')
+    expect(live[0]).toBe('ⓘ waiting on 1 of 2 jobs 1 done')
+    expect(stripTerminalSequences(live[1] ?? '')).toBe('├─ ⣾ ⟦task⟧ ampere lane 8m8s')
+    expect(live[2]).toBe('└─ • ⟦task⟧ ada lane 2.0s')
     expect(live.every((line) => visibleWidth(line) <= 80)).toBe(true)
 
     const sealed = renderJobTree(
@@ -102,18 +106,16 @@ describe('job tree', () => {
       { expanded: false, isPartial: false, now: 0, width: 80 },
       theme,
     )
-    expect(sealed).toEqual(['✓ 1 job settled · 1 done', '└─ ✓ [task] ada lane 2s'])
+    expect(sealed).toEqual(['✔ 1 job settled 1 done', '└─ • ⟦task⟧ ada lane 2.0s'])
   })
 
   it('collapses long lists and truncates to the component width', () => {
     const jobs = Array.from({ length: 10 }, (_value, index) => job(`j${index}`, 'running', index))
-    const lines = new JobTree(jobs, { expanded: false, isPartial: true, now: 0 }, theme).render(24)
+    const lines = new JobTree(jobs, { expanded: false, isPartial: true }, theme).render(24)
     expect(lines).toHaveLength(10)
-    expect(lines.at(-1)).toBe('└─ +2 more')
+    expect(lines.at(-1)).toBe('└─ … 2 more jobs')
     expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true)
-    const expanded = new JobTree(jobs, { expanded: true, isPartial: true, now: 0 }, theme).render(
-      80,
-    )
+    const expanded = new JobTree(jobs, { expanded: true, isPartial: true }, theme).render(80)
     expect(expanded).toHaveLength(11)
   })
 
@@ -167,5 +169,17 @@ describe('job progress', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('shimmer', () => {
+  it('sweeps a bold accent band across the label', () => {
+    const shimmer = { getFgAnsi: (color: string) => `<${color}>` }
+    expect(shimmerText('', shimmer)).toBe('')
+    expect(shimmerText('abc', shimmer, 0)).toBe('<dim>abc\x1b[39m')
+    const swept = shimmerText('abcdefghijklmnop', shimmer, 500)
+    expect(swept).toContain('\x1b[1m<accent>')
+    expect(swept).toContain('<muted>')
+    expect(stripTerminalSequences(swept.replace(/<[a-z]+>/g, ''))).toBe('abcdefghijklmnop')
   })
 })

@@ -511,17 +511,27 @@ The side turn does not guarantee the parent hooks, cache identity, transport, re
 
 ## TUI
 
-The `Subagents` widget above the editor shows live status, activity, tool calls, token use, cost, and elapsed time.
+The `Subagents` widget above the editor lists the running children with the same layout as the oh-my-pi HUD:
+
+```text
+ Subagents
+  ├─ • Ampere lane ⟦explore⟧ Read runtime.ts
+  └─ • Ada lane ⟦shell⟧ Bash bun run test
+```
+
+Each row shows the bold description, the agent type badge, and the last activity in muted text.
+The widget shows at most 8 rows and clears when the last child settles.
 
 A foreground or batch Task call streams a job tree into its tool result while the children run:
 
 ```text
-ⓘ waiting on 2 of 3 jobs · 1 done
-├─ ⠹ [task] Ampere lane 8m8s → Read runtime.ts
-├─ ⠹ [task] Ada lane 8m8s
-└─ ✓ [task] Blackwell lane 2m1s
+ⓘ waiting on 2 of 3 jobs 1 done
+├─ ⣾ ⟦task⟧ Ampere lane 8m8s
+├─ ⣾ ⟦task⟧ Ada lane 8m8s
+└─ • ⟦task⟧ Blackwell lane 2m1s
 ```
 
+Running rows show a braille spinner and a shimmer sweep across the label.
 The tree updates on every child change and once per second for the durations.
 The working loader shows the same title while at least one child runs.
 After the call settles, the tree keeps only the settled rows.

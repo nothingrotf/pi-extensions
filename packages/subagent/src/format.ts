@@ -1,10 +1,10 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
-import { stripTerminalSequences, truncateToWidth, type Component } from '@earendil-works/pi-tui'
+import { type Component, stripTerminalSequences, truncateToWidth } from '@earendil-works/pi-tui'
 
 import type { SubagentSnapshot } from './runtime.ts'
 import type { RunStatus, RunUsage } from './schema.ts'
 
-export type SubagentTheme = Pick<Theme, 'bg' | 'bold' | 'fg'>
+export type SubagentTheme = Pick<Theme, 'bg' | 'bold' | 'fg' | 'getFgAnsi'>
 
 export function oneLineLabel(text: string, maxLength = 160): string {
   const visible = Array.from(stripTerminalSequences(text))
@@ -107,28 +107,40 @@ export function taskLine(snapshot: SubagentSnapshot): string {
   return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${taskStats(snapshot)} · ${taskDuration(snapshot)}`
 }
 
-function colorNumbers(text: string, theme: SubagentTheme): string {
-  return text.replace(
-    /((?:\d+(?:\.\d+)?[a-zA-Z]*)+)|([^\d]+)/g,
-    (_match, number?: string, rest?: string) =>
-      number === undefined ? theme.fg('muted', rest ?? '') : theme.fg('syntaxNumber', number),
-  )
-}
+const WIDGET_VISIBLE_LIMIT = 8
+const WIDGET_PREVIEW_WIDTH = 40
 
-function themedTaskLine(snapshot: SubagentSnapshot, theme: SubagentTheme): string {
-  const tail = `${taskStats(snapshot)} · ${taskDuration(snapshot)}`
-  if (!snapshot.running) {
-    return theme.fg(
-      'dim',
-      `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${tail}`,
-    )
+function widgetRow(snapshot: SubagentSnapshot, theme: SubagentTheme): string {
+  const name = oneLineLabel(snapshot.description)
+  const badge =
+    snapshot.subagentType === 'task' ? '' : ` ${theme.fg('dim', `⟦${snapshot.subagentType}⟧`)}`
+  let line = `${theme.fg('accent', '•')} ${theme.fg('accent', theme.bold(name))}${badge}`
+  if (snapshot.lastActivity !== undefined) {
+    line += ` ${theme.fg('muted', truncateToWidth(oneLineLabel(snapshot.lastActivity), WIDGET_PREVIEW_WIDTH, '…'))}`
   }
-  const activity =
-    snapshot.lastActivity === undefined ? '' : `${theme.fg('dim', `→ ${snapshot.lastActivity}`)} · `
-  return `${theme.fg('accent', statusIcon(snapshot.status))} ${theme.fg('accent', theme.bold(oneLineLabel(snapshot.description)))} · ${activity}${colorNumbers(tail, theme)}`
+  return line
 }
 
-const WIDGET_MAX_LINES = 10
+export function renderSubagentHudLines(
+  snapshots: readonly SubagentSnapshot[],
+  theme: SubagentTheme,
+  width: number,
+): string[] {
+  const running = snapshots.filter((snapshot) => snapshot.running)
+  if (running.length === 0) return []
+  const visible = running.slice(0, WIDGET_VISIBLE_LIMIT)
+  const hidden = running.length - visible.length
+  const rows = visible.map(
+    (snapshot, index) =>
+      `${theme.fg('dim', index === visible.length - 1 ? '└─' : '├─')} ${widgetRow(snapshot, theme)}`,
+  )
+  if (hidden > 0) rows.push(theme.fg('dim', `… ${hidden} more running`))
+  return [
+    '',
+    ` ${theme.bold(theme.fg('accent', 'Subagents'))}`,
+    ...rows.map((row) => `  ${row}`),
+  ].map((line) => truncateToWidth(line, width, '…'))
+}
 
 export class SubagentsWidget implements Component {
   constructor(
@@ -139,35 +151,6 @@ export class SubagentsWidget implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    const snapshots = this.getSnapshots()
-    if (snapshots.length === 0) return []
-    const done = snapshots.filter((snapshot) => !snapshot.running).length
-    const live = snapshots.length - done
-    const head = live > 0 ? 'accent' : 'dim'
-    const lines = [
-      truncateToWidth(
-        `${this.theme.bold(this.theme.fg(head, 'Subagents'))} ${this.theme.fg('dim', `${done}/${snapshots.length}`)}`,
-        width,
-        '…',
-      ),
-    ]
-    const budget = WIDGET_MAX_LINES - 1
-    const shown = Math.min(snapshots.length, budget)
-    for (let index = 0; index < shown; index += 1) {
-      const snapshot = snapshots[index]
-      if (snapshot === undefined) continue
-      lines.push(
-        truncateToWidth(
-          ` ${this.theme.fg('dim', index === shown - 1 && shown === snapshots.length ? '└─' : '├─')} ${themedTaskLine(snapshot, this.theme)}`,
-          width,
-          '…',
-        ),
-      )
-    }
-    const hidden = snapshots.length - shown
-    if (hidden > 0) {
-      lines.push(` ${this.theme.fg('dim', '└─')} ${this.theme.fg('dim', `+${hidden} more`)}`)
-    }
-    return lines
+    return renderSubagentHudLines(this.getSnapshots(), this.theme, width)
   }
 }

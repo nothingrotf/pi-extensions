@@ -20,6 +20,7 @@ const theme: SubagentTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   fg: (_color, text) => text,
+  getFgAnsi: () => '',
 }
 
 function snapshot(
@@ -78,10 +79,9 @@ describe('subagent TUI', () => {
     ]
     const widget = new SubagentsWidget(() => snapshots, theme)
     const lines = widget.render(72)
-    expect(lines[0]).toBe('Subagents 1/2')
-    expect(lines[1]).toContain(' ├─ • Inspect runtime · → read · 2 tools · 1 turn · ↑ 1.2k · ↓ 300')
-    expect(lines[2]).toBe(' └─ ✓ Review tests · 2 tools · 1 turn · ↑ 1.2k · ↓ 300 · 1s')
+    expect(lines).toEqual(['', ' Subagents', '  └─ • Inspect runtime ⟦explore⟧ read'])
     expect(lines.every((line) => visibleWidth(line) <= 72)).toBe(true)
+    expect(new SubagentsWidget(() => snapshots.slice(1), theme).render(72)).toEqual([])
   })
 
   it('formats detailed live activity from tool arguments and assistant text', () => {

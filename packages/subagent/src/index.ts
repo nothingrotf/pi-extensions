@@ -179,7 +179,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
         return new Text(text, 0, 0)
       }
       if (details.status === 'progress') {
-        return new JobTree(details.jobs, { expanded, isPartial, now: Date.now() }, theme)
+        return new JobTree(details.jobs, { expanded, isPartial }, theme)
       }
       if (details.status === 'batch') {
         const snapshots = new Map<string, JobSnapshot>()
@@ -189,9 +189,9 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
         }
         return new JobTree(
           batchJobs(details.items, snapshots),
-          { expanded, isPartial: false, now },
+          { expanded, isPartial: false },
           theme,
-          theme.fg('accent', details.runId),
+          theme.fg('dim', `run ${details.runId}`),
         )
       }
       if (details.status === 'background') {
