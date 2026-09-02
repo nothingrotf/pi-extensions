@@ -8,9 +8,17 @@ function harness() {
   let footerComponent
   let renders = 0
   let cleared = false
+  const widgets = new Map()
+  const eventHandlers = new Map()
   const api = {
     on(name, handler) {
       handlers.set(name, handler)
+    },
+    events: {
+      on(channel, handler) {
+        eventHandlers.set(channel, handler)
+        return () => eventHandlers.delete(channel)
+      },
     },
     getThinkingLevel() {
       return 'medium'
@@ -39,6 +47,14 @@ function harness() {
       },
       onTerminalInput() {
         return () => undefined
+      },
+      setWorkingVisible() {},
+      setWidget(key, factory) {
+        if (factory === undefined) {
+          widgets.delete(key)
+          return
+        }
+        widgets.set(key, factory({ requestRender() {} }, { fg: (_color, text) => text }))
       },
     },
   }
@@ -70,9 +86,12 @@ function harness() {
   }
   return {
     emit,
+    emitEvent: (channel, data) => eventHandlers.get(channel)?.(data),
     mount,
     renderCount: () => renders,
     wasCleared: () => cleared,
+    widget: (key) => widgets.get(key),
+    widgetKeys: () => [...widgets.keys()],
   }
 }
 
@@ -99,5 +118,23 @@ describe('HUD lifecycle', () => {
     instance.mount()
     await instance.emit('session_shutdown')
     expect(instance.wasCleared()).toBe(true)
+  })
+
+  test('owns the working loader widget from turn start to agent end', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    expect(instance.widgetKeys()).toEqual([])
+    await instance.emit('turn_start')
+    expect(instance.widgetKeys()).toEqual(['hud-working'])
+    const widget = instance.widget('hud-working')
+    expect(widget.render(80)[1]).toContain('Working...')
+    instance.emitEvent('hud:working-message', 'Waiting on 2 jobs')
+    expect(widget.render(80)[1]).toContain('Waiting on 2 jobs')
+    instance.emitEvent('hud:working-message', null)
+    expect(widget.render(80)[1]).toContain('Working...')
+    await instance.emit('agent_end')
+    expect(widget.render(80)).toEqual([])
+    await instance.emit('session_shutdown')
+    expect(instance.widgetKeys()).toEqual([])
   })
 })

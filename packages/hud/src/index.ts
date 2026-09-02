@@ -24,6 +24,7 @@ import {
 } from './sound.ts'
 import { registerTimestamps } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
+import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
 
 const gitRefreshMs = 30_000
 const usageRefreshMs = 5 * 60_000
@@ -58,6 +59,12 @@ export default function hud(pi: ExtensionAPI): void {
   let sound: SoundSettings = { ...defaultSoundSettings }
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
+  const dock = new WorkingDock()
+
+  pi.events.on(workingMessageChannel, (data) => {
+    const message = decodeWorkingMessage(data)
+    if (message !== undefined) dock.setMessage(message ?? undefined)
+  })
 
   const render = () => requestRender?.()
 
@@ -191,6 +198,8 @@ export default function hud(pi: ExtensionAPI): void {
     active = true
     generation += 1
     const life = generation
+    dock.dispose(undefined)
+    ctx.ui.setWorkingVisible(false)
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       footerOwned = true
@@ -229,6 +238,10 @@ export default function hud(pi: ExtensionAPI): void {
     )
   })
 
+  pi.on('turn_start', (_event, ctx) => {
+    if (active && ctx.hasUI && ctx.mode === 'tui') dock.start(ctx.ui)
+  })
+
   pi.on('tool_execution_start', (event, ctx) => {
     if (isAskTool(event.toolName)) {
       play(ctx, sound.awaitingInputSound)
@@ -263,6 +276,7 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('agent_end', (_event, ctx) => {
+    dock.stop()
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
@@ -362,6 +376,7 @@ export default function hud(pi: ExtensionAPI): void {
     active = false
     generation += 1
     stop()
+    dock.dispose(ctx.hasUI && ctx.mode === 'tui' ? ctx.ui : undefined)
     if (ctx.hasUI && ctx.mode === 'tui' && footerOwned) {
       ctx.ui.setFooter(undefined)
     }
