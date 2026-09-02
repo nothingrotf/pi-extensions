@@ -1,0 +1,536 @@
+import { completionBudgetReport, renderGoalPrompt } from './prompts.ts'
+import {
+  type Goal,
+  type GoalBudgetSteering,
+  type GoalModeState,
+  type GoalPersistMode,
+  type GoalRuntimeEvent,
+  type GoalTokenUsage,
+  isAccountingStatus,
+  withTokenBudget,
+} from './state.ts'
+
+export interface GoalRuntimeHost {
+  getState(): GoalModeState | undefined
+  setState(state: GoalModeState | undefined): void
+  getCurrentUsage(): GoalTokenUsage
+  emit(event: GoalRuntimeEvent): void | Promise<void>
+  persist(mode: GoalPersistMode, state?: GoalModeState): void
+  sendHiddenMessage(message: {
+    customType: string
+    content: string
+    deliverAs?: 'steer' | 'followUp' | 'nextTurn'
+  }): Promise<void>
+  nextId(): string
+  now?(): number
+}
+
+export interface GoalTurnSnapshot {
+  turnId: string
+  baselineUsage: GoalTokenUsage
+  activeGoalId?: string
+}
+
+export interface GoalWallClockSnapshot {
+  lastAccountedAt: number
+  activeGoalId?: string
+}
+
+export interface GoalRuntimeSnapshot {
+  turnSnapshot?: GoalTurnSnapshot
+  wallClock: GoalWallClockSnapshot
+  budgetReportedFor?: string
+}
+
+export class GoalRuntimeError extends Error {}
+
+function cloneGoal(goal: Goal): Goal {
+  return { ...goal }
+}
+
+function cloneState(state: GoalModeState): GoalModeState {
+  return { ...state, goal: cloneGoal(state.goal) }
+}
+
+function cloneUsage(usage: GoalTokenUsage): GoalTokenUsage {
+  return { ...usage }
+}
+
+export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage): number {
+  return (
+    Math.max(0, current.input - baseline.input) +
+    Math.max(0, current.cacheWrite - baseline.cacheWrite) +
+    Math.max(0, current.output - baseline.output)
+  )
+}
+
+export function validateTokenBudget(tokenBudget: number | undefined): void {
+  if (tokenBudget !== undefined && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
+    throw new GoalRuntimeError('token_budget must be a positive integer when provided')
+  }
+}
+
+export { completionBudgetReport }
+
+export class GoalRuntime {
+  readonly #host: GoalRuntimeHost
+  #turnSnapshot: GoalTurnSnapshot | undefined
+  #wallClock: GoalWallClockSnapshot
+  #budgetReportedFor: string | undefined
+  #accountingTail: Promise<void> = Promise.resolve()
+
+  constructor(host: GoalRuntimeHost) {
+    this.#host = host
+    this.#wallClock = { lastAccountedAt: this.#now() }
+  }
+
+  get snapshot(): GoalRuntimeSnapshot {
+    const snapshot: GoalRuntimeSnapshot = { wallClock: { ...this.#wallClock } }
+    if (this.#turnSnapshot) {
+      snapshot.turnSnapshot = {
+        ...this.#turnSnapshot,
+        baselineUsage: cloneUsage(this.#turnSnapshot.baselineUsage),
+      }
+    }
+    if (this.#budgetReportedFor !== undefined) {
+      snapshot.budgetReportedFor = this.#budgetReportedFor
+    }
+    return snapshot
+  }
+
+  #now(): number {
+    return this.#host.now?.() ?? Date.now()
+  }
+
+  #hasAccountingState(): boolean {
+    const state = this.#host.getState()
+    return Boolean(state?.enabled && isAccountingStatus(state.goal))
+  }
+
+  async #withAccounting<T>(fn: () => Promise<T> | T): Promise<T> {
+    const previous = this.#accountingTail
+    const { promise, resolve } = Promise.withResolvers<void>()
+    this.#accountingTail = previous.then(
+      () => promise,
+      () => promise,
+    )
+    await previous.catch(() => {})
+    try {
+      return await fn()
+    } finally {
+      resolve()
+    }
+  }
+
+  #getStateClone(): GoalModeState | undefined {
+    const state = this.#host.getState()
+    return state ? cloneState(state) : undefined
+  }
+
+  async #commitState(
+    state: GoalModeState | undefined,
+    options?: { persist?: GoalPersistMode; emit?: boolean },
+  ): Promise<void> {
+    this.#host.setState(state ? cloneState(state) : undefined)
+    if (options?.persist) {
+      this.#host.persist(options.persist, state)
+    }
+    if (options?.emit !== false) {
+      const event: GoalRuntimeEvent = {
+        type: 'goal_updated',
+        goal: state ? cloneGoal(state.goal) : null,
+      }
+      if (state) {
+        event.state = state
+      }
+      await this.#host.emit(event)
+    }
+  }
+
+  #markActiveAccounting(goal: Goal, resetWallClock = false): void {
+    if (resetWallClock || this.#wallClock.activeGoalId !== goal.id) {
+      this.#wallClock = { lastAccountedAt: this.#now(), activeGoalId: goal.id }
+    }
+    if (this.#turnSnapshot) {
+      this.#turnSnapshot.activeGoalId = goal.id
+      this.#turnSnapshot.baselineUsage = cloneUsage(this.#host.getCurrentUsage())
+    }
+  }
+
+  #clearActiveAccounting(): void {
+    this.#wallClock = { lastAccountedAt: this.#now() }
+    if (this.#turnSnapshot) {
+      delete this.#turnSnapshot.activeGoalId
+    }
+  }
+
+  clearAccounting(): void {
+    this.#turnSnapshot = undefined
+    this.#clearActiveAccounting()
+    this.#budgetReportedFor = undefined
+  }
+
+  onTurnStart(turnId: string, baselineUsage: GoalTokenUsage): void {
+    this.#turnSnapshot = { turnId, baselineUsage: cloneUsage(baselineUsage) }
+    const state = this.#host.getState()
+    if (state?.enabled && isAccountingStatus(state.goal)) {
+      this.#turnSnapshot.activeGoalId = state.goal.id
+      if (this.#wallClock.activeGoalId !== state.goal.id) {
+        this.#wallClock = { lastAccountedAt: this.#now(), activeGoalId: state.goal.id }
+      }
+    }
+  }
+
+  async onToolCompleted(toolName: string): Promise<void> {
+    if (toolName === 'goal') {
+      return
+    }
+    if (!this.#hasAccountingState()) {
+      return
+    }
+    await this.flushUsage('allowed')
+  }
+
+  async onGoalToolCompleted(): Promise<void> {
+    if (!this.#hasAccountingState()) {
+      return
+    }
+    await this.flushUsage('suppressed')
+  }
+
+  async onAgentEnd(options?: { currentUsage?: GoalTokenUsage }): Promise<void> {
+    if (!this.#hasAccountingState()) {
+      this.#turnSnapshot = undefined
+      return
+    }
+    await this.flushUsage('suppressed', options?.currentUsage)
+    this.#turnSnapshot = undefined
+  }
+
+  async onTaskAborted(options?: { reason?: 'interrupted' | 'internal' }): Promise<void> {
+    const state = this.#host.getState()
+    const needsAccounting = state?.enabled && isAccountingStatus(state.goal)
+    const needsPause =
+      options?.reason === 'interrupted' && state?.enabled && state.goal.status === 'active'
+    if (!needsAccounting && !needsPause) {
+      this.#turnSnapshot = undefined
+      return
+    }
+    await this.#withAccounting(async () => {
+      await this.#flushUsageLocked('suppressed', undefined, options?.reason === 'internal')
+      this.#turnSnapshot = undefined
+      if (options?.reason !== 'interrupted') {
+        return
+      }
+      const cloned = this.#getStateClone()
+      if (!cloned?.enabled || cloned.goal.status !== 'active') {
+        return
+      }
+      cloned.enabled = false
+      cloned.goal.status = 'paused'
+      cloned.goal.updatedAt = this.#now()
+      this.#clearActiveAccounting()
+      this.#budgetReportedFor = undefined
+      await this.#commitState(cloned, { persist: 'goal_paused' })
+    })
+  }
+
+  async onThreadResumed(options?: {
+    preserveActiveGoal?: boolean
+  }): Promise<GoalModeState | undefined> {
+    const state = this.#getStateClone()
+    if (!state) {
+      return undefined
+    }
+    if (options?.preserveActiveGoal && state.enabled && state.goal.status === 'active') {
+      this.#markActiveAccounting(state.goal, true)
+      await this.#commitState(state, { emit: true })
+      return state
+    }
+    if (state.goal.status === 'active') {
+      state.enabled = false
+      state.goal.status = 'paused'
+      state.goal.updatedAt = this.#now()
+      this.#clearActiveAccounting()
+      this.#budgetReportedFor = undefined
+      await this.#commitState(state, { persist: 'goal_paused' })
+      return state
+    }
+    if (state.enabled && isAccountingStatus(state.goal)) {
+      this.#markActiveAccounting(state.goal)
+    } else {
+      this.#clearActiveAccounting()
+    }
+    await this.#commitState(state, { emit: true })
+    return state
+  }
+
+  async onBudgetMutated(newBudget: number | undefined): Promise<GoalModeState | undefined> {
+    validateTokenBudget(newBudget)
+    return await this.#withAccounting(async () => {
+      this.#budgetReportedFor = undefined
+      await this.#flushUsageLocked('suppressed')
+      const state = this.#getStateClone()
+      if (!state) {
+        return undefined
+      }
+      state.goal = withTokenBudget(state.goal, newBudget)
+      state.goal.updatedAt = this.#now()
+      let shouldSteer = false
+      if (newBudget !== undefined && state.goal.tokensUsed >= newBudget) {
+        if (state.goal.status === 'active') {
+          state.goal.status = 'budget-limited'
+          shouldSteer = true
+        }
+      } else if (state.goal.status === 'budget-limited') {
+        state.goal.status = 'active'
+        state.enabled = true
+        this.#markActiveAccounting(state.goal)
+      }
+      await this.#commitState(state, { persist: state.enabled ? 'goal' : 'goal_paused' })
+      if (shouldSteer) {
+        await this.#sendBudgetLimitSteer(state.goal)
+      }
+      return state
+    })
+  }
+
+  async #flushUsageLocked(
+    steering: GoalBudgetSteering,
+    currentUsage: GoalTokenUsage = this.#host.getCurrentUsage(),
+    persistWallClock = false,
+  ): Promise<void> {
+    const state = this.#getStateClone()
+    if (!state?.enabled || !isAccountingStatus(state.goal)) {
+      return
+    }
+    if (
+      this.#turnSnapshot?.activeGoalId !== state.goal.id &&
+      this.#wallClock.activeGoalId !== state.goal.id
+    ) {
+      return
+    }
+
+    const tokenDelta =
+      this.#turnSnapshot?.activeGoalId === state.goal.id
+        ? goalTokenDelta(currentUsage, this.#turnSnapshot.baselineUsage)
+        : 0
+    const wallSeconds =
+      this.#wallClock.activeGoalId === state.goal.id
+        ? Math.max(0, Math.floor((this.#now() - this.#wallClock.lastAccountedAt) / 1000))
+        : 0
+    if (tokenDelta <= 0 && wallSeconds <= 0) {
+      return
+    }
+
+    state.goal.tokensUsed += tokenDelta
+    state.goal.timeUsedSeconds += wallSeconds
+    state.goal.updatedAt = this.#now()
+    const flippedToBudgetLimited =
+      state.goal.tokenBudget !== undefined &&
+      state.goal.tokensUsed >= state.goal.tokenBudget &&
+      state.goal.status === 'active'
+    if (flippedToBudgetLimited) {
+      state.goal.status = 'budget-limited'
+    }
+
+    if (this.#turnSnapshot?.activeGoalId === state.goal.id) {
+      this.#turnSnapshot.baselineUsage = cloneUsage(currentUsage)
+    }
+    if (this.#wallClock.activeGoalId === state.goal.id && wallSeconds > 0) {
+      this.#wallClock.lastAccountedAt += wallSeconds * 1000
+    }
+    const shouldPersistUsage =
+      tokenDelta > 0 || flippedToBudgetLimited || (persistWallClock && wallSeconds > 0)
+    await this.#commitState(state, shouldPersistUsage ? { persist: 'goal' } : undefined)
+
+    if (state.goal.status !== 'budget-limited') {
+      this.#budgetReportedFor = undefined
+    }
+    if (
+      steering === 'allowed' &&
+      flippedToBudgetLimited &&
+      this.#budgetReportedFor !== state.goal.id
+    ) {
+      await this.#sendBudgetLimitSteer(state.goal)
+    }
+  }
+
+  async flushUsage(
+    steering: GoalBudgetSteering,
+    currentUsage: GoalTokenUsage = this.#host.getCurrentUsage(),
+  ): Promise<void> {
+    await this.#withAccounting(() => this.#flushUsageLocked(steering, currentUsage))
+  }
+
+  #createGoalState(objective: string, tokenBudget: number | undefined): GoalModeState {
+    const now = this.#now()
+    const goal = withTokenBudget(
+      {
+        id: this.#host.nextId(),
+        objective,
+        status: 'active',
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: now,
+        updatedAt: now,
+      },
+      tokenBudget,
+    )
+    return { enabled: true, mode: 'active', goal }
+  }
+
+  async createGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+    const objective = input.objective.trim()
+    if (!objective) {
+      throw new GoalRuntimeError('objective is required when op=create')
+    }
+    validateTokenBudget(input.tokenBudget)
+    return await this.#withAccounting(async () => {
+      const existing = this.#host.getState()
+      if (existing && existing.goal.status !== 'dropped' && existing.goal.status !== 'complete') {
+        throw new GoalRuntimeError(
+          'cannot create a new goal because this session already has a goal',
+        )
+      }
+      const state = this.#createGoalState(objective, input.tokenBudget)
+      this.#budgetReportedFor = undefined
+      this.#markActiveAccounting(state.goal)
+      await this.#commitState(state, { persist: 'goal' })
+      return state
+    })
+  }
+
+  async replaceGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+    const objective = input.objective.trim()
+    if (!objective) {
+      throw new GoalRuntimeError('objective is required when op=replace')
+    }
+    validateTokenBudget(input.tokenBudget)
+    return await this.#withAccounting(async () => {
+      const existing = this.#host.getState()
+      if (!existing?.enabled || !isAccountingStatus(existing.goal)) {
+        throw new GoalRuntimeError('cannot replace goal because no goal is active')
+      }
+      await this.#flushUsageLocked('suppressed')
+      const state = this.#createGoalState(objective, input.tokenBudget)
+      this.#budgetReportedFor = undefined
+      this.#markActiveAccounting(state.goal)
+      await this.#commitState(state, { persist: 'goal' })
+      return state
+    })
+  }
+
+  async resumeGoal(): Promise<GoalModeState> {
+    return await this.#withAccounting(async () => {
+      const state = this.#getStateClone()
+      if (!state) {
+        throw new GoalRuntimeError('No paused goal.')
+      }
+      if (state.goal.status === 'complete') {
+        throw new GoalRuntimeError('Goal is already complete.')
+      }
+      state.enabled = true
+      state.mode = 'active'
+      delete state.reason
+      state.goal.status = 'active'
+      state.goal.updatedAt = this.#now()
+      this.#budgetReportedFor = undefined
+      this.#markActiveAccounting(state.goal)
+      await this.#commitState(state, { persist: 'goal' })
+      return state
+    })
+  }
+
+  async pauseGoal(): Promise<GoalModeState | undefined> {
+    return await this.#withAccounting(async () => {
+      await this.#flushUsageLocked('suppressed')
+      const state = this.#getStateClone()
+      if (!state) {
+        return undefined
+      }
+      state.enabled = false
+      state.mode = 'active'
+      delete state.reason
+      if (isAccountingStatus(state.goal)) {
+        state.goal.status = 'paused'
+      }
+      state.goal.updatedAt = this.#now()
+      this.#clearActiveAccounting()
+      this.#budgetReportedFor = undefined
+      await this.#commitState(state, { persist: 'goal_paused' })
+      return state
+    })
+  }
+
+  async dropGoal(): Promise<Goal | undefined> {
+    return await this.#withAccounting(async () => {
+      await this.#flushUsageLocked('suppressed')
+      const state = this.#getStateClone()
+      if (!state) {
+        return undefined
+      }
+      const dropped: Goal = { ...state.goal, status: 'dropped', updatedAt: this.#now() }
+      this.#clearActiveAccounting()
+      this.#budgetReportedFor = undefined
+      await this.#host.emit({
+        type: 'goal_updated',
+        goal: dropped,
+        state: { ...state, enabled: false, goal: dropped },
+      })
+      await this.#commitState(undefined, { persist: 'none', emit: false })
+      return dropped
+    })
+  }
+
+  async completeGoalFromTool(): Promise<Goal> {
+    return await this.#withAccounting(async () => {
+      await this.#flushUsageLocked('suppressed')
+      const state = this.#getStateClone()
+      if (!state) {
+        throw new GoalRuntimeError('cannot complete goal because no goal is active')
+      }
+      if (state.goal.status === 'complete') {
+        throw new GoalRuntimeError('goal is already complete')
+      }
+      if (state.goal.status === 'dropped') {
+        throw new GoalRuntimeError('cannot complete a dropped goal')
+      }
+      state.enabled = false
+      state.goal.status = 'complete'
+      state.goal.updatedAt = this.#now()
+      state.mode = 'exiting'
+      state.reason = 'completed'
+      this.#clearActiveAccounting()
+      this.#budgetReportedFor = undefined
+      await this.#commitState(state, { persist: 'goal' })
+      return state.goal
+    })
+  }
+
+  buildActivePrompt(): string | undefined {
+    const state = this.#host.getState()
+    return state?.enabled && state.goal.status === 'active'
+      ? renderGoalPrompt('active', state.goal)
+      : undefined
+  }
+
+  buildContinuationPrompt(): string | undefined {
+    const state = this.#host.getState()
+    return state?.enabled && state.goal.status === 'active'
+      ? renderGoalPrompt('continuation', state.goal)
+      : undefined
+  }
+
+  async #sendBudgetLimitSteer(goal: Goal): Promise<void> {
+    if (this.#budgetReportedFor === goal.id) {
+      return
+    }
+    this.#budgetReportedFor = goal.id
+    await this.#host.sendHiddenMessage({
+      customType: 'goal-budget-limit',
+      content: renderGoalPrompt('budget-limit', goal),
+      deliverAs: 'steer',
+    })
+  }
+}

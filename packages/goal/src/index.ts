@@ -1,25 +1,79 @@
 import { randomUUID } from 'node:crypto'
 
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  Theme,
+  ThemeColor,
+} from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
+import type { Static } from 'typebox'
+import { Value } from 'typebox/value'
 
+import { goalSubcommands, parseBudgetInput, parseGoalSubcommand } from './commands.ts'
+import { isLoopActive } from './loop-activity.ts'
 import {
-  activeDurationMs,
-  createGoal,
-  decodeGoalState,
-  dispatchContinuation,
-  type GoalState,
-  settleGoalTurn,
-  updateGoalStatus,
-} from './machine.ts'
-import { parseGoalCommand } from './policy.ts'
+  completionBudgetReport,
+  goalToolDescription,
+  renderGuidedGoalInterview,
+} from './prompts.ts'
+import { GoalRuntime, GoalRuntimeError } from './runtime.ts'
+import {
+  decodeGoalModeEntry,
+  encodeGoalModeEntry,
+  type Goal,
+  type GoalModeState,
+  type GoalPersistMode,
+  GoalSchema,
+  type GoalTokenUsage,
+  remainingTokens,
+} from './state.ts'
+import { readTodosFromBranch, renderTodoContext, todoWriteToolName } from './todo-context.ts'
 
-const entryType = 'pi-goal-state'
+const modeEntryType = 'pi-goal-mode'
+const completedEntryType = 'pi-goal-completed'
 const statusKey = 'pi-goal'
-const maximumIdleContinuations = 3
+const toolName = 'goal'
+const continuationDelayMs = 800
 
-function isActive(state: GoalState | null): state is GoalState & { status: 'active' } {
-  return state?.status === 'active'
+const goalToolParameters = Type.Object(
+  {
+    op: Type.Union([
+      Type.Literal('create'),
+      Type.Literal('get'),
+      Type.Literal('complete'),
+      Type.Literal('resume'),
+      Type.Literal('drop'),
+    ]),
+    objective: Type.Optional(Type.String()),
+    token_budget: Type.Optional(Type.Integer()),
+  },
+  { additionalProperties: false },
+)
+
+const GoalToolDetailsSchema = Type.Object({
+  op: Type.Union([
+    Type.Literal('create'),
+    Type.Literal('get'),
+    Type.Literal('complete'),
+    Type.Literal('resume'),
+    Type.Literal('drop'),
+  ]),
+  goal: Type.Union([GoalSchema, Type.Null()]),
+  remainingTokens: Type.Union([Type.Number(), Type.Null()]),
+  completionBudgetReport: Type.Union([Type.String(), Type.Null()]),
+})
+
+type GoalToolDetails = Static<typeof GoalToolDetailsSchema>
+
+function decodeGoalToolDetails<Input>(value: Input): GoalToolDetails | null {
+  try {
+    return Value.Decode(GoalToolDetailsSchema, value)
+  } catch {
+    return null
+  }
 }
 
 function formatDuration(milliseconds: number): string {
@@ -36,359 +90,781 @@ function formatDuration(milliseconds: number): string {
   return `${seconds}s`
 }
 
-function describeGoal(state: GoalState | null, now = Date.now()): string {
-  if (state === null) {
-    return 'No goal exists in this session.'
-  }
-  const runtime = formatDuration(activeDurationMs(state, now))
-  return `Goal ${state.status}. Objective: ${state.objective}. Active runtime: ${runtime}. Continuations: ${state.continuationCount}.`
+function formatTokens(value: number): string {
+  return value.toLocaleString('en-US')
 }
 
-function goalInstructions(state: GoalState): string {
+function describeTool(goal: Goal | null, report: string | null): string {
+  if (goal === null) {
+    return 'No active goal.'
+  }
+  let text = `Goal: ${goal.objective}\nStatus: ${goal.status}\nTokens: ${goal.tokensUsed} used`
+  if (goal.tokenBudget !== undefined) {
+    text += ` / ${goal.tokenBudget} budget`
+  }
+  const remaining = remainingTokens(goal)
+  if (remaining !== null) {
+    text += `\nRemaining tokens: ${remaining}`
+  }
+  if (report !== null) {
+    text += `\n\n${report}`
+  }
+  return text
+}
+
+function goalDetails(state: GoalModeState): string {
+  const goal = state.goal
+  const used = formatTokens(goal.tokensUsed)
+  const budgetLine =
+    goal.tokenBudget !== undefined
+      ? `${used} / ${formatTokens(goal.tokenBudget)} (${formatTokens(Math.max(0, goal.tokenBudget - goal.tokensUsed))} left)`
+      : `${used} (no budget)`
   return [
-    'A long-running Pi goal is active in this session.',
-    `Objective: ${JSON.stringify(state.objective)}`,
-    'Continue concrete work toward the full objective.',
-    'Use the current workspace and external state as authoritative evidence.',
-    'Do not narrow the objective to work that fits in this turn.',
-    'Before completion, verify every explicit requirement against authoritative evidence.',
-    'Keep the goal active if any requirement is incomplete, uncertain, or unverified.',
-    'Call update_goal with status complete only after no required work remains.',
+    `Objective: ${goal.objective}`,
+    `Status: ${goal.status}${state.enabled ? '' : ' (paused)'}`,
+    `Tokens: ${budgetLine}`,
+    `Time spent: ${formatDuration(goal.timeUsedSeconds * 1000)}`,
   ].join('\n')
 }
 
-export default function goal(pi: ExtensionAPI): void {
-  let state: GoalState | null = null
-  let continuationTimer: ReturnType<typeof setTimeout> | undefined
-  let continuationGeneration = 0
-  let scheduledGoalId: string | null = null
-  let pendingTurn: { goalId: string; isContinuation: boolean; usedTool: boolean } | null = null
-  let currentTurn: { goalId: string | null; isContinuation: boolean; usedTool: boolean } | null =
-    null
+function describeOp(op: GoalToolDetails['op'] | undefined): string {
+  switch (op) {
+    case 'create':
+      return 'set'
+    case 'complete':
+      return 'complete'
+    case 'get':
+      return 'check'
+    case 'resume':
+      return 'resume'
+    case 'drop':
+      return 'drop'
+    default:
+      return '?'
+  }
+}
 
-  const clearContinuation = () => {
-    continuationGeneration += 1
+function goalBadgeColor(status: Goal['status']): ThemeColor {
+  switch (status) {
+    case 'complete':
+      return 'success'
+    case 'budget-limited':
+      return 'warning'
+    case 'paused':
+    case 'dropped':
+      return 'muted'
+    default:
+      return 'accent'
+  }
+}
+
+function truncate(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text
+}
+
+function renderGoalResult(details: GoalToolDetails, theme: Theme): string {
+  const title = theme.fg('toolTitle', theme.bold('Goal'))
+  const op = theme.fg('dim', describeOp(details.op))
+  const goalRecord = details.goal
+  if (goalRecord === null) {
+    return `${title} ${op} ${theme.fg('warning', 'no active goal')}`
+  }
+  const badge = theme.fg(goalBadgeColor(goalRecord.status), `[${goalRecord.status}]`)
+  const lines = [`${title} ${op} ${badge}`]
+  lines.push(theme.italic(theme.fg('muted', `"${truncate(goalRecord.objective.trim(), 120)}"`)))
+  const used = formatTokens(goalRecord.tokensUsed)
+  const tokensLine =
+    goalRecord.tokenBudget !== undefined
+      ? `${used} / ${formatTokens(goalRecord.tokenBudget)} tokens (${formatTokens(Math.max(0, goalRecord.tokenBudget - goalRecord.tokensUsed))} left)`
+      : `${used} tokens`
+  const meta = [tokensLine]
+  if (goalRecord.timeUsedSeconds > 0) {
+    meta.push(`${formatDuration(goalRecord.timeUsedSeconds * 1000)} elapsed`)
+  }
+  lines.push(theme.fg('dim', meta.join(' · ')))
+  if (details.completionBudgetReport !== null) {
+    lines.push(theme.fg('muted', details.completionBudgetReport))
+  }
+  return lines.join('\n')
+}
+
+function lastAssistantAborted(messages: readonly { role: string; stopReason?: string }[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'assistant') {
+      return message.stopReason === 'aborted'
+    }
+  }
+  return false
+}
+
+export default function goal(pi: ExtensionAPI): void {
+  let state: GoalModeState | undefined
+  let usage: GoalTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  let context: ExtensionContext | undefined
+  let continuationTimer: ReturnType<typeof setTimeout> | undefined
+  let turnHadToolCalls = false
+  let continuationTurnInFlight = false
+  let suppressNextContinuation = false
+  let turnCounter = 0
+
+  const runtime = new GoalRuntime({
+    getState: () => state,
+    setState: (next) => {
+      state = next
+    },
+    getCurrentUsage: () => ({ ...usage }),
+    emit: (event) => {
+      if (event.type === 'goal_updated') {
+        handleGoalUpdated(event.state)
+      }
+    },
+    persist: (mode: GoalPersistMode, persisted?: GoalModeState) => {
+      const entry = encodeGoalModeEntry(mode, persisted?.goal)
+      if (entry !== null) {
+        pi.appendEntry(modeEntryType, entry)
+      }
+    },
+    sendHiddenMessage: async (message) => {
+      pi.sendMessage(
+        { customType: message.customType, content: message.content, display: false },
+        message.deliverAs === undefined
+          ? { triggerTurn: false }
+          : { triggerTurn: false, deliverAs: message.deliverAs },
+      )
+    },
+    nextId: () => randomUUID(),
+  })
+
+  const isEnabled = () => state?.enabled === true
+  const isPaused = () => state !== undefined && !state.enabled && state.goal.status === 'paused'
+
+  const refreshStatus = () => {
+    if (context === undefined) {
+      return
+    }
+    if (state === undefined) {
+      context.ui.setStatus(statusKey, undefined)
+      return
+    }
+    const goalState = state.goal
+    const tokens =
+      goalState.tokenBudget === undefined
+        ? formatTokens(goalState.tokensUsed)
+        : `${formatTokens(goalState.tokensUsed)}/${formatTokens(goalState.tokenBudget)}`
+    const label = state.enabled ? goalState.status : 'paused'
+    context.ui.setStatus(statusKey, `goal ${label} ${tokens}`)
+  }
+
+  const syncToolExposure = (exposed: boolean) => {
+    const active = pi.getActiveTools()
+    const has = active.includes(toolName)
+    if (exposed && !has) {
+      pi.setActiveTools([...active, toolName])
+    } else if (!exposed && has) {
+      pi.setActiveTools(active.filter((name) => name !== toolName))
+    }
+  }
+
+  const cancelContinuation = () => {
     if (continuationTimer !== undefined) {
       clearTimeout(continuationTimer)
-    }
-    continuationTimer = undefined
-    scheduledGoalId = null
-    pendingTurn = null
-  }
-
-  const refreshStatus = (ctx: ExtensionContext) => {
-    if (state === null || state.status === 'cleared') {
-      ctx.ui.setStatus(statusKey, undefined)
-      return
-    }
-    ctx.ui.setStatus(
-      statusKey,
-      `goal ${state.status} ${formatDuration(activeDurationMs(state, Date.now()))}`,
-    )
-  }
-
-  const persist = (ctx: ExtensionContext) => {
-    if (state === null) {
-      return
-    }
-    pi.appendEntry(entryType, state)
-    refreshStatus(ctx)
-  }
-
-  const sendGoalTurn = (goalState: GoalState, continuation: boolean, seededTool: boolean) => {
-    const timestamp = new Date().toISOString()
-    pendingTurn = { goalId: goalState.id, isContinuation: continuation, usedTool: seededTool }
-    pi.sendMessage(
-      {
-        customType: entryType,
-        content: `<timestamp>${timestamp}</timestamp>\n${goalInstructions(goalState)}`,
-        display: false,
-        details: {
-          kind: continuation ? 'continuation' : 'start',
-          goalId: goalState.id,
-          timestamp,
-        },
-      },
-      { triggerTurn: true, deliverAs: 'followUp' },
-    )
-  }
-
-  const queueContinuation = (ctx: ExtensionContext) => {
-    if (!isActive(state) || scheduledGoalId === state.id) {
-      return
-    }
-    if (state.idleContinuationsWithoutToolCalls >= maximumIdleContinuations) {
-      return
-    }
-    const goalId = state.id
-    const generation = continuationGeneration
-    scheduledGoalId = goalId
-    const attempt = () => {
       continuationTimer = undefined
-      if (generation !== continuationGeneration || !isActive(state) || state.id !== goalId) {
-        return
-      }
-      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-        continuationTimer = setTimeout(attempt, 20)
-        return
-      }
-      scheduledGoalId = null
-      state = dispatchContinuation(state)
-      persist(ctx)
-      sendGoalTurn(state, true, false)
     }
-    continuationTimer = setTimeout(attempt, 0)
   }
 
-  const replaceGoal = (objective: string, ctx: ExtensionContext) => {
-    clearContinuation()
-    const created = createGoal(objective, Date.now(), randomUUID())
-    state = created
-    persist(ctx)
-    return created
+  const resetContinuationSuppression = () => {
+    suppressNextContinuation = false
   }
 
-  const restore = (ctx: ExtensionContext) => {
-    clearContinuation()
-    state = null
-    let invalidStateFound = false
+  const continuationBlocked = (ctx: ExtensionContext): boolean => {
+    if (!isEnabled() || suppressNextContinuation) {
+      return true
+    }
+    if (isLoopActive(ctx.sessionManager.getBranch())) {
+      return true
+    }
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      return true
+    }
+    if (ctx.hasUI && ctx.ui.getEditorText().trim().length > 0) {
+      return true
+    }
+    return state?.goal.status !== 'active'
+  }
+
+  const scheduleContinuation = (ctx: ExtensionContext) => {
+    cancelContinuation()
+    if (continuationBlocked(ctx)) {
+      return
+    }
+    const prompt = runtime.buildContinuationPrompt()
+    if (prompt === undefined) {
+      return
+    }
+    continuationTimer = setTimeout(() => {
+      continuationTimer = undefined
+      if (continuationBlocked(ctx)) {
+        return
+      }
+      continuationTurnInFlight = true
+      pi.sendMessage(
+        { customType: 'goal-continuation', content: prompt, display: false },
+        { triggerTurn: true, deliverAs: 'followUp' },
+      )
+    }, continuationDelayMs)
+  }
+
+  const exitGoalMode = (options: {
+    reason: 'completed' | 'paused' | 'dropped'
+    silent?: boolean
+  }) => {
+    const current = state
+    if (options.reason === 'completed') {
+      state = undefined
+      pi.appendEntry(modeEntryType, { version: 2, mode: 'none' })
+      if (current !== undefined) {
+        const completed: {
+          objective: string
+          tokensUsed: number
+          timeUsedSeconds: number
+          tokenBudget?: number
+        } = {
+          objective: current.goal.objective,
+          tokensUsed: current.goal.tokensUsed,
+          timeUsedSeconds: current.goal.timeUsedSeconds,
+        }
+        if (current.goal.tokenBudget !== undefined) {
+          completed.tokenBudget = current.goal.tokenBudget
+        }
+        pi.appendEntry(completedEntryType, completed)
+      }
+    }
+    continuationTurnInFlight = false
+    cancelContinuation()
+    syncToolExposure(options.reason === 'paused')
+    if (options.reason === 'dropped' && context !== undefined) {
+      context.ui.setStatus(statusKey, undefined)
+    } else {
+      refreshStatus()
+    }
+    if (options.silent === true || context === undefined) {
+      return
+    }
+    if (options.reason === 'completed') {
+      context.ui.notify('Goal mode completed.')
+    } else if (options.reason === 'dropped') {
+      context.ui.notify('Goal dropped.')
+    } else {
+      context.ui.notify('Goal mode paused.')
+    }
+  }
+
+  function handleGoalUpdated(next: GoalModeState | undefined): void {
+    if (next?.goal.status === 'dropped') {
+      exitGoalMode({ reason: 'dropped', silent: true })
+      return
+    }
+    if (next?.enabled !== true) {
+      cancelContinuation()
+    }
+    syncToolExposure(state !== undefined)
+    refreshStatus()
+  }
+
+  const buildGoalModeContext = (ctx: ExtensionContext): string | undefined => {
+    const content = runtime.buildActivePrompt()
+    if (content === undefined) {
+      return undefined
+    }
+    if (!pi.getActiveTools().includes(todoWriteToolName)) {
+      return content
+    }
+    const todoContext = renderTodoContext(readTodosFromBranch(ctx.sessionManager.getBranch()))
+    return todoContext === undefined ? content : `${content}\n${todoContext}`
+  }
+
+  const sendGoalModeContext = (deliverAs: 'steer' | 'followUp', ctx: ExtensionContext) => {
+    const content = buildGoalModeContext(ctx)
+    if (content === undefined) {
+      return
+    }
+    pi.sendMessage(
+      { customType: 'goal-mode-context', content, display: false },
+      { triggerTurn: false, deliverAs },
+    )
+  }
+
+  const submitObjective = (objective: string, ctx: ExtensionCommandContext) => {
+    resetContinuationSuppression()
+    if (!ctx.isIdle()) {
+      sendGoalModeContext('steer', ctx)
+      pi.sendUserMessage(objective, { deliverAs: 'steer' })
+      return
+    }
+    pi.sendUserMessage(objective)
+  }
+
+  const startGoal = async (objective: string, ctx: ExtensionCommandContext) => {
+    try {
+      await runtime.createGoal({ objective })
+    } catch (error) {
+      ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error')
+      return
+    }
+    submitObjective(objective, ctx)
+  }
+
+  const replaceGoal = async (objective: string, ctx: ExtensionCommandContext) => {
+    try {
+      await runtime.replaceGoal({ objective })
+    } catch (error) {
+      ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error')
+      return
+    }
+    submitObjective(objective, ctx)
+  }
+
+  const pauseGoal = async (ctx: ExtensionCommandContext) => {
+    if (!isEnabled()) {
+      ctx.ui.notify('No active goal to pause.', 'warning')
+      return
+    }
+    await runtime.pauseGoal()
+    exitGoalMode({ reason: 'paused' })
+  }
+
+  const resumeGoal = async (ctx: ExtensionCommandContext) => {
+    if (!isPaused()) {
+      ctx.ui.notify('No paused goal to resume.', 'warning')
+      return
+    }
+    await runtime.resumeGoal()
+    resetContinuationSuppression()
+    ctx.ui.notify('Goal mode resumed.')
+    scheduleContinuation(ctx)
+  }
+
+  const dropGoal = async (ctx: ExtensionCommandContext) => {
+    if (state === undefined) {
+      ctx.ui.notify('No goal to drop.', 'warning')
+      return
+    }
+    const confirmed = await ctx.ui.confirm(
+      'Drop goal?',
+      'This removes the goal record. Accumulated usage stays in the session log.',
+    )
+    if (!confirmed) {
+      return
+    }
+    await runtime.dropGoal()
+    exitGoalMode({ reason: 'dropped' })
+  }
+
+  const applyBudget = async (raw: string, ctx: ExtensionCommandContext) => {
+    if (!isEnabled()) {
+      ctx.ui.notify('No active goal.', 'warning')
+      return
+    }
+    if (state?.goal.status === 'complete') {
+      ctx.ui.notify('Goal is already complete.')
+      return
+    }
+    const parsed = parseBudgetInput(raw)
+    if (parsed.kind === 'invalid') {
+      ctx.ui.notify('Goal budget must be a positive integer or `off`.', 'error')
+      return
+    }
+    const nextBudget = parsed.kind === 'off' ? undefined : parsed.value
+    await runtime.onBudgetMutated(nextBudget)
+    resetContinuationSuppression()
+    scheduleContinuation(ctx)
+    ctx.ui.notify(
+      nextBudget === undefined ? 'Goal budget cleared.' : `Goal budget set to ${nextBudget}.`,
+    )
+  }
+
+  const promptBudget = async (ctx: ExtensionCommandContext) => {
+    const prefill = state?.goal.tokenBudget !== undefined ? String(state.goal.tokenBudget) : ''
+    const input = (
+      await ctx.ui.editor('Goal budget (number, `off`, or empty to cancel)', prefill)
+    )?.trim()
+    if (input === undefined || input.length === 0) {
+      return
+    }
+    await applyBudget(input, ctx)
+  }
+
+  const showDetails = (ctx: ExtensionCommandContext) => {
+    if (state === undefined) {
+      ctx.ui.notify('No goal set.')
+      return
+    }
+    ctx.ui.notify(goalDetails(state))
+  }
+
+  const openMenu = async (kind: 'active' | 'paused', ctx: ExtensionCommandContext) => {
+    if (state === undefined) {
+      return
+    }
+    const objective = state.goal.objective
+    const summary = objective.length > 48 ? `${objective.slice(0, 47)}…` : objective
+    const title =
+      kind === 'active' ? `Goal: ${summary} (${state.goal.status})` : `Goal paused: ${summary}`
+    const items =
+      kind === 'active'
+        ? ['Show details', 'Adjust budget…', 'Pause', 'Drop']
+        : ['Resume', 'Show details', 'Adjust budget…', 'Drop']
+    const choice = await ctx.ui.select(title, items)
+    switch (choice) {
+      case 'Show details':
+        showDetails(ctx)
+        return
+      case 'Adjust budget…':
+        await promptBudget(ctx)
+        return
+      case 'Pause':
+        await pauseGoal(ctx)
+        return
+      case 'Resume':
+        await resumeGoal(ctx)
+        return
+      case 'Drop':
+        await dropGoal(ctx)
+        return
+      default:
+        return
+    }
+  }
+
+  const setObjective = async (rest: string, ctx: ExtensionCommandContext) => {
+    if (isPaused()) {
+      ctx.ui.notify(
+        'Resume the current goal first, or drop it before setting a new objective.',
+        'warning',
+      )
+      return
+    }
+    const objective = rest.length > 0 ? rest : (await ctx.ui.editor('Goal objective'))?.trim()
+    if (objective === undefined || objective.length === 0) {
+      return
+    }
+    if (isEnabled()) {
+      await replaceGoal(objective, ctx)
+      return
+    }
+    await startGoal(objective, ctx)
+  }
+
+  const restore = async (ctx: ExtensionContext) => {
+    context = ctx
+    cancelContinuation()
+    continuationTurnInFlight = false
+    suppressNextContinuation = false
+    turnHadToolCalls = false
+    runtime.clearAccounting()
+    state = undefined
+    let latest: ReturnType<typeof decodeGoalModeEntry> = null
+    let invalidEntryFound = false
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === 'custom' && entry.customType === entryType) {
-        const decoded = decodeGoalState(entry.data)
+      if (entry.type === 'custom' && entry.customType === modeEntryType) {
+        const decoded = decodeGoalModeEntry(entry.data)
         if (decoded === null) {
-          invalidStateFound = true
+          invalidEntryFound = true
         } else {
-          state = decoded
-          invalidStateFound = false
+          latest = decoded
+          invalidEntryFound = false
         }
       }
     }
-    if (invalidStateFound) {
+    if (invalidEntryFound) {
       ctx.ui.notify('Ignored an invalid persisted goal state.', 'warning')
     }
-    refreshStatus(ctx)
-    if (isActive(state)) {
-      queueContinuation(ctx)
+    if (latest === null || latest.mode === 'none') {
+      syncToolExposure(false)
+      refreshStatus()
+      return
+    }
+    const wasActive = latest.mode === 'goal' && latest.goal.status === 'active'
+    state = { enabled: latest.mode === 'goal', mode: 'active', goal: { ...latest.goal } }
+    await runtime.onThreadResumed()
+    syncToolExposure(true)
+    refreshStatus()
+    if (wasActive) {
+      ctx.ui.notify('Goal paused on session resume. Use /goal resume to continue.', 'info')
     }
   }
 
-  const updateStatus = (status: 'active' | 'complete', ctx: ExtensionContext): string => {
-    if (state === null || state.status === 'cleared') {
-      return 'No goal exists in this session.'
-    }
-    clearContinuation()
-    state = updateGoalStatus(state, status, Date.now())
-    persist(ctx)
-    if (status === 'active') {
-      return 'Goal is now active.'
-    }
-    return `Goal is now complete. Report total runtime to the user: ${formatDuration(state.activeDurationMs)}`
-  }
-
-  const controlGoal = (control: 'status' | 'pause' | 'resume' | 'clear', ctx: ExtensionContext) => {
-    if (control === 'status') {
-      ctx.ui.notify(describeGoal(state))
-      return
-    }
-    if (state === null || state.status === 'cleared') {
-      ctx.ui.notify('No goal exists in this session.', 'warning')
-      return
-    }
-    clearContinuation()
-    if (control === 'pause') {
-      state = updateGoalStatus(state, 'paused', Date.now())
-      persist(ctx)
-      ctx.ui.notify('Goal is now paused.')
-      return
-    }
-    if (control === 'clear') {
-      state = updateGoalStatus(state, 'cleared', Date.now())
-      persist(ctx)
-      ctx.ui.notify('Goal cleared.')
-      return
-    }
-    state = updateGoalStatus(state, 'active', Date.now())
-    persist(ctx)
-    ctx.ui.notify('Goal is now active.')
-    sendGoalTurn(state, false, true)
-  }
-
-  pi.on('session_start', (_event, ctx) => {
-    restore(ctx)
+  pi.on('session_start', async (_event, ctx) => {
+    await restore(ctx)
   })
 
-  pi.on('session_tree', (_event, ctx) => {
-    restore(ctx)
+  pi.on('session_tree', async (_event, ctx) => {
+    await restore(ctx)
   })
 
-  pi.on('session_shutdown', () => {
-    clearContinuation()
+  pi.on('session_shutdown', async () => {
+    cancelContinuation()
+    await runtime.onTaskAborted({ reason: 'internal' })
   })
 
-  pi.on('before_agent_start', (event) => {
-    if (!isActive(state)) {
+  pi.on('before_agent_start', (_event, ctx) => {
+    const content = buildGoalModeContext(ctx)
+    if (content === undefined) {
       return
     }
-    return { systemPrompt: `${event.systemPrompt}\n\n${goalInstructions(state)}` }
+    return { message: { customType: 'goal-mode-context', content, display: false } }
   })
 
-  pi.on('agent_start', () => {
-    if (currentTurn !== null) {
+  pi.on('agent_start', (_event, ctx) => {
+    context = ctx
+    turnHadToolCalls = false
+    cancelContinuation()
+  })
+
+  pi.on('turn_start', () => {
+    turnCounter += 1
+    runtime.onTurnStart(`turn-${turnCounter}`, usage)
+  })
+
+  pi.on('message_start', (event) => {
+    if (event.message.role === 'user') {
+      resetContinuationSuppression()
+    }
+  })
+
+  pi.on('message_end', (event) => {
+    if (event.message.role !== 'assistant') {
       return
     }
-    currentTurn = pendingTurn ?? {
-      goalId: isActive(state) ? state.id : null,
-      isContinuation: false,
-      usedTool: false,
+    const messageUsage = event.message.usage
+    usage = {
+      input: usage.input + messageUsage.input,
+      output: usage.output + messageUsage.output,
+      cacheRead: usage.cacheRead + messageUsage.cacheRead,
+      cacheWrite: usage.cacheWrite + messageUsage.cacheWrite,
     }
-    pendingTurn = null
   })
 
-  pi.on('tool_execution_end', () => {
-    if (currentTurn !== null) {
-      currentTurn.usedTool = true
+  pi.on('tool_execution_start', () => {
+    turnHadToolCalls = true
+    if (!continuationTurnInFlight) {
+      resetContinuationSuppression()
+    }
+  })
+
+  pi.on('tool_execution_end', async (event) => {
+    if (event.toolName === toolName) {
+      await runtime.onGoalToolCompleted()
+      return
+    }
+    await runtime.onToolCompleted(event.toolName)
+  })
+
+  pi.on('agent_end', async (event, ctx) => {
+    context = ctx
+    await runtime.onAgentEnd({ currentUsage: usage })
+    if (lastAssistantAborted(event.messages)) {
+      continuationTurnInFlight = false
+      await runtime.onTaskAborted({ reason: 'interrupted' })
+      if (isPaused()) {
+        ctx.ui.notify('Goal paused. Use /goal resume to continue.', 'info')
+      }
     }
   })
 
   pi.on('agent_settled', (_event, ctx) => {
-    const settledTurn = currentTurn
-    currentTurn = null
-    if (!isActive(state) || settledTurn?.goalId !== state.id) {
+    context = ctx
+    if (continuationTurnInFlight) {
+      suppressNextContinuation = !turnHadToolCalls
+      continuationTurnInFlight = false
+    }
+    if (state?.mode === 'exiting') {
+      exitGoalMode({ reason: 'completed' })
       return
     }
-    state = settleGoalTurn(state, settledTurn.usedTool, settledTurn.isContinuation, Date.now())
-    persist(ctx)
-    queueContinuation(ctx)
+    scheduleContinuation(ctx)
   })
 
   pi.registerCommand('goal', {
-    description: 'Create or control a long-running goal.',
+    description: 'Set, show, pause, resume, drop, or budget a long-running goal.',
     getArgumentCompletions(prefix) {
-      return ['status', 'pause', 'resume', 'clear']
-        .filter((value) => value.startsWith(prefix.trim()))
+      const trimmed = prefix.trim()
+      return goalSubcommands
+        .filter((value) => value.startsWith(trimmed))
         .map((value) => ({ value, label: value }))
     },
     async handler(args, ctx) {
-      const parsed = parseGoalCommand(args)
-      if (parsed.kind === 'empty') {
-        ctx.ui.notify('Usage: /goal <objective>', 'warning')
+      context = ctx
+      const { sub, rest } = parseGoalSubcommand(args)
+      switch (sub) {
+        case 'set':
+          await setObjective(rest, ctx)
+          return
+        case 'show':
+          showDetails(ctx)
+          return
+        case 'pause':
+          await pauseGoal(ctx)
+          return
+        case 'resume':
+          await resumeGoal(ctx)
+          return
+        case 'drop':
+          await dropGoal(ctx)
+          return
+        case 'budget':
+          if (!isEnabled()) {
+            ctx.ui.notify(
+              isPaused() ? 'Resume the goal before adjusting the budget.' : 'No active goal.',
+              'warning',
+            )
+            return
+          }
+          if (rest.length === 0) {
+            await promptBudget(ctx)
+            return
+          }
+          await applyBudget(rest, ctx)
+          return
+        default:
+          break
+      }
+      if (isEnabled()) {
+        if (rest.length > 0) {
+          ctx.ui.notify(
+            'Goal mode is already active. Use /goal to manage it, or /goal drop to start over.',
+          )
+          return
+        }
+        await openMenu('active', ctx)
         return
       }
-      if (parsed.kind === 'control') {
-        if (parsed.control === 'resume' && !ctx.isIdle()) {
-          ctx.abort()
-          await ctx.waitForIdle()
+      if (isPaused()) {
+        if (rest.length > 0) {
+          ctx.ui.notify(
+            'Resume the current goal first, or drop it before setting a new objective.',
+            'warning',
+          )
+          return
         }
-        controlGoal(parsed.control, ctx)
-        if ((parsed.control === 'pause' || parsed.control === 'clear') && !ctx.isIdle()) {
-          ctx.abort()
-        }
+        await openMenu('paused', ctx)
         return
       }
-      if (parsed.kind === 'recurring') {
-        ctx.ui.notify('Recurring work belongs to /loop, not /goal.', 'warning')
+      if (rest.length > 0) {
+        await startGoal(rest, ctx)
         return
       }
-      if (!ctx.isIdle()) {
-        if (isActive(state)) {
-          clearContinuation()
-          state = updateGoalStatus(state, 'paused', Date.now())
-          persist(ctx)
-        }
-        ctx.abort()
-        await ctx.waitForIdle()
+      const objective = (await ctx.ui.editor('Goal objective'))?.trim()
+      if (objective === undefined || objective.length === 0) {
+        return
       }
-      const created = replaceGoal(parsed.objective, ctx)
-      if (parsed.removedTimeLimit) {
+      await startGoal(objective, ctx)
+    },
+  })
+
+  pi.registerCommand('guided-goal', {
+    description: 'Interview the user, then create a goal with verifiable success criteria.',
+    async handler(args, ctx) {
+      context = ctx
+      if (isEnabled()) {
         ctx.ui.notify(
-          'Time-limited goals are not supported yet. The goal omits the time limit.',
+          'Goal mode is already active. Use /goal to manage it, or /goal drop to start over.',
+        )
+        return
+      }
+      if (isPaused()) {
+        ctx.ui.notify(
+          'Resume the current goal first, or drop it before setting a new objective.',
           'warning',
         )
-      } else {
-        ctx.ui.notify('Goal created.')
+        return
       }
-      sendGoalTurn(created, false, true)
+      syncToolExposure(true)
+      const trimmed = args.trim()
+      const kickoff = renderGuidedGoalInterview(trimmed.length === 0 ? undefined : trimmed)
+      pi.sendMessage(
+        { customType: 'guided-goal-interview', content: kickoff, display: false },
+        { triggerTurn: true, deliverAs: 'followUp' },
+      )
     },
   })
 
   pi.registerTool({
-    name: 'get_goal',
-    label: 'Get goal',
-    description: 'Get the current long-running goal and its status.',
-    promptSnippet: 'Inspect the current long-running goal',
-    parameters: Type.Object({}, { additionalProperties: false }),
-    async execute() {
-      const now = Date.now()
-      return {
-        content: [{ type: 'text', text: describeGoal(state, now) }],
-        details:
-          state === null
-            ? { exists: false }
-            : {
-                exists: true,
-                objective: state.objective,
-                status: state.status,
-                activeDurationMs: activeDurationMs(state, now),
-                continuationCount: state.continuationCount,
-                idleContinuationsWithoutToolCalls: state.idleContinuationsWithoutToolCalls,
-              },
-      }
-    },
-  })
-
-  pi.registerTool({
-    name: 'create_goal',
-    label: 'Create goal',
-    description:
-      'Create a long-running goal. Use this tool only when the user explicitly requests a goal.',
-    promptSnippet: 'Create an explicitly requested long-running goal',
-    parameters: Type.Object(
-      { objective: Type.String({ minLength: 1 }) },
-      { additionalProperties: false },
-    ),
+    name: toolName,
+    label: 'Goal',
+    description: goalToolDescription,
+    promptSnippet: 'Manage the active goal-mode objective',
+    parameters: goalToolParameters,
     executionMode: 'sequential',
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const objective = params.objective.trim()
-      if (objective.length === 0) {
-        return {
-          content: [{ type: 'text', text: 'A goal objective cannot be blank.' }],
-          details: { created: false },
+      context = ctx
+      let resultGoal: Goal | null = null
+      let report: string | null = null
+      try {
+        if (params.op === 'create') {
+          const objective = params.objective?.trim() ?? ''
+          if (objective.length === 0) {
+            throw new GoalRuntimeError('objective is required when op=create')
+          }
+          const created = await runtime.createGoal(
+            params.token_budget === undefined
+              ? { objective }
+              : { objective, tokenBudget: params.token_budget },
+          )
+          resetContinuationSuppression()
+          resultGoal = created.goal
+        } else if (params.op === 'get') {
+          resultGoal = state?.goal ?? null
+        } else if (params.op === 'resume') {
+          const resumed = await runtime.resumeGoal()
+          resetContinuationSuppression()
+          resultGoal = resumed.goal
+        } else if (params.op === 'drop') {
+          resultGoal = (await runtime.dropGoal()) ?? null
+        } else {
+          resultGoal = await runtime.completeGoalFromTool()
+          report = completionBudgetReport(resultGoal)
         }
+      } catch (error) {
+        if (error instanceof GoalRuntimeError) {
+          throw new Error(error.message)
+        }
+        throw error
       }
-      const replacesCurrentTurn = currentTurn?.goalId !== null && currentTurn?.goalId !== undefined
-      const created = replaceGoal(objective, ctx)
-      if (replacesCurrentTurn) {
-        sendGoalTurn(created, false, true)
-        ctx.abort()
-      } else {
-        currentTurn = { goalId: created.id, isContinuation: false, usedTool: true }
+      const details: GoalToolDetails = {
+        op: params.op,
+        goal: resultGoal,
+        remainingTokens: remainingTokens(resultGoal),
+        completionBudgetReport: report,
       }
       return {
-        content: [{ type: 'text', text: 'Goal created.' }],
-        details: { created: true, objective },
+        content: [{ type: 'text', text: describeTool(resultGoal, report) }],
+        details,
       }
     },
-  })
-
-  pi.registerTool({
-    name: 'update_goal',
-    label: 'Update goal',
-    description:
-      'Update the existing goal status. Complete it only after the objective is achieved. Only the user can pause it.',
-    promptSnippet: 'Mark a goal active or complete',
-    parameters: Type.Object(
-      {
-        status: Type.Union([Type.Literal('active'), Type.Literal('complete')]),
-      },
-      { additionalProperties: false },
-    ),
-    executionMode: 'sequential',
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const text = updateStatus(params.status, ctx)
-      return {
-        content: [{ type: 'text', text }],
-        details: { updated: !text.startsWith('No goal'), status: state?.status ?? null },
+    renderCall(args, theme) {
+      const parts = [
+        theme.fg('toolTitle', theme.bold('Goal')),
+        theme.fg('dim', describeOp(args.op)),
+      ]
+      const objective = args.objective?.trim()
+      if (args.op === 'create' && objective !== undefined && objective.length > 0) {
+        parts.push(theme.italic(theme.fg('muted', `"${truncate(objective, 80)}"`)))
       }
+      if (args.op === 'create' && args.token_budget !== undefined) {
+        parts.push(theme.fg('dim', `budget ${formatTokens(args.token_budget)}`))
+      }
+      return new Text(parts.join(' '), 0, 0)
+    },
+    renderResult(result, _options, theme) {
+      const details = decodeGoalToolDetails(result.details)
+      if (details === null) {
+        const text = result.content.find((item) => item.type === 'text')
+        const message = text?.type === 'text' ? text.text : 'Goal tool failed'
+        return new Text(theme.fg('error', message), 0, 0)
+      }
+      return new Text(renderGoalResult(details, theme), 0, 0)
     },
   })
 }

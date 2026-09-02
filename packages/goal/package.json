@@ -1,7 +1,7 @@
 {
   "name": "@nothingrotf/goal",
-  "version": "0.1.0",
-  "description": "A durable, autonomous goal lifecycle for Pi sessions.",
+  "version": "0.2.0",
+  "description": "Goal mode for Pi sessions: one persistent objective with autonomous continuation, token and time budgets, and verified completion.",
   "keywords": [
     "agent",
     "automation",
@@ -18,7 +18,6 @@
   },
   "files": [
     "src",
-    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -35,18 +34,17 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
     "typebox": "catalog:"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ],
-    "skills": [
-      "./skills"
     ]
   }
 }

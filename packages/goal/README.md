@@ -1,18 +1,20 @@
 # @nothingrotf/goal
 
-A durable goal lifecycle for [Pi](https://github.com/earendil-works/pi) sessions.
+Goal mode for [Pi](https://github.com/earendil-works/pi) sessions.
 
-The package recreates the verified Cursor Agent goal behavior within the Pi extension API.
+The package ports the goal subsystem of [oh-my-pi](https://github.com/can1357/oh-my-pi) to the Pi extension API. One session holds one persistent objective. Pi works toward the objective across autonomous turns until the agent verifies completion, the budget runs out, or the user stops the goal.
 
-- `/goal <objective>` creates an active goal and starts work immediately.
-- A new goal replaces the current goal.
-- Active goals continue across autonomous turns and session reloads.
-- Three consecutive continuation turns without tool use stop automatic continuation.
-- Tool use resets the idle continuation count.
-- The user can pause, resume, or clear the goal.
-- The agent can set the goal to `active` or `complete`.
-- A completed goal can become active again.
-- Active runtime excludes paused and completed periods.
+## Behavior
+
+- `/goal <objective>` creates the goal and sends the objective as the first prompt.
+- After each settled run, the extension waits 800 ms and sends a hidden continuation prompt.
+- A continuation turn without tool calls suppresses the next continuation. A user message, a tool call, or a budget change resets the suppression.
+- Esc pauses the goal. Session resume pauses the goal. The user must run `/goal resume` to continue.
+- The goal tracks tokens and wall-clock time. Token accounting counts input, output, and cache writes. It ignores cache reads.
+- When usage reaches the token budget, the goal becomes `budget-limited` and the agent receives one wrap-up steer.
+- The objective enters every prompt as escaped XML inside `<objective>`, marked as user data and not as instructions.
+- The `goal` tool is visible to the model only while a goal exists.
+- When `@nothingrotf/todo` is installed and `todo_write` is active, the goal context includes the persisted todo list as live progress state.
 
 ## Install
 
@@ -23,56 +25,57 @@ pi install npm:@nothingrotf/goal
 Try the local workspace without installation:
 
 ```sh
-pi --no-extensions -e ./packages/goal/src/index.ts --skill ./packages/goal/skills/goal/SKILL.md
+pi --no-extensions -e ./packages/goal/src/index.ts
 ```
 
-## Use
+## Commands
 
 ```text
-/goal publish the package and verify the release
-/goal status
-/goal pause
-/goal resume
-/goal clear
+/goal <objective>        create a goal and start work
+/goal                    open the goal menu
+/goal set <objective>    replace the active goal
+/goal show               print objective, status, tokens, and time
+/goal pause              pause the goal
+/goal resume             resume a paused goal
+/goal drop               discard the goal after confirmation
+/goal budget <n|off>     set or clear the token budget
+/guided-goal [idea]      interview the user, then create a goal
 ```
 
-A leading time limit does not become part of the objective:
+`/guided-goal` asks one question per turn until five fields are fixed: binary success criteria, verification method, attempt cap, scope boundaries, and stop conditions. The agent then calls `goal({op:"create"})` with a structured objective.
 
-```text
-/goal 30m publish the package
-```
+## Tool
 
-Recurring work belongs to `/loop`:
+The model uses one tool named `goal` with a single `op` field:
 
-```text
-/loop 30m check the deployment
-```
+- `create`: start a goal. Requires `objective`. Accepts a positive `token_budget`. Fails when a goal already exists.
+- `get`: return the current goal and the remaining budget.
+- `resume`: reactivate a paused goal.
+- `complete`: mark the goal complete. The prompt requires current-state evidence for every deliverable.
+- `drop`: discard the goal.
 
-## Tools
+## Session entries
 
-- `get_goal` returns the current goal, status, active runtime, and continuation counts.
-- `create_goal` creates or replaces an explicitly requested goal.
-- `update_goal` sets the status to `active` or `complete`.
+- `pi-goal-mode`: the current mode (`goal`, `goal_paused`, or `none`) with the goal record.
+- `pi-goal-completed`: objective and usage of a completed goal.
 
-Only the user controls the `paused` and `cleared` states.
+The extension restores the newest valid `pi-goal-mode` entry on session start and on branch switch.
 
-## Compatibility evidence
+## Loop integration
 
-Static bundle inspection verified these Cursor Agent facts:
+While `@nothingrotf/loop` has an active loop (scheduled or repeat), the goal does not send continuations. The loop owns the wake cadence. The goal context still enters every prompt, and the completion rules still apply. This matches oh-my-pi, where loop mode disables the goal continuation.
 
-- `CreateGoal` accepts one nonempty `objective` string.
-- `UpdateGoal` accepts only `active` and `complete`.
-- Persisted status values include `active`, `paused`, `complete`, and `cleared`.
-- Persisted state tracks active duration, idle continuation count, and continuation count.
+## Todo integration
 
-Runtime probes verified these facts:
+The extension reads the newest successful `todo_write` tool result or `pi-todo-user-edit` entry on the session branch. It does not import the todo package. The rendered `<todo_context>` block lists each todo as `- [status] #id content` with XML escaping and flattened line breaks. `blocked` todos count as open and show the blocker note.
 
-- A second creation replaces the first goal without an error.
-- `active` succeeds for active and completed goals.
-- `complete` reports cumulative active runtime.
-- An active goal causes autonomous continuation turns.
+With the todo package installed, the stop reminder of the todo package runs before the goal continuation. The reminder fires on `agent_end`. The goal continuation waits for `agent_settled` and for an idle session.
 
-Pi provides no native goal panel. This package maps user controls to `/goal` subcommands and adds `get_goal` for inspection.
+## Differences from oh-my-pi
+
+- oh-my-pi groups todos into phases and keys them by text. This package renders one flat list keyed by `#id`.
+- Pi has no plan or vibe mode. The mode guards do not exist.
+- The `goal.enabled` and `goal.continuationModes` settings do not exist. Continuation runs in every mode with an idle session.
 
 ## Development
 
