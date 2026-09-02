@@ -13,10 +13,17 @@ The left side shows:
 The right side shows provider quota windows and context use.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 
-The transcript shows a local timestamp below each user and assistant message.
-Timestamps are active by default and never enter the model context.
-The feature does not track or display prompt cache state.
-Use `/hud-timestamp` to disable or enable timestamps.
+The transcript shows a usage row below each assistant message:
+
+```text
+11:43:23 (2m ago) · ⤵ 2.4K · ⤴ 30 · 💾 254K · ⚡ 1.4/s
+```
+
+The row shows the local time with its age, input tokens, output tokens, cache reads, and output tokens per second.
+The throughput divides the output tokens by the time from the turn start to the end of the message.
+The cache and throughput parts appear only when the message reports them.
+Usage rows are active by default and never enter the model context.
+Use `/hud-timestamp` to disable or enable usage rows.
 
 ## Sounds
 

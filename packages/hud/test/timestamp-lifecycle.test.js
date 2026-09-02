@@ -32,7 +32,10 @@ function harness() {
   }
   registerTimestamps(api)
   return {
-    emit(message) {
+    turnStart() {
+      handlers.get('turn_start')({}, ctx)
+    },
+    end(message) {
       handlers.get('message_end')({ message }, ctx)
     },
     render(data) {
@@ -46,35 +49,37 @@ function harness() {
   }
 }
 
-describe('timestamp lifecycle', () => {
-  test('records user and assistant messages by default', () => {
+const usage = { cacheRead: 0, cacheWrite: 0, input: 1, output: 2 }
+
+describe('usage row lifecycle', () => {
+  test('records assistant messages only', () => {
     const instance = harness()
-    instance.emit({ role: 'user', timestamp: 100 })
-    instance.emit({ role: 'assistant', stopReason: 'toolUse', timestamp: 200 })
-    instance.emit({ role: 'toolResult', timestamp: 300 })
-    expect(instance.entries).toEqual([
-      {
-        customType: timestampEntryType,
-        data: { kind: 'user', role: 'user', timestamp: 100 },
-      },
-      {
-        customType: timestampEntryType,
-        data: { kind: 'tool', role: 'assistant', timestamp: 200 },
-      },
-    ])
+    instance.end({ role: 'user', timestamp: 100 })
+    instance.turnStart()
+    instance.end({ role: 'assistant', timestamp: 200, usage })
+    instance.end({ role: 'toolResult', timestamp: 300 })
+    expect(instance.entries).toHaveLength(1)
+    expect(instance.entries[0].customType).toBe(timestampEntryType)
+    expect(instance.entries[0].data).toMatchObject({
+      cacheRead: 0,
+      input: 1,
+      output: 2,
+      timestamp: 200,
+    })
+    expect(instance.entries[0].data.durationMs).toBeGreaterThanOrEqual(0)
   })
 
-  test('toggles timestamp recording and rendering', async () => {
+  test('toggles usage recording and rendering', async () => {
     const instance = harness()
-    const data = { kind: 'user', role: 'user', timestamp: Date.now() }
+    const data = { cacheRead: 0, durationMs: 1_000, input: 1, output: 2, timestamp: Date.now() }
     expect(instance.render(data)).toBeDefined()
     await instance.toggle()
-    instance.emit(data)
+    instance.end({ role: 'assistant', timestamp: 1, usage })
     expect(instance.entries).toEqual([])
     expect(instance.render(data)).toBeUndefined()
     expect(instance.notifications).toEqual([{ message: 'hud: timestamps disabled', level: 'info' }])
     await instance.toggle()
-    instance.emit(data)
+    instance.end({ role: 'assistant', timestamp: 1, usage })
     expect(instance.entries).toHaveLength(1)
     expect(instance.render(data)).toBeDefined()
   })
