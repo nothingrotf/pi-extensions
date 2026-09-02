@@ -137,6 +137,8 @@ The tree shows the last closed task, then the task in progress, then the next pe
 
 Closed rows remain visible for one agent run. The next agent run hides those rows from the tree.
 
+The widget registers once at session start and renders nothing while the list is empty. This keeps its position above the editor stable.
+
 The state remains available through `todo_read` after the tree hides a completed row.
 
 ## /todo command

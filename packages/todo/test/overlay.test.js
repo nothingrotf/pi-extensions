@@ -106,16 +106,13 @@ describe('persistent todo tree', () => {
     expect(instance.render()).toEqual(['', ' TODO · 3/4', '  ├─ ☐ ~c~', '  └─ ☐ d'])
   })
 
-  test('removes the widget when no visible rows remain', () => {
+  test('keeps the widget registered and renders nothing when empty', () => {
     const instance = harness([todo('active', 'in_progress')])
     instance.overlay.update()
     instance.setTodos([])
     instance.overlay.update()
-    expect(instance.widgetCalls.at(-1)).toEqual({
-      key: 'todos',
-      factory: undefined,
-      options: undefined,
-    })
+    expect(instance.widgetCalls).toHaveLength(1)
+    expect(instance.render()).toEqual([])
   })
 
   test('sanitizes terminal control sequences', () => {

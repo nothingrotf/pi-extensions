@@ -127,25 +127,11 @@ export class TodoOverlay {
   }
 
   setUI(ui: ExtensionUIContext): void {
-    if (ui === this.ui) {
-      return
-    }
     this.ui = ui
-    this.widgetRegistered = false
-    this.tui = undefined
   }
 
   update(): void {
     if (this.ui === undefined) {
-      return
-    }
-    const visible = this.visibleTodos()
-    if (visible.length === 0) {
-      if (this.widgetRegistered) {
-        this.ui.setWidget(widgetKey, undefined)
-        this.widgetRegistered = false
-        this.tui = undefined
-      }
       return
     }
     if (!this.widgetRegistered) {
