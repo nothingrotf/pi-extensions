@@ -105,7 +105,7 @@ export function renderTodoHudLines(
   if (closedCount > 0) filled = Math.max(filled, 1)
   if (closedCount < todos.length) filled = Math.min(filled, rows.length - 1)
 
-  const lines = ['', ` ${header}`]
+  const lines = [` ${header}`]
   rows.forEach((row, index) => {
     const last = index === rows.length - 1
     const branch = theme.fg(index < filled ? 'accent' : 'dim', last ? treeLast : treeBranch)

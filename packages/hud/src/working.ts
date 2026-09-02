@@ -70,7 +70,7 @@ export class WorkingDock {
     return {
       dispose: () => loader.stop(),
       invalidate: () => loader.invalidate(),
-      render: (width: number): string[] => (this.active ? loader.render(width) : []),
+      render: (width: number): string[] => (this.active ? [...loader.render(width), ''] : []),
     }
   }
 }
