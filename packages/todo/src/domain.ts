@@ -2,7 +2,16 @@ import { StringEnum } from '@earendil-works/pi-ai'
 import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
-export const TodoStatusSchema = StringEnum(['pending', 'in_progress', 'completed', 'cancelled'])
+export const TodoStatusSchema = StringEnum([
+  'pending',
+  'in_progress',
+  'completed',
+  'cancelled',
+  'blocked',
+])
+
+const blockerDescription =
+  'Note on what a blocked TODO waits for. Only meaningful with status blocked'
 
 export const TodoInputSchema = Type.Object(
   {
@@ -14,6 +23,7 @@ export const TodoInputSchema = Type.Object(
         description: 'IDs that must complete before this TODO is ready',
       }),
     ),
+    blocker: Type.Optional(Type.String({ description: blockerDescription })),
   },
   { additionalProperties: false },
 )
@@ -26,6 +36,7 @@ export const TodoSchema = Type.Object(
     createdAt: Type.String(),
     updatedAt: Type.String(),
     dependencies: Type.Array(Type.String()),
+    blocker: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 )
@@ -36,6 +47,7 @@ const TodoProtocolItemSchema = Type.Object(
     content: Type.String(),
     status: TodoStatusSchema,
     dependencies: Type.Array(Type.String()),
+    blocker: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 )
@@ -128,12 +140,24 @@ export function cloneTodos(todos: readonly Todo[]): Todo[] {
 }
 
 function toProtocolItem(todo: Todo): TodoProtocolItem {
-  return {
+  const item: TodoProtocolItem = {
     id: todo.id,
     content: todo.content,
     status: todo.status,
     dependencies: [...todo.dependencies],
   }
+  if (todo.blocker !== undefined) {
+    item.blocker = todo.blocker
+  }
+  return item
+}
+
+function blockerFor(status: TodoStatus, blocker: string | undefined): string | undefined {
+  if (status !== 'blocked' || blocker === undefined) {
+    return undefined
+  }
+  const trimmed = blocker.trim()
+  return trimmed.length === 0 ? undefined : trimmed
 }
 
 function toProtocolItems(todos: readonly Todo[]): TodoProtocolItem[] {
@@ -224,7 +248,7 @@ export function decodeTodoWriteDetails<Input>(value: Input): TodoWriteDetails | 
 
 function createTodo(input: TodoInput, now: number): Todo {
   const timestamp = String(now)
-  return {
+  const todo: Todo = {
     id: input.id,
     content: input.content,
     status: input.status,
@@ -232,10 +256,15 @@ function createTodo(input: TodoInput, now: number): Todo {
     updatedAt: timestamp,
     dependencies: [...(input.dependencies ?? [])],
   }
+  const blocker = blockerFor(input.status, input.blocker)
+  if (blocker !== undefined) {
+    todo.blocker = blocker
+  }
+  return todo
 }
 
 function updateTodo(current: Todo, input: TodoInput, now: number): Todo {
-  return {
+  const todo: Todo = {
     id: input.id,
     content: input.content,
     status: input.status,
@@ -243,19 +272,22 @@ function updateTodo(current: Todo, input: TodoInput, now: number): Todo {
     updatedAt: String(now),
     dependencies: [...(input.dependencies ?? current.dependencies)],
   }
+  const blocker = blockerFor(input.status, input.blocker ?? current.blocker)
+  if (blocker !== undefined) {
+    todo.blocker = blocker
+  }
+  return todo
 }
 
-export function updateTodos(
+function mergedTodos(
   current: readonly Todo[],
   incoming: readonly TodoInput[],
   merge: boolean,
   now: number,
-): TodoWriteDetails {
+): Todo[] {
   if (!merge) {
-    const todos = incoming.map((todo) => createTodo(todo, now))
-    return createDetails(current, todos, false)
+    return incoming.map((todo) => createTodo(todo, now))
   }
-
   const byId = new Map<string, Todo>()
   for (const todo of current) {
     byId.set(todo.id, cloneTodo(todo))
@@ -267,23 +299,124 @@ export function updateTodos(
       existing === undefined ? createTodo(todo, now) : updateTodo(existing, todo, now),
     )
   }
-  return createDetails(current, [...byId.values()], true)
+  return [...byId.values()]
 }
 
-const successPrefix =
-  'Successfully updated TODOs. Make sure to follow and update your TODO list as you make progress. Cancel and add new TODO tasks as needed when the user makes a correction or follow-up request.'
+export function validateTodoWrite(
+  current: readonly Todo[],
+  incoming: readonly TodoInput[],
+  merge: boolean,
+): string[] {
+  const errors: string[] = []
+  const seen = new Set<string>()
+  for (const todo of incoming) {
+    if (todo.id.trim().length === 0) {
+      errors.push('Todo id cannot be blank')
+    }
+    if (todo.content.trim().length === 0) {
+      errors.push(`Todo "${todo.id}" has blank content`)
+    }
+    if (seen.has(todo.id)) {
+      errors.push(`Duplicate id "${todo.id}" in todos`)
+    }
+    seen.add(todo.id)
+  }
+  const known = new Set(merge ? current.map((todo) => todo.id) : [])
+  for (const id of seen) {
+    known.add(id)
+  }
+  for (const todo of incoming) {
+    for (const dependency of todo.dependencies ?? []) {
+      if (dependency === todo.id) {
+        errors.push(`Todo "${todo.id}" depends on itself`)
+      } else if (!known.has(dependency)) {
+        errors.push(`Todo "${todo.id}" depends on unknown id "${dependency}"`)
+      }
+    }
+  }
+  return errors
+}
 
-const needsProgressSuffix =
-  ' No TODOs are marked in-progress, make sure to mark them before starting the next.'
+export function normalizeInProgress(todos: Todo[], now: number): Todo[] {
+  const inProgress = todos.filter((todo) => todo.status === 'in_progress')
+  for (const todo of inProgress.slice(1)) {
+    todo.status = 'pending'
+    todo.updatedAt = String(now)
+  }
+  if (inProgress.length > 0) {
+    return todos
+  }
+  const ready = new Set(readyTaskIds(todos))
+  const next = todos.find((todo) => ready.has(todo.id))
+  if (next !== undefined) {
+    next.status = 'in_progress'
+    next.updatedAt = String(now)
+  }
+  return todos
+}
+
+export function snapshotTodoDetails(todos: readonly Todo[]): TodoWriteDetails {
+  return createDetails(todos, todos, true)
+}
+
+export function updateTodos(
+  current: readonly Todo[],
+  incoming: readonly TodoInput[],
+  merge: boolean,
+  now: number,
+): TodoWriteDetails {
+  const todos = normalizeInProgress(mergedTodos(current, incoming, merge, now), now)
+  return createDetails(current, todos, merge)
+}
+
+function dependencyNote(todo: Todo, byId: ReadonlyMap<string, Todo>): string {
+  const unmet = todo.dependencies.filter((id) => byId.get(id)?.status !== 'completed')
+  return unmet.length === 0 ? '' : ` needs: ${unmet.join(', ')}`
+}
+
+export function formatTodoSummary(todos: readonly Todo[], errors: readonly string[]): string {
+  const lines: string[] = []
+  if (errors.length > 0) {
+    lines.push(`Errors: ${errors.join('; ')}`)
+  }
+  if (todos.length === 0) {
+    lines.push(errors.length > 0 ? 'Todo list unchanged (empty).' : 'Todo list cleared.')
+    return lines.join('\n')
+  }
+  const byId = new Map(todos.map((todo) => [todo.id, todo]))
+  const remaining = todos.filter((todo) => isRemindableStatus(todo.status))
+  if (remaining.length === 0) {
+    lines.push('Remaining items: none.')
+  } else {
+    lines.push(`Remaining items (${remaining.length}):`)
+    for (const todo of remaining) {
+      lines.push(
+        `  - ${todo.content} [${todo.status}] (id: ${todo.id})${dependencyNote(todo, byId)}`,
+      )
+    }
+  }
+  const completed = todos.filter((todo) => todo.status === 'completed').length
+  const cancelled = todos.filter((todo) => todo.status === 'cancelled').length
+  const blocked = todos.filter((todo) => todo.status === 'blocked')
+  lines.push(`Closed: ${completed} completed, ${cancelled} cancelled. Blocked: ${blocked.length}.`)
+  for (const todo of blocked) {
+    const note = todo.blocker === undefined ? '' : ` (${todo.blocker})`
+    lines.push(`  - ${todo.content} [blocked] (id: ${todo.id})${note}`)
+  }
+  if (remaining.length > 0 && !remaining.some((todo) => todo.status === 'in_progress')) {
+    lines.push('No task is in progress: every pending task waits on a dependency.')
+  }
+  return lines.join('\n')
+}
 
 export function formatTodoWriteResult(todos: readonly Todo[]): string {
-  const prefix = needsInProgressTodos(todos)
-    ? `${successPrefix}${needsProgressSuffix}`
-    : successPrefix
-  const lines = todos.map(
-    (todo) => `- **${todo.status.toUpperCase()}**: ${todo.content} (id: ${todo.id})`,
-  )
-  return [prefix, '', 'Here are the latest contents of your todo list:', ...lines].join('\n')
+  return formatTodoSummary(todos, [])
+}
+
+function formatTodoLine(todo: Todo): string {
+  const blocker = todo.blocker === undefined ? '' : ` [blocked on: ${todo.blocker}]`
+  const deps = todo.dependencies.length === 0 ? '' : ` needs: ${todo.dependencies.join(', ')}`
+  return `- **${todo.status.toUpperCase()}**: ${todo.content} (id: ${todo.id})${blocker}${deps}`
 }
 
 export function decodeTodoReadDetails<Input>(value: Input): TodoReadDetails | null {
@@ -306,14 +439,24 @@ export function readTodos(todos: readonly Todo[], input: TodoReadInput): TodoRea
 }
 
 export function formatTodoReadResult(todos: readonly Todo[]): string {
-  const lines = todos.map(
-    (todo) => `- **${todo.status.toUpperCase()}**: ${todo.content} (id: ${todo.id})`,
-  )
+  const lines = todos.map(formatTodoLine)
   return ['Here are the latest contents of your todo list:', ...lines].join('\n')
 }
 
+export function isOpenStatus(status: TodoStatus): boolean {
+  return status === 'pending' || status === 'in_progress' || status === 'blocked'
+}
+
+export function isRemindableStatus(status: TodoStatus): boolean {
+  return status === 'pending' || status === 'in_progress'
+}
+
 export function activeTodoCount(todos: readonly Todo[]): number {
-  return todos.filter((todo) => todo.status === 'in_progress' || todo.status === 'pending').length
+  return todos.filter((todo) => isOpenStatus(todo.status)).length
+}
+
+export function remindableTodos(todos: readonly Todo[]): Todo[] {
+  return todos.filter((todo) => isRemindableStatus(todo.status))
 }
 
 export function completedTodoCount(todos: readonly Todo[]): number {

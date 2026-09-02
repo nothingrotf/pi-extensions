@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import {
-  decodeTodoReadDetails,
-  decodeTodoWriteDetails,
   formatTodoReadResult,
+  formatTodoSummary,
   formatTodoWriteResult,
   needsInProgressTodos,
-  readTodos,
   readyTaskIds,
   type Todo,
   updateTodos,
+  validateTodoWrite,
 } from '../src/domain.ts'
 
 const inspectTodo: Todo = {
@@ -129,18 +128,40 @@ describe('updateTodos', () => {
     expect(result.todos[1]?.dependencies).toEqual([])
   })
 
-  it('accepts duplicate IDs on replacement', () => {
-    const result = updateTodos(
-      [],
-      [
-        { id: 'dup', content: 'First', status: 'in_progress' },
-        { id: 'dup', content: 'Second', status: 'pending' },
-      ],
-      false,
-      100,
-    )
-
-    expect(result.todos).toHaveLength(2)
+  it('rejects duplicate ids, blank content, self and unknown dependencies', () => {
+    expect(
+      validateTodoWrite(
+        [],
+        [
+          { id: 'dup', content: 'First', status: 'in_progress' },
+          { id: 'dup', content: 'Second', status: 'pending' },
+          { id: ' ', content: '', status: 'pending' },
+          { id: 'self', content: 'Self', status: 'pending', dependencies: ['self'] },
+          { id: 'orphan', content: 'Orphan', status: 'pending', dependencies: ['nope'] },
+        ],
+        false,
+      ),
+    ).toEqual([
+      'Duplicate id "dup" in todos',
+      'Todo id cannot be blank',
+      'Todo " " has blank content',
+      'Todo "self" depends on itself',
+      'Todo "orphan" depends on unknown id "nope"',
+    ])
+    expect(
+      validateTodoWrite(
+        currentTodos,
+        [{ id: '3', content: 'Verify', status: 'pending', dependencies: ['1'] }],
+        true,
+      ),
+    ).toEqual([])
+    expect(
+      validateTodoWrite(
+        currentTodos,
+        [{ id: '3', content: 'Verify', status: 'pending', dependencies: ['1'] }],
+        false,
+      ),
+    ).toEqual(['Todo "3" depends on unknown id "1"'])
   })
 
   it('deduplicates IDs on merge with the last update', () => {
@@ -170,8 +191,48 @@ describe('updateTodos', () => {
         updatedAt: '100',
         dependencies: [],
       },
-      implementTodo,
+      { ...implementTodo, status: 'in_progress', updatedAt: '100' },
     ])
+  })
+
+  it('auto-promotes the first ready pending task and keeps one in_progress', () => {
+    const promoted = updateTodos(
+      [],
+      [
+        { id: 'a', content: 'A', status: 'pending', dependencies: ['b'] },
+        { id: 'b', content: 'B', status: 'pending' },
+        { id: 'c', content: 'C', status: 'blocked', blocker: 'ops' },
+      ],
+      false,
+      100,
+    )
+    expect(promoted.todos.map((todo) => [todo.id, todo.status])).toEqual([
+      ['a', 'pending'],
+      ['b', 'in_progress'],
+      ['c', 'blocked'],
+    ])
+
+    const demoted = updateTodos(
+      [],
+      [
+        { id: 'a', content: 'A', status: 'in_progress' },
+        { id: 'b', content: 'B', status: 'in_progress' },
+      ],
+      false,
+      100,
+    )
+    expect(demoted.todos.map((todo) => todo.status)).toEqual(['in_progress', 'pending'])
+
+    const waiting = updateTodos(
+      [],
+      [
+        { id: 'a', content: 'A', status: 'pending', dependencies: ['b'] },
+        { id: 'b', content: 'B', status: 'blocked' },
+      ],
+      false,
+      100,
+    )
+    expect(waiting.todos.map((todo) => todo.status)).toEqual(['pending', 'blocked'])
   })
 
   it('clears with an empty replacement', () => {
@@ -208,74 +269,41 @@ describe('task readiness', () => {
 })
 
 describe('tool result text', () => {
-  it('matches the active success text', () => {
-    expect(formatTodoWriteResult(currentTodos)).toBe(
-      'Successfully updated TODOs. Make sure to follow and update your TODO list as you make progress. Cancel and add new TODO tasks as needed when the user makes a correction or follow-up request.\n\nHere are the latest contents of your todo list:\n- **IN_PROGRESS**: Inspect (id: 1)\n- **PENDING**: Implement (id: 2)',
+  it('summarizes remaining, closed, and blocked items', () => {
+    const todos: Todo[] = [
+      ...currentTodos,
+      { ...inspectTodo, id: '3', content: 'Verify', status: 'completed' },
+      { ...inspectTodo, id: '4', content: 'Wait', status: 'blocked', blocker: 'ops' },
+      { ...inspectTodo, id: '5', content: 'Skip', status: 'cancelled' },
+    ]
+    expect(formatTodoWriteResult(todos)).toBe(
+      [
+        'Remaining items (2):',
+        '  - Inspect [in_progress] (id: 1)',
+        '  - Implement [pending] (id: 2) needs: 1',
+        'Closed: 1 completed, 1 cancelled. Blocked: 1.',
+        '  - Wait [blocked] (id: 4) (ops)',
+      ].join('\n'),
     )
   })
 
-  it('adds the exact missing-active reminder', () => {
-    expect(formatTodoWriteResult([{ ...inspectTodo, status: 'pending' }])).toContain(
-      'No TODOs are marked in-progress, make sure to mark them before starting the next.',
+  it('explains a list where no task is ready', () => {
+    expect(formatTodoWriteResult([{ ...implementTodo, dependencies: ['9'] }])).toContain(
+      'No task is in progress: every pending task waits on a dependency.',
     )
   })
 
-  it('matches the clear text without the missing-active reminder', () => {
-    expect(formatTodoWriteResult([])).toBe(
-      'Successfully updated TODOs. Make sure to follow and update your TODO list as you make progress. Cancel and add new TODO tasks as needed when the user makes a correction or follow-up request.\n\nHere are the latest contents of your todo list:',
+  it('reports cleared lists and errors', () => {
+    expect(formatTodoWriteResult([])).toBe('Todo list cleared.')
+    expect(formatTodoSummary([], ['Duplicate id "x" in todos'])).toBe(
+      'Errors: Duplicate id "x" in todos\nTodo list unchanged (empty).',
     )
+    expect(formatTodoSummary(currentTodos, ['bad'])).toContain('Errors: bad\nRemaining items (2):')
   })
 
-  it('formats read results without a write message', () => {
+  it('formats read results as a full list', () => {
     expect(formatTodoReadResult(currentTodos)).toBe(
-      'Here are the latest contents of your todo list:\n- **IN_PROGRESS**: Inspect (id: 1)\n- **PENDING**: Implement (id: 2)',
+      'Here are the latest contents of your todo list:\n- **IN_PROGRESS**: Inspect (id: 1)\n- **PENDING**: Implement (id: 2) needs: 1',
     )
-  })
-})
-
-describe('todo_read', () => {
-  it('filters by status and ID', () => {
-    expect(readTodos(currentTodos, { statusFilter: ['pending'] }).todos).toEqual([implementTodo])
-    expect(readTodos(currentTodos, { idFilter: ['1'] }).todos).toEqual([inspectTodo])
-    expect(readTodos(currentTodos, { statusFilter: ['pending'], idFilter: ['1'] }).todos).toEqual(
-      [],
-    )
-  })
-
-  it('decodes complete read details', () => {
-    expect(decodeTodoReadDetails({ todos: currentTodos, totalCount: 2 })).toEqual({
-      todos: currentTodos,
-      totalCount: 2,
-    })
-    expect(decodeTodoReadDetails({ todos: currentTodos, totalCount: 1 })).toBeNull()
-  })
-})
-
-describe('decodeTodoWriteDetails', () => {
-  it('normalizes a legacy snapshot', () => {
-    const decoded = decodeTodoWriteDetails({
-      todos: currentTodos,
-      totalCount: 2,
-      wasMerge: true,
-    })
-    expect(decoded).toMatchObject({
-      todos: currentTodos,
-      totalCount: 2,
-      wasMerge: true,
-      success: true,
-      readyTaskIds: [],
-      needsInProgressTodos: false,
-      initialTodos: [],
-    })
-    expect(decoded?.finalTodos).toEqual([
-      { id: '1', content: 'Inspect', status: 'in_progress', dependencies: [] },
-      { id: '2', content: 'Implement', status: 'pending', dependencies: ['1'] },
-    ])
-  })
-
-  it('rejects an inconsistent snapshot', () => {
-    expect(
-      decodeTodoWriteDetails({ todos: currentTodos, totalCount: 1, wasMerge: true }),
-    ).toBeNull()
   })
 })

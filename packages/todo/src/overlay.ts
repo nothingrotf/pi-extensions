@@ -2,7 +2,7 @@ import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
 import type { TUI } from '@earendil-works/pi-tui'
 import { truncateToWidth } from '@earendil-works/pi-tui'
 
-import { sanitizeTerminalText, type Todo } from './domain.ts'
+import { isOpenStatus, sanitizeTerminalText, type Todo } from './domain.ts'
 
 const maximumRows = 12
 const widgetKey = 'todos'
@@ -116,9 +116,7 @@ export class TodoOverlay {
     }
 
     const truncate = (line: string): string => truncateToWidth(line, width, '…')
-    const hasActive = todos.some(
-      (todo) => todo.status === 'pending' || todo.status === 'in_progress',
-    )
+    const hasActive = todos.some((todo) => isOpenStatus(todo.status))
     const completedCount = todos.filter((todo) => todo.status === 'completed').length
     const showIds = todos.some((todo) => todo.dependencies.length > 0)
     const headingColor = hasActive ? 'accent' : 'dim'
@@ -190,9 +188,15 @@ export class TodoOverlay {
         ? theme.fg('warning', '◐')
         : todo.status === 'completed'
           ? theme.fg('success', '✓')
-          : theme.fg('dim', '○')
+          : todo.status === 'blocked'
+            ? theme.fg('muted', '⊘')
+            : theme.fg('dim', '○')
     const subjectColor =
-      todo.status === 'in_progress' ? 'accent' : todo.status === 'completed' ? 'muted' : 'text'
+      todo.status === 'in_progress'
+        ? 'accent'
+        : todo.status === 'completed' || todo.status === 'blocked'
+          ? 'muted'
+          : 'text'
     let subject = theme.fg(subjectColor, sanitizeTerminalText(todo.content))
     if (todo.status === 'completed') {
       subject = theme.strikethrough(subject)
@@ -202,6 +206,9 @@ export class TodoOverlay {
       line += ` ${theme.fg('dim', `#${sanitizeTerminalText(todo.id)}`)}`
     }
     line += ` ${subject}`
+    if (todo.status === 'blocked' && todo.blocker !== undefined) {
+      line += ` ${theme.fg('dim', `(${sanitizeTerminalText(todo.blocker)})`)}`
+    }
     if (todo.dependencies.length > 0) {
       line += ` ${theme.fg(
         'muted',
