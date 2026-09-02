@@ -2063,6 +2063,7 @@ describe('subagent Task integration', () => {
       const first = await runTask(harness, {
         ...baseInput,
         isolation: { integration: 'apply', mode: 'worktree' },
+        subagent_type: 'generalPurpose',
         prompt: 'WRITE_ISOLATED',
       })
       const id = agentId(first)
@@ -2073,6 +2074,7 @@ describe('subagent Task integration', () => {
       await runTask(harness, {
         ...baseInput,
         isolation: { integration: 'apply', mode: 'worktree' },
+        subagent_type: 'generalPurpose',
         prompt: 'second isolated attempt',
         resume: id,
       })
@@ -2115,7 +2117,9 @@ describe('subagent Task integration', () => {
   it('rejects role and read-only policy changes during resume', async () => {
     const harness = await createHarness()
     try {
-      const mutable = agentId(await runTask(harness, baseInput))
+      const mutable = agentId(
+        await runTask(harness, { ...baseInput, subagent_type: 'generalPurpose' }),
+      )
       const wrongRole = await runTask(harness, {
         ...baseInput,
         prompt: 'wrong role',
@@ -2128,6 +2132,7 @@ describe('subagent Task integration', () => {
         prompt: 'add readonly',
         readonly: true,
         resume: mutable,
+        subagent_type: 'generalPurpose',
       })
       expect(addReadonly).toContain('A resumed Task must preserve the original readonly policy.')
 
@@ -2909,7 +2914,12 @@ describe('subagent Task integration', () => {
       })
       const result = await harness.runtime.run({
         ctx: harness.context(),
-        input: { ...baseInput, capability_profile: 'trusted-profile', prompt: 'RETURN_TOOLS' },
+        input: {
+          ...baseInput,
+          capability_profile: 'trusted-profile',
+          prompt: 'RETURN_TOOLS',
+          subagent_type: 'generalPurpose',
+        },
         signal: undefined,
       })
       expect(result.kind).toBe('completed')

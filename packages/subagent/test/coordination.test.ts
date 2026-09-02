@@ -15,7 +15,7 @@ import {
   resolveStructuredOutput,
   validateOutputSchema,
 } from '../src/output.ts'
-import { resolveRole } from '../src/roles.ts'
+import { isReadonlyByDefault, resolveRole } from '../src/roles.ts'
 import {
   type CoordinationRunState,
   SingleTaskInputSchema,
@@ -46,6 +46,10 @@ describe('coordination primitives', () => {
     expect(resolveRole('general_purpose', false).name).toBe('generalPurpose')
     expect(resolveRole('unspecified', false).name).toBe('generalPurpose')
     expect(resolveRole('bash', false).name).toBe('shell')
+    expect(resolveRole('bash', true).name).toBe('readonly')
+    expect(resolveRole('explore', true).name).toBe('explore')
+    expect(isReadonlyByDefault('explore')).toBe(true)
+    expect(isReadonlyByDefault('generalPurpose')).toBe(false)
   })
 
   it('builds declared-order waves and rejects graph defects', () => {

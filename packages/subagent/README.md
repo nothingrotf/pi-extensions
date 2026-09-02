@@ -44,6 +44,8 @@ The runtime automatically adds writer isolation to a mutable background Task. It
 
 Set `readonly` to `true` to remove shell and mutation tools.
 
+The `explore` role is read-only by default. It keeps its own prompt and never receives writer isolation. Set `readonly` to `false` to make an `explore` child mutable.
+
 Set an effective directory and a tool allowlist:
 
 ```ts

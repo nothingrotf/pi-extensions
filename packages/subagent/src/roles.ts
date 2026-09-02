@@ -60,10 +60,14 @@ export function isBuiltInRole(name: string): boolean {
   return ['generalPurpose', 'explore', 'shell', 'debug'].includes(canonicalRole(name))
 }
 
+export function isReadonlyByDefault(name: string): boolean {
+  return canonicalRole(name) === 'explore'
+}
+
 export function resolveRole(subagentType: SubagentType, readonly: boolean): RoleDefinition {
-  if (readonly) return READONLY
   const role = canonicalRole(subagentType)
   if (role === 'explore') return EXPLORE
+  if (readonly) return READONLY
   if (role === 'shell') return SHELL
   if (role === 'debug') return DEBUG
   if (role === 'generalPurpose') return GENERAL_PURPOSE

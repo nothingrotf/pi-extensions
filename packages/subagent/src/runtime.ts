@@ -48,7 +48,13 @@ import {
   resolveStructuredOutput,
   validateOutputSchema,
 } from './output.ts'
-import { isBuiltInRole, loadRolePrompt, resolveRole, type RoleDefinition } from './roles.ts'
+import {
+  isBuiltInRole,
+  isReadonlyByDefault,
+  loadRolePrompt,
+  resolveRole,
+  type RoleDefinition,
+} from './roles.ts'
 import type {
   ArtifactRef,
   ContextState,
@@ -1672,7 +1678,9 @@ export class SubagentRuntime {
       throw new Error(`Subagent type "${input.subagent_type}" does not exist.`)
     }
     const readonly =
-      attenuation?.readonly === true ? true : (input.readonly ?? discovered?.readonly ?? false)
+      attenuation?.readonly === true
+        ? true
+        : (input.readonly ?? discovered?.readonly ?? isReadonlyByDefault(input.subagent_type))
     if (readonly && input.isolation !== undefined) {
       throw new Error('A read-only Task cannot request writer isolation.')
     }
