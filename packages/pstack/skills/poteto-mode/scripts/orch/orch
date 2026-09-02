@@ -48,11 +48,10 @@ if [ "$backend" != "auto" ] && [ "$backend" != "github" ]; then
   exit 2
 fi
 
-if [ "$backend" = "auto" ] && [ "$has_gt" = true ]; then
-  exec bun "$script_dir/orch.bundle" "$@"
-fi
-
 if [ "$has_gh_stack" = false ]; then
+  if [ "$backend" = "auto" ] && [ "$has_gt" = true ]; then
+    exec bun "$script_dir/orch.bundle" "$@"
+  fi
   if command -v gh >/dev/null 2>&1; then
     printf '%s\n' 'error: no stack backend is available; obtain approval, then run gh extension install github/gh-stack' >&2
   else

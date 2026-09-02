@@ -10,7 +10,7 @@
 6. Run `node scripts/check-plan.mjs <plan.md>` from the `poteto-mode` skill directory and fix every line it prints (the **encode-lessons-in-structure** principle skill). It enforces the skeleton's shape, the verification rule in every verification block, and the punctuation rules.
 7. Hand back. Post the plan path and the script's output, then stop. Execution starts on the operator's explicit go, under the execution playbook the plan names.
 
-**Verification.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked (the **prove-it-works** principle skill). That sentence is the verification rule. Every verification block opens with it. The live block is mandatory. Ten lanes on the configured `swarm workers` models at the PR head drive the real surface through its control skill, per the **swarm** skill. Each lane is one box with a concrete scenario, the screenshot it saves, and its pass predicate. The perf block names the metric, the probe, the trunk baseline measured first, and the rule with the number that fails. A PR that changes an interaction is review-gated. The operator reviews it in chat with screenshots and a video before merge. A PR that changes no interaction writes `**Review gate.** None. <PR id> is not review-gated.` and no boxes under it.
+**Verification.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked (the **prove-it-works** principle skill). That sentence is the verification rule. Every verification block opens with it. The live block is mandatory. Ten lanes on the configured `swarm workers` models at the PR head drive the real surface through its control skill, per the **swarm** skill. Each lane is one box with a concrete scenario, the screenshot it saves, and its pass predicate. Lane 1 is the regression lane. It runs the same load-bearing scenario on current trunk and the PR head. If trunk lacks the feature, record that fact and verify the added behavior plus the user's final state. The perf block names the metric, the probe, the trunk baseline, the head result, and the numbered rule. Use a ratio only when the denominator is stable and nonzero. Otherwise use absolute measurements and limits. A PR that changes an interaction is review-gated. The operator reviews it in chat with screenshots and a video before merge. A PR that changes no interaction writes `**Review gate.** None. <PR id> is not review-gated.` and no boxes under it.
 
 **Control skill.** Pick it by surface. Browser, Electron, and web UIs use `control-ui`. CLIs and TUIs use `control-cli`. Native mobile uses the available simulator-driving skill. A PR that touches two surfaces gets lanes on both. A surface with no control skill is a risk in Appendix C, and its live block still names how each lane drives it.
 
@@ -59,6 +59,8 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Run `/deslop` before each commit and `/no-comments` before review.
 - [ ] Triage every Bugbot and security-reviewer comment per `../references/bugbot-triage.md`.
 - [ ] Rebase onto current trunk before babysit and again before the merge-ready report.
+- [ ] Record the base SHA, head SHA, and `git patch-id --stable` for the base-to-head diff.
+- [ ] Attach proof images and videos with native `gh --attach` after capture. Use body references when placement matters.
 
 ### Verdict and merge, for every PR
 
@@ -99,7 +101,7 @@ Each live lane runs in its own isolated `Task` worktree at the PR head. Drive th
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` models at the PR head, per the boot recipe.
 
-- [ ] Lane 1. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
+- [ ] Lane 1. Regression lane against trunk. Run <the same load-bearing scenario> on current trunk and the PR head. If trunk lacks the feature, record that fact and gate <the added behavior plus the user's final state>. Save `<slug>.png`. Pass when <predicate>.
 - [ ] Lane 2. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
 - [ ] Lane 3. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
 - [ ] Lane 4. <Scenario.> Save `<slug>.png`. Pass when <predicate>.
@@ -113,21 +115,22 @@ Each live lane runs in its own isolated `Task` worktree at the PR head. Drive th
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. <What is measured.>
-- [ ] Probe. <The command or procedure, run at trunk and at the head, interleaved.>
-- [ ] Baseline. Record the trunk <value> first.
+- [ ] Probe. <The command or procedure, run at trunk and at the head, interleaved. State why the values are comparable. If not, use absolute measurements and limits.>
+- [ ] Baseline. Record the trunk <value> and the head <value>.
 - [ ] Rule. <Head against trunk, with the number that fails.>
 
 **Review gate.** The operator reviews before merge.
 
 - [ ] Copy lane <n> screenshots into `<media path>/<pr-id>-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change on a lane VM. Save it as `<media path>/<pr-id>-review.mp4`.
+- [ ] Attach the screenshots and video to the PR with native `gh --attach`.
 - [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
-- [ ] Rebased onto current trunk after the verdict, patch-id unchanged.
+- [ ] Rebased onto current trunk after the verdict. Confirm that `git patch-id --stable` is unchanged.
 - [ ] <The owner squash-merges its own PR, or the root appends the PR through the selected stack backend and the operator lands it.>
 
 ## Close the program

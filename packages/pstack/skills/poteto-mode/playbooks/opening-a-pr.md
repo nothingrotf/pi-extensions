@@ -18,11 +18,17 @@ Invoked at the end of every other playbook.
 - `## Blast Radius`. State who and what the change touches. Explain why the change is safe or risky. If main is red without the fix, name the continuing cost.
 - `## Verification`. State how you ran each check and its rigor. Name the real path, such as `control-cli`, `control-ui`, or the targeted tests. State the outcome of each check, not only the command name.
 
-After these sections, attach videos or screenshots when they prove a claim. Do not use `## Summary` or `## Test plan` boilerplate. A commit body does not restate its subject.
+After these sections, attach videos or screenshots when they prove a claim. Use native `gh --attach` for local proof assets. Repeat `--attach` for each file, with a maximum of 50 files. Use `<file>#<alt text>` for image alt text, and quote the argument. Put a local Markdown reference in the body when placement matters. `gh` replaces that reference with the uploaded asset. It appends an asset that the body does not reference.
+
+Use `gh pr create --attach <file>` for a new independent PR. Use `gh pr edit <number> --attach <file>` for an existing or stacked PR. Use `gh pr comment <number> --attach <file>` for later evidence. `gh stack submit` does not accept `--attach`, so attach assets after submission. Do not use `--attach` with `--web` or `--dry-run` during creation.
+
+An upload can fail after a partial success. `gh` preserves successful uploads, prints a recoverable URL, and exits with a nonzero status. Inspect the PR before a retry so that the retry does not duplicate assets.
+
+Do not use `## Summary` or `## Test plan` boilerplate. A commit body does not restate its subject.
 
 **Size and stacks.** Prefer five narrow PRs to one large PR. Stack follow-ups through `../references/stack-backends.md`, and keep the ordered stack visible to reviewers. Branch from main only for independent work. Rebase on `main` before substantial stack work.
 
-**Readiness.** Open every PR ready, never as a draft. Set `draft: false` on every PR creation call. If a PR still opens as a draft, run the host's ready command, such as `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
+**Readiness.** Open every PR ready, never as a draft. Set `draft: false` on API or tool calls. Omit `--draft` from `gh pr create`. If a PR still opens as a draft, run `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
 
 **Babysit.** Opening a PR does not start a babysit. Post the URL and keep building. Finish the phase or stack first. Run a separate babysit pass only when the user asks for one after the whole stack exists. A babysit for each new PR stalls the build and spends checks on commits that later waves restart. Push back when feedback drifts from intent.
 

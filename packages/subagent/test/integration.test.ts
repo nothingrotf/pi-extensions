@@ -1288,6 +1288,13 @@ describe('subagent Task integration', () => {
       },
     ])
     try {
+      const unknown = await runTask(harness, {
+        ...baseInput,
+        subagent_type: 'implementation',
+      })
+      expect(unknown).toContain(
+        'Available built-in and registered extension types: generalPurpose, explore, shell, debug, Comment Sicko.',
+      )
       const first = await runTask(harness, {
         ...baseInput,
         prompt: 'RETURN_PROFILE',

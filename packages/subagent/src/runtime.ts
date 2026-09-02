@@ -49,6 +49,7 @@ import {
   validateOutputSchema,
 } from './output.ts'
 import {
+  BUILT_IN_ROLE_NAMES,
   isBuiltInRole,
   isReadonlyByDefault,
   loadRolePrompt,
@@ -1675,7 +1676,10 @@ export class SubagentRuntime {
     if (attenuation !== undefined) relativeCwdWithin(attenuation.physicalWorkspaceRoot, cwd)
     const discovered = await this.resolver.resolve(input.subagent_type, cwd)
     if (discovered === undefined && !isBuiltInRole(input.subagent_type)) {
-      throw new Error(`Subagent type "${input.subagent_type}" does not exist.`)
+      const available = [...BUILT_IN_ROLE_NAMES, ...this.resolver.registeredAgentNames()].join(', ')
+      throw new Error(
+        `Subagent type "${input.subagent_type}" does not exist. Available built-in and registered extension types: ${available}.`,
+      )
     }
     const readonly =
       attenuation?.readonly === true

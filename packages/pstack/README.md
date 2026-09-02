@@ -94,6 +94,6 @@ If only `gh` exists, Poteto asks for approval before it runs:
 gh extension install github/gh-stack
 ```
 
-Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers Graphite when both exist.
+Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers GitHub when both exist. Graphite remains an explicit selection and an automatic fallback.
 
 GitHub stack workflows require GitHub Stacked Pull Requests on the repository.

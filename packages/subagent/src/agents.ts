@@ -211,6 +211,14 @@ export class SubagentResolver {
     }
   }
 
+  registeredAgentNames(): readonly string[] {
+    const names = new Set<string>()
+    for (const definitions of this.extensions.values()) {
+      for (const name of definitions.keys()) names.add(name)
+    }
+    return [...names].sort((left, right) => left.localeCompare(right))
+  }
+
   async resolve(nameInput: string, cwd: string): Promise<ResolvedSubagentDefinition | undefined> {
     const name = nameInput.trim()
     if (!new RegExp(SUBAGENT_NAME_PATTERN).test(name))

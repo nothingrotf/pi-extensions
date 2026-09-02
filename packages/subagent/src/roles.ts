@@ -56,8 +56,15 @@ function canonicalRole(name: string): string {
   return name
 }
 
+export const BUILT_IN_ROLE_NAMES: readonly string[] = [
+  'generalPurpose',
+  'explore',
+  'shell',
+  'debug',
+]
+
 export function isBuiltInRole(name: string): boolean {
-  return ['generalPurpose', 'explore', 'shell', 'debug'].includes(canonicalRole(name))
+  return BUILT_IN_ROLE_NAMES.includes(canonicalRole(name))
 }
 
 export function isReadonlyByDefault(name: string): boolean {

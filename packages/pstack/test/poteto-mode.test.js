@@ -66,11 +66,25 @@ describe('poteto-mode', () => {
       expect(() => readFileSync(join(packageRoot, path))).not.toThrow()
   })
 
+  it('keeps upstream manual skills hidden from automatic model invocation', () => {
+    for (const name of ['how', 'typescript-best-practices', 'unslop', 'why']) {
+      expect(text(join(packageRoot, 'skills', name, 'SKILL.md'))).toContain(
+        'disable-model-invocation: true',
+      )
+    }
+  })
+
   it('uses available Pi contracts and exact model selectors', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
     expect(skill).toContain('name: poteto-mode')
     expect(skill).toContain('Use `subagent_type: "poteto-agent"`')
     expect(skill).toContain('capability_profile: "pstack-nested"')
+    const orchestrate = text(join(skillRoot, 'playbooks', 'orchestrate.md'))
+    expect(orchestrate).toContain('Use `subagent_type: "poteto-agent"`')
+    expect(orchestrate).toContain(
+      'Give `capability_profile: "pstack-nested"` only to owners that must delegate.',
+    )
+    expect(orchestrate).toContain('Record `poteto-agent` and `pstack-nested` rules exactly.')
     expect(skill).toContain('`TaskControl`')
     expect(skill).toContain('`AskQuestion`')
     expect(skill).toContain('**create-skill**')
@@ -86,11 +100,27 @@ describe('poteto-mode', () => {
     expect(backends).toContain('ask whether to install `github/gh-stack` with `AskQuestion`')
     expect(backends).toContain('gh stack submit --auto --open')
     expect(backends).toContain('gh stack merge --yes')
+    expect(backends).toContain('The `auto` default prefers GitHub')
+    expect(backends).toContain('--no-stack')
     expect(backends).toContain('Never pass a numeric target.')
     expect(backends).toContain('Never install an extension without approval.')
     const shipping = text(join(skillRoot, 'playbooks', 'shipping.md'))
-    expect(shipping).toContain('require a passing verdict through the top PR')
+    expect(shipping).toContain('Merge only a fully verified GitHub stack')
+    expect(shipping).toContain('git patch-id --stable')
+    expect(shipping).toContain('--queued-stack --stack-prs <bottom-to-top-prs>')
     expect(shipping).not.toMatch(/gh stack merge [^\n]*<[^\n]*>/)
+    const opening = text(join(skillRoot, 'playbooks', 'opening-a-pr.md'))
+    expect(opening).toContain('gh pr create --attach <file>')
+    expect(opening).toContain('gh pr edit <number> --attach <file>')
+    expect(opening).toContain('gh stack submit` does not accept `--attach')
+    expect(opening).toContain('partial success')
+    const plan = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
+    expect(plan).toContain('Lane 1. Regression lane against trunk')
+    expect(plan).toContain('If not, use absolute measurements and limits.')
+    const babysit = text(join(skillRoot, 'playbooks', 'babysit.md'))
+    expect(babysit).toContain('gh api --input')
+    const typeScript = text(join(packageRoot, 'skills', 'typescript-best-practices', 'SKILL.md'))
+    expect(typeScript).toContain('Schemas before guards')
   })
 
   it('validates the bundled plan template', () => {
@@ -130,7 +160,7 @@ describe('poteto-mode', () => {
     rmSync(store, { force: true, recursive: true })
   })
 
-  it('resolves a GitHub stack through the orchestration frontier', () => {
+  it('prefers a GitHub stack through the orchestration frontier', () => {
     const root = join(tmpdir(), `poteto-github-stack-${process.pid}`)
     const repo = join(root, 'repo')
     const bin = join(root, 'bin')
@@ -169,10 +199,19 @@ esac
 `,
     )
     chmodSync(gh, 0o755)
+    const gt = join(bin, 'gt')
+    const gtCalls = join(root, 'gt-calls.txt')
+    writeFileSync(
+      gt,
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${gtCalls}"
+exit 91
+`,
+    )
+    chmodSync(gt, 0o755)
     const env = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
-      POTETO_STACK_BACKEND: 'github',
     }
     const orch = join(skillRoot, 'scripts', 'orch', 'orch')
     expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
@@ -187,6 +226,64 @@ esac
         { branches: 'stack/two', pr: 11, state: 'OPEN' },
       ],
     })
+    expect(() => readFileSync(gtCalls, 'utf8')).toThrow(/ENOENT/)
+    rmSync(root, { force: true, recursive: true })
+  })
+
+  it('keeps Graphite as an automatic fallback and explicit selection', () => {
+    const root = join(tmpdir(), `poteto-graphite-stack-${process.pid}`)
+    const repo = join(root, 'repo')
+    const bin = join(root, 'bin')
+    rmSync(root, { force: true, recursive: true })
+    mkdirSync(repo, { recursive: true })
+    mkdirSync(bin)
+    const git = (args) => run('git', args, { cwd: repo })
+    expect(git(['init', '--initial-branch=main']).status).toBe(0)
+    expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
+    expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
+    writeFileSync(join(repo, 'main.txt'), 'main\n')
+    expect(git(['add', '.']).status).toBe(0)
+    expect(git(['commit', '-m', 'main']).status).toBe(0)
+    expect(git(['checkout', '-b', 'stack/one']).status).toBe(0)
+    writeFileSync(join(repo, 'one.txt'), 'one\n')
+    expect(git(['add', '.']).status).toBe(0)
+    expect(git(['commit', '-m', 'one']).status).toBe(0)
+    const gh = join(bin, 'gh')
+    writeFileSync(
+      gh,
+      '#!/usr/bin/env bash\nif [ "$*" = "stack --version" ]; then exit "${GH_STACK_STATUS:-1}"; fi\nexit 2\n',
+    )
+    chmodSync(gh, 0o755)
+    const gt = join(bin, 'gt')
+    writeFileSync(
+      gt,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "--no-interactive log short --stack --reverse") printf '◯ main\\n◯ stack/one\\n' ;;
+  "--no-interactive info stack/one") printf 'stack/one\\nPR #12 (Needs approvals) Test\\n' ;;
+  *) exit 2 ;;
+esac
+`,
+    )
+    chmodSync(gt, 0o755)
+    const orch = join(skillRoot, 'scripts', 'orch', 'orch')
+    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
+    for (const [name, env] of [
+      ['fallback', { ...baseEnv, GH_STACK_STATUS: '1' }],
+      ['explicit', { ...baseEnv, GH_STACK_STATUS: '0', POTETO_STACK_BACKEND: 'graphite' }],
+    ]) {
+      const store = join(root, name)
+      expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
+      const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(JSON.parse(readFileSync(join(store, 'frontier.json'), 'utf8'))).toMatchObject({
+        generation: 1,
+        lowestUnmerged: 12,
+        prs: [{ branches: 'stack/one', pr: 12, state: 'OPEN' }],
+      })
+    }
     rmSync(root, { force: true, recursive: true })
   })
 
