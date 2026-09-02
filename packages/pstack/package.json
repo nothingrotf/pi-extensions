@@ -1,0 +1,48 @@
+{
+  "name": "@nothingrotf/pstack",
+  "version": "0.1.0",
+  "description": "Pi port of the pstack workflow skills and custom agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nothingrotf/pi-extensions",
+    "directory": "packages/pstack"
+  },
+  "files": [
+    "agents",
+    "skills",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "check": "vp check",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "commander": "catalog:"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "typebox": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

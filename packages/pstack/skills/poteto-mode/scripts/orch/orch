@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd "$(dirname "$0")" && pwd -P)
+backend=${POTETO_STACK_BACKEND:-auto}
+command_name=""
+subcommand_name=""
+expects_store=false
+for argument in "$@"; do
+  if [ "$expects_store" = true ]; then
+    expects_store=false
+  elif [ "$argument" = "--store" ]; then
+    expects_store=true
+  elif [[ "$argument" = --store=* ]] || [ "$argument" = "--json" ] || [ "$argument" = "--force" ]; then
+    continue
+  elif [ -z "$command_name" ]; then
+    command_name=$argument
+  elif [ -z "$subcommand_name" ]; then
+    subcommand_name=$argument
+    break
+  fi
+done
+
+if [ "$command_name" != "frontier" ] || [ "$subcommand_name" != "set" ]; then
+  exec bun "$script_dir/orch.bundle" "$@"
+fi
+
+has_gt=false
+if command -v gt >/dev/null 2>&1; then
+  has_gt=true
+fi
+
+has_gh_stack=false
+if command -v gh >/dev/null 2>&1 && gh stack --version >/dev/null 2>&1; then
+  has_gh_stack=true
+fi
+
+if [ "$backend" = "graphite" ]; then
+  if [ "$has_gt" = false ]; then
+    printf '%s\n' 'error: POTETO_STACK_BACKEND=graphite requires gt' >&2
+    exit 2
+  fi
+  exec bun "$script_dir/orch.bundle" "$@"
+fi
+
+if [ "$backend" != "auto" ] && [ "$backend" != "github" ]; then
+  printf 'error: invalid POTETO_STACK_BACKEND: %s\n' "$backend" >&2
+  exit 2
+fi
+
+if [ "$backend" = "auto" ] && [ "$has_gt" = true ]; then
+  exec bun "$script_dir/orch.bundle" "$@"
+fi
+
+if [ "$has_gh_stack" = false ]; then
+  if command -v gh >/dev/null 2>&1; then
+    printf '%s\n' 'error: no stack backend is available; obtain approval, then run gh extension install github/gh-stack' >&2
+  else
+    printf '%s\n' 'error: no stack backend is available; install Graphite gt or GitHub gh with github/gh-stack' >&2
+  fi
+  exit 2
+fi
+
+repository=${ORCH_REPO:-}
+expects_repository=false
+for argument in "$@"; do
+  if [ "$expects_repository" = true ]; then
+    repository=$argument
+    expects_repository=false
+  elif [ "$argument" = "--repo" ]; then
+    expects_repository=true
+  fi
+done
+if [ "$expects_repository" = true ]; then
+  printf '%s\n' 'error: --repo requires a directory' >&2
+  exit 2
+fi
+if [ -z "$repository" ]; then
+  repository=$PWD
+fi
+if [ ! -d "$repository" ]; then
+  printf 'error: repository directory does not exist: %s\n' "$repository" >&2
+  exit 2
+fi
+repository=$(cd "$repository" && pwd -P)
+
+temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/poteto-stack.XXXXXX")
+cleanup() {
+  rm -rf "$temporary_directory"
+}
+trap cleanup EXIT INT TERM
+ln -s "$script_dir/gt-compat.mjs" "$temporary_directory/gt"
+set +e
+(cd "$repository" && gh stack view --json) >"$temporary_directory/stack.json"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  exit "$status"
+fi
+POTETO_GH_STACK_SNAPSHOT="$temporary_directory/stack.json" PATH="$temporary_directory:$PATH" bun "$script_dir/orch.bundle" "$@"

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
   fmt: {
+    ignorePatterns: ['packages/pstack/skills/**'],
     printWidth: 100,
     semi: false,
     singleQuote: true,
