@@ -6,17 +6,19 @@ import { getAgentDir, parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { EffortSchema, type Effort } from './schema.ts'
+import { EffortSchema, type Effort, SUBAGENT_NAME_PATTERN } from './schema.ts'
 
 const MAX_AGENT_FILE_BYTES = 256 * 1024
-const AGENT_NAME_PATTERN = '^[A-Za-z0-9_-]+$'
 
 const AgentMetadataSchema = Type.Object(
   {
     description: Type.String({ maxLength: 512, minLength: 1 }),
     effort: Type.Optional(EffortSchema),
+    is_background: Type.Optional(Type.Boolean()),
     model: Type.Optional(Type.String({ minLength: 1 })),
-    name: Type.Optional(Type.String({ maxLength: 64, minLength: 1, pattern: AGENT_NAME_PATTERN })),
+    name: Type.Optional(
+      Type.String({ maxLength: 64, minLength: 1, pattern: SUBAGENT_NAME_PATTERN }),
+    ),
     readonly: Type.Optional(Type.Boolean()),
     tools: Type.Optional(
       Type.Array(Type.String({ minLength: 1 }), { maxItems: 64, uniqueItems: true }),
@@ -29,13 +31,22 @@ const RegisteredAgentSchema = Type.Object(
   {
     description: Type.String({ maxLength: 512, minLength: 1 }),
     effort: Type.Optional(EffortSchema),
+    is_background: Type.Optional(Type.Boolean()),
     model: Type.Optional(Type.String({ minLength: 1 })),
-    name: Type.String({ maxLength: 64, minLength: 1, pattern: AGENT_NAME_PATTERN }),
+    name: Type.String({ maxLength: 64, minLength: 1, pattern: SUBAGENT_NAME_PATTERN }),
     readonly: Type.Optional(Type.Boolean()),
     systemPrompt: Type.String({ maxLength: MAX_AGENT_FILE_BYTES, minLength: 1 }),
     tools: Type.Optional(
       Type.Array(Type.String({ minLength: 1 }), { maxItems: 64, uniqueItems: true }),
     ),
+  },
+  { additionalProperties: false },
+)
+
+const AgentRegistrationSchema = Type.Object(
+  {
+    definitions: Type.Array(RegisteredAgentSchema, { maxItems: 64, minItems: 1 }),
+    sourceId: Type.String({ maxLength: 128, minLength: 1 }),
   },
   { additionalProperties: false },
 )
@@ -49,6 +60,7 @@ export type AgentSource =
 export interface SubagentDefinition {
   description: string
   effort?: Effort
+  is_background?: boolean
   model?: string
   name: string
   readonly?: boolean
@@ -58,6 +70,16 @@ export interface SubagentDefinition {
 
 export interface ResolvedSubagentDefinition extends SubagentDefinition {
   source: AgentSource
+}
+
+export interface SubagentRegistration {
+  definitions: readonly SubagentDefinition[]
+  sourceId: string
+}
+
+export function decodeSubagentRegistration<Input>(value: Input): SubagentRegistration | undefined {
+  if (!Value.Check(AgentRegistrationSchema, value)) return undefined
+  return Value.Decode(AgentRegistrationSchema, value)
 }
 
 function decodeRegisteredAgent(definition: SubagentDefinition): SubagentDefinition {
@@ -99,6 +121,7 @@ function parseAgentFile(
   if (systemPrompt.length === 0) throw new Error(`Agent file has no prompt body: ${path}`)
   const input: SubagentDefinition = { description: metadata.description, name, systemPrompt }
   if (metadata.effort !== undefined) input.effort = metadata.effort
+  if (metadata.is_background !== undefined) input.is_background = metadata.is_background
   if (metadata.model !== undefined) input.model = metadata.model
   if (metadata.readonly !== undefined) input.readonly = metadata.readonly
   if (metadata.tools !== undefined) input.tools = metadata.tools
@@ -190,7 +213,7 @@ export class SubagentResolver {
 
   async resolve(nameInput: string, cwd: string): Promise<ResolvedSubagentDefinition | undefined> {
     const name = nameInput.trim()
-    if (!new RegExp(AGENT_NAME_PATTERN).test(name))
+    if (!new RegExp(SUBAGENT_NAME_PATTERN).test(name))
       throw new Error(`Agent name "${name}" is invalid.`)
     const key = `${resolve(cwd)}\0${this.generation}\0${name}`
     const cached = this.cache.get(key)

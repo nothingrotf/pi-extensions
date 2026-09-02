@@ -9,14 +9,17 @@ import {
   type LegacyArtifactRef,
   type RunRecord,
   type RunRecordV3,
+  type WorkspaceRecord,
   RuntimeStateSchema,
   RuntimeStateV1Schema,
   RuntimeStateV2Schema,
   RuntimeStateV3Schema,
   RuntimeStateV4Schema,
+  RuntimeStateV5Schema,
   type RuntimeState,
   type RuntimeStateV3,
   type RuntimeStateV4,
+  type RuntimeStateV5,
 } from './schema.ts'
 
 const STATE_TYPE = 'pi-subagent-state'
@@ -66,21 +69,50 @@ function migrateV3(state: RuntimeStateV3): RuntimeState {
   return {
     ownerSessionId: state.ownerSessionId,
     records: state.records.map((record) => migrateRecord(record)),
+    rootStores: [],
     runs: (state.runs ?? []).map((run) => ({
       ...run,
       tasks: run.tasks.map((task) => migrateTask(task)),
     })),
-    version: 5,
+    version: 6,
+    workspaces: [],
   }
 }
 
 function migrateV4(state: RuntimeStateV4): RuntimeState {
-  return { ...state, version: 5 }
+  return {
+    ...state,
+    rootStores: [],
+    runs: state.runs ?? [],
+    version: 6,
+    workspaces: [],
+  }
+}
+
+function migrateV5(state: RuntimeStateV5): RuntimeState {
+  const records = state.records.map((record) => migrateIsolationAttempts(record))
+  const migrated: RuntimeState = {
+    ownerSessionId: state.ownerSessionId,
+    records,
+    rootStores: [],
+    runs: state.runs ?? [],
+    version: 6,
+    workspaces: [],
+  }
+  return migrated
+}
+
+function migrateIsolationAttempts(record: RunRecord): RunRecord {
+  if (record.isolationAttempts !== undefined || record.isolation === undefined) return record
+  return { ...record, isolationAttempts: [record.isolation] }
 }
 
 function decodeState<Input>(data: Input): DecodedState | undefined {
   try {
     return { migrated: false, state: Value.Decode(RuntimeStateSchema, data) }
+  } catch {}
+  try {
+    return { migrated: true, state: migrateV5(Value.Decode(RuntimeStateV5Schema, data)) }
   } catch {}
   try {
     return { migrated: true, state: migrateV4(Value.Decode(RuntimeStateV4Schema, data)) }
@@ -90,11 +122,31 @@ function decodeState<Input>(data: Input): DecodedState | undefined {
   } catch {}
   try {
     const legacy = Value.Decode(RuntimeStateV2Schema, data)
-    return { migrated: true, state: { ...legacy, records: legacy.records, version: 5 } }
+    return {
+      migrated: true,
+      state: {
+        ...legacy,
+        records: legacy.records,
+        rootStores: [],
+        runs: [],
+        version: 6,
+        workspaces: [],
+      },
+    }
   } catch {}
   try {
     const legacy = Value.Decode(RuntimeStateV1Schema, data)
-    return { migrated: true, state: { ...legacy, records: legacy.records, version: 5 } }
+    return {
+      migrated: true,
+      state: {
+        ...legacy,
+        records: legacy.records,
+        rootStores: [],
+        runs: [],
+        version: 6,
+        workspaces: [],
+      },
+    }
   } catch {
     return undefined
   }
@@ -103,7 +155,9 @@ function decodeState<Input>(data: Input): DecodedState | undefined {
 export class StateStore {
   private ownerSessionId = ''
   private records = new Map<string, RunRecord>()
+  private rootStores = new Set<string>()
   private runs = new Map<string, CoordinationRunState>()
+  private workspaces = new Map<string, WorkspaceRecord>()
 
   constructor(private readonly pi: ExtensionAPI) {}
 
@@ -124,12 +178,17 @@ export class StateStore {
 
     this.ownerSessionId = ownerSessionId
     this.records = new Map()
+    this.rootStores = new Set(restored?.state.rootStores ?? [])
     this.runs = new Map()
+    this.workspaces = new Map()
     for (const record of recentRecords(restored?.state.records ?? [])) {
       if (record.ownerSessionId === ownerSessionId) this.records.set(record.agentId, record)
     }
     for (const run of restored?.state.runs ?? []) {
       if (run.ownerSessionId === ownerSessionId) this.runs.set(run.runId, run)
+    }
+    for (const workspace of restored?.state.workspaces ?? []) {
+      this.workspaces.set(workspace.workspaceId, workspace)
     }
 
     const now = Date.now()
@@ -227,6 +286,35 @@ export class StateStore {
     this.persist()
   }
 
+  addWorkspace(workspace: WorkspaceRecord): void {
+    this.workspaces.set(workspace.workspaceId, workspace)
+    this.persist()
+  }
+
+  updateWorkspace(workspace: WorkspaceRecord): void {
+    if (workspace.lifecycleState === 'cleaned') this.workspaces.delete(workspace.workspaceId)
+    else this.workspaces.set(workspace.workspaceId, workspace)
+    this.persist()
+  }
+
+  addRootStore(storeRoot: string): void {
+    if (this.rootStores.has(storeRoot)) return
+    this.rootStores.add(storeRoot)
+    this.persist()
+  }
+
+  rootStorePaths(): string[] {
+    return [...this.rootStores]
+  }
+
+  getWorkspace(workspaceId: string): WorkspaceRecord | undefined {
+    return this.workspaces.get(workspaceId)
+  }
+
+  unfinishedWorkspaces(): WorkspaceRecord[] {
+    return [...this.workspaces.values()]
+  }
+
   private prune(): void {
     const retained = recentRecords(this.all())
     this.records = new Map(retained.map((record) => [record.agentId, record]))
@@ -240,8 +328,10 @@ export class StateStore {
     this.pi.appendEntry(STATE_TYPE, {
       ownerSessionId: this.ownerSessionId,
       records: this.all(),
+      rootStores: [...this.rootStores],
       runs: [...this.runs.values()],
-      version: 5,
+      version: 6,
+      workspaces: [...this.workspaces.values()],
     })
   }
 }

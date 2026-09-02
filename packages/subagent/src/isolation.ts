@@ -1,26 +1,30 @@
-import { spawn } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
+import { rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+
 import {
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-
-import { Type } from 'typebox'
-import { Value } from 'typebox/value'
-
+  artifactDirectory,
+  baselineRef,
+  captureResultTree,
+  commonDirectory,
+  commitTree,
+  createWriterWorkspace,
+  deleteRef,
+  errorMessage,
+  git,
+  internalRef,
+  nestedRepositories,
+  promoteCommit,
+  repositoryRoot,
+  writePatchArtifact,
+  type RepositoryIsolation,
+  type WriterWorkspace,
+} from './git-isolation.ts'
+import {
+  integrateRepositories,
+  recoverIntegrationTransactions,
+  type RepositoryIntegrationSpec,
+} from './integration.ts'
 import type {
   IsolationChangedFile,
   IsolationIntegration,
@@ -28,565 +32,53 @@ import type {
   IsolationReceipt,
   IsolationRepositoryReceipt,
 } from './schema.ts'
+import {
+  currentLockOwner,
+  listManifests,
+  ownerStatus,
+  readManifest,
+  removeFromRegistry,
+  writeManifest,
+  withRepositoryLock,
+  type LockOwner,
+  type WorkspaceContext,
+  type WorkspaceManifest,
+} from './workspace.ts'
 
-interface GitResult {
-  stderr: string
-  stdout: string
-}
+export type { RepositoryIsolation, WriterWorkspace } from './git-isolation.ts'
 
-interface RepositoryBaseline {
-  baselineCommit: string
-  baselineTree: string
-  commonDir: string
-  relativePath: string
-  repoRoot: string
-  sourceHead: string
-}
-
-interface RepositoryIsolation extends RepositoryBaseline {
-  dependencyPaths: readonly string[]
-  worktree: string
-}
-
-export interface WriterIsolation {
-  attemptId: string
-  baseDir: string
-  integration: IsolationIntegration
-  leasePath: string
-  leaseToken: string
-  repositories: readonly RepositoryIsolation[]
-  rootWorktree: string
-  writerId: string
-}
-
-interface LeaseOwner {
-  attemptId: string
-  pid: number
-  startedAt: number
-  startToken?: string
-  token: string
-  writerId: string
-}
-
-interface DirectoryLease {
-  path: string
-  token: string
+export interface IsolationDestination {
+  destinationWorkspaceId: string
+  destinationPhysicalRoot: string
+  durableCommonDir: string
 }
 
 export interface IsolationRecovery {
   attemptId: string | undefined
+  manifestPath: string
   ownerStatus: 'ambiguous' | 'dead'
-  path: string
-  receipt?: IsolationReceipt
+  receipt: IsolationReceipt | undefined
+  workspaceId: string
   writerId: string | undefined
 }
 
-const ISOLATION_FILE = 'isolation.json'
-const OWNER_FILE = 'owner.json'
-const RECOVERY_DIR = 'recovery'
-const WORKTREE_DIR = 'worktrees'
-const RepositoryIsolationSchema = Type.Object({
-  baselineCommit: Type.String({ minLength: 1 }),
-  baselineTree: Type.String({ minLength: 1 }),
-  commonDir: Type.String({ minLength: 1 }),
-  dependencyPaths: Type.Array(Type.String({ minLength: 1 })),
-  relativePath: Type.String(),
-  repoRoot: Type.String({ minLength: 1 }),
-  sourceHead: Type.String({ minLength: 1 }),
-  worktree: Type.String({ minLength: 1 }),
-})
-const WriterIsolationSchema = Type.Object({
-  attemptId: Type.String({ minLength: 1 }),
-  baseDir: Type.String({ minLength: 1 }),
-  integration: Type.Union([Type.Literal('apply'), Type.Literal('branch'), Type.Literal('manual')]),
-  leasePath: Type.String({ minLength: 1 }),
-  leaseToken: Type.String({ minLength: 1 }),
-  repositories: Type.Array(RepositoryIsolationSchema, { minItems: 1 }),
-  rootWorktree: Type.String({ minLength: 1 }),
-  writerId: Type.String({ minLength: 1 }),
-})
-const LeaseOwnerSchema = Type.Object(
-  {
-    attemptId: Type.String({ minLength: 1 }),
-    pid: Type.Number({ minimum: 1 }),
-    startedAt: Type.Number({ minimum: 0 }),
-    startToken: Type.Optional(Type.String({ minLength: 1 })),
-    token: Type.String({ minLength: 1 }),
-    writerId: Type.String({ minLength: 1 }),
-  },
-  { additionalProperties: false },
-)
-
-function errorMessage<Input>(error: Input): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-async function run(cwd: string, command: readonly string[], input?: string): Promise<GitResult> {
-  const executable = command[0]
-  if (executable === undefined) throw new Error('The process command is empty.')
-  return new Promise<GitResult>((resolveResult, reject) => {
-    const process = spawn(executable, command.slice(1), { cwd, stdio: 'pipe' })
-    const stdout: Buffer[] = []
-    const stderr: Buffer[] = []
-    process.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
-    process.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
-    process.on('error', reject)
-    process.on('close', (exitCode) => {
-      const output = Buffer.concat(stdout).toString('utf8')
-      const error = Buffer.concat(stderr).toString('utf8')
-      if (exitCode !== 0) {
-        const detail = error.trim().length > 0 ? error.trim() : output.trim()
-        reject(new Error(`${command.join(' ')} failed${detail.length === 0 ? '' : `: ${detail}`}`))
-        return
-      }
-      resolveResult({ stderr: error, stdout: output })
-    })
-    if (input !== undefined) process.stdin.end(input)
-    else process.stdin.end()
-  })
-}
-
-async function git(cwd: string, args: readonly string[], input?: string): Promise<string> {
-  return (await run(cwd, ['git', ...args], input)).stdout
-}
-
-async function gitWithIndex(
-  cwd: string,
-  indexPath: string,
-  args: readonly string[],
-): Promise<string> {
-  return (await run(cwd, ['env', `GIT_INDEX_FILE=${indexPath}`, 'git', ...args])).stdout
-}
-
-async function commitTree(
-  cwd: string,
-  tree: string,
-  parent: string,
-  message: string,
-): Promise<string> {
-  return (
-    await git(
-      cwd,
-      [
-        '-c',
-        'user.name=Pi Subagent',
-        '-c',
-        'user.email=pi-subagent@localhost',
-        'commit-tree',
-        tree,
-        '-p',
-        parent,
-      ],
-      `${message}\n`,
-    )
-  ).trim()
-}
-
-function digest(value: string): string {
-  return createHash('sha256').update(value).digest('hex')
-}
-
-function safeSegment(value: string): string {
-  return digest(value).slice(0, 16)
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function repositoryRoot(cwd: string): Promise<string> {
-  const root = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim()
-  if (root.length === 0) throw new Error(`Git repository not found from ${cwd}.`)
-  return realpath(root)
-}
-
-async function commonDirectory(repoRoot: string): Promise<string> {
-  const value = (
-    await git(repoRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
-  ).trim()
-  return realpath(resolve(repoRoot, value))
-}
-
-async function syntheticBaseline(
-  repoRoot: string,
-  relativePath: string,
-): Promise<RepositoryBaseline> {
-  const sourceHead = (await git(repoRoot, ['rev-parse', 'HEAD'])).trim()
-  const indexPath = join(await mkdtemp(join(tmpdir(), 'pi-subagent-index-')), 'index')
-  try {
-    await gitWithIndex(repoRoot, indexPath, ['read-tree', 'HEAD'])
-    await gitWithIndex(repoRoot, indexPath, ['add', '-A', '--', '.'])
-    const baselineTree = (await gitWithIndex(repoRoot, indexPath, ['write-tree'])).trim()
-    const baselineCommit = await commitTree(
-      repoRoot,
-      baselineTree,
-      sourceHead,
-      'pi-subagent baseline',
-    )
-    return {
-      baselineCommit,
-      baselineTree,
-      commonDir: await commonDirectory(repoRoot),
-      relativePath,
-      repoRoot,
-      sourceHead,
-    }
-  } finally {
-    await rm(dirname(indexPath), { force: true, recursive: true })
-  }
-}
-
-async function submodulePaths(repoRoot: string): Promise<Set<string>> {
-  const output = await git(repoRoot, ['submodule', 'status', '--recursive']).catch(() => '')
-  const paths = new Set<string>()
-  for (const line of output.split('\n')) {
-    const match = line.trim().match(/^[+\- U]?[0-9a-f]+\s+(.+?)(?:\s+\(|$)/)
-    if (match?.[1] !== undefined) paths.add(match[1])
-  }
-  return paths
-}
-
-async function nestedRepositories(repoRoot: string): Promise<string[]> {
-  const submodules = await submodulePaths(repoRoot)
-  const found: string[] = []
-  const walk = async (directory: string): Promise<void> => {
-    let entries
-    try {
-      entries = await readdir(directory, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === '.git' || entry.name === 'node_modules') continue
-      const path = join(directory, entry.name)
-      const relativePath = relative(repoRoot, path)
-      if (submodules.has(relativePath)) continue
-      if (await pathExists(join(path, '.git'))) {
-        found.push(relativePath)
-        continue
-      }
-      await walk(path)
-    }
-  }
-  await walk(repoRoot)
-  return found.sort()
-}
-
-async function writeAtomicJson<Value>(path: string, value: Value): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`
-  await writeFile(temporary, JSON.stringify(value), { encoding: 'utf8', flag: 'wx' })
-  await rename(temporary, path)
-}
-
-async function writeOwner(baseDir: string, owner: LeaseOwner): Promise<void> {
-  await writeAtomicJson(join(baseDir, OWNER_FILE), owner)
-}
-
-function decodeLeaseOwner<Input>(value: Input): LeaseOwner | undefined {
-  try {
-    return Value.Decode(LeaseOwnerSchema, value)
-  } catch {
-    return undefined
-  }
-}
-
-function decodeWriterIsolation<Input>(value: Input): WriterIsolation | undefined {
-  try {
-    return Value.Decode(WriterIsolationSchema, value)
-  } catch {
-    return undefined
-  }
-}
-
-async function readWriterIsolation(baseDir: string): Promise<WriterIsolation | undefined> {
-  try {
-    return decodeWriterIsolation(JSON.parse(await readFile(join(baseDir, ISOLATION_FILE), 'utf8')))
-  } catch {
-    return undefined
-  }
-}
-
-async function readOwner(baseDir: string): Promise<LeaseOwner | undefined> {
-  try {
-    return decodeLeaseOwner(JSON.parse(await readFile(join(baseDir, OWNER_FILE), 'utf8')))
-  } catch {
-    return undefined
-  }
-}
-
-async function processStartToken(pid: number): Promise<string | undefined> {
-  try {
-    const result = await run(process.cwd(), ['ps', '-o', 'lstart=', '-p', String(pid)])
-    const token = result.stdout.trim()
-    return token.length === 0 ? undefined : token
-  } catch {
-    return undefined
-  }
-}
-
-async function currentLeaseOwner(writerId: string, attemptId: string): Promise<LeaseOwner> {
-  const owner: LeaseOwner = {
-    attemptId,
-    pid: process.pid,
-    startedAt: Date.now(),
-    token: randomUUID(),
-    writerId,
-  }
-  const startToken = await processStartToken(process.pid)
-  if (startToken !== undefined) owner.startToken = startToken
-  return owner
-}
-
-async function processLives(owner: LeaseOwner): Promise<boolean> {
-  try {
-    process.kill(owner.pid, 0)
-  } catch (error) {
-    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH')
-  }
-  if (owner.startToken === undefined) return true
-  const token = await processStartToken(owner.pid)
-  return token === undefined || token === owner.startToken
-}
-
-async function quarantine(path: string, recoveryRoot: string): Promise<string> {
-  await mkdir(recoveryRoot, { recursive: true })
-  const target = join(recoveryRoot, `${Date.now()}-${randomUUID()}`)
-  await rename(path, target)
-  return target
-}
-
-async function readLease(path: string): Promise<LeaseOwner | undefined> {
-  try {
-    return decodeLeaseOwner(JSON.parse(await readFile(path, 'utf8')))
-  } catch {
-    return undefined
-  }
-}
-
-async function releaseDirectoryLease(lease: DirectoryLease): Promise<void> {
-  const owner = await readLease(lease.path)
-  if (owner?.token === lease.token) await rm(lease.path, { force: true })
-}
-
-async function acquireDirectoryLease(
-  path: string,
-  owner: LeaseOwner,
-  recoveryRoot: string,
-): Promise<DirectoryLease> {
-  const leasePath = `${path}.lease`
-  await mkdir(dirname(path), { recursive: true })
-  for (;;) {
-    let handle
-    try {
-      handle = await open(leasePath, 'wx')
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
-      const existing = await readLease(leasePath)
-      if (existing === undefined) {
-        throw new Error(`Isolation lease ${leasePath} has ambiguous ownership.`)
-      }
-      if (await processLives(existing)) {
-        throw new Error(`Isolation lease ${path} belongs to live process ${existing.pid}.`)
-      }
-      await quarantine(leasePath, recoveryRoot)
-      continue
-    }
-    try {
-      await handle.writeFile(JSON.stringify(owner), 'utf8')
-    } catch (error) {
-      await rm(leasePath, { force: true })
-      throw error
-    } finally {
-      await handle.close()
-    }
-    break
-  }
-  const lease = { path: leasePath, token: owner.token }
-  try {
-    if (await pathExists(path)) {
-      const existing = await readOwner(path)
-      if (existing !== undefined && (await processLives(existing))) {
-        throw new Error(`Isolation lease ${path} belongs to live process ${existing.pid}.`)
-      }
-      await quarantine(path, recoveryRoot)
-    }
-    await mkdir(path)
-    await writeOwner(path, owner)
-    return lease
-  } catch (error) {
-    await releaseDirectoryLease(lease)
-    throw error
-  }
-}
-
-export async function recoverWriterIsolations(cwd: string): Promise<IsolationRecovery[]> {
-  const root = await repositoryRoot(cwd)
-  const worktrees = join(await commonDirectory(root), 'pi-subagent', WORKTREE_DIR)
-  let entries
-  try {
-    entries = await readdir(worktrees, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const recoveries: IsolationRecovery[] = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const path = join(worktrees, entry.name)
-    const directoryOwner = await readOwner(path)
-    const leaseOwner = await readLease(`${path}.lease`)
-    const owner = leaseOwner ?? directoryOwner
-    if (owner !== undefined && (await processLives(owner))) continue
-    const recovery: IsolationRecovery = {
-      attemptId: owner?.attemptId,
-      ownerStatus: owner === undefined ? 'ambiguous' : 'dead',
-      path,
-      writerId: owner?.writerId,
-    }
-    const isolation = await readWriterIsolation(path)
-    if (isolation !== undefined) recovery.receipt = await captureWriterIsolation(isolation, false)
-    else
-      await writeFile(join(path, 'recovery.json'), JSON.stringify(recovery), 'utf8').catch(() => {})
-    recoveries.push(recovery)
-  }
-  return recoveries
-}
-
-async function linkDependencyDirectories(
-  sourceRoot: string,
-  targetRoot: string,
-): Promise<string[]> {
-  const linked: string[] = []
-  const walk = async (source: string, target: string): Promise<void> => {
-    let entries
-    try {
-      entries = await readdir(source, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === '.git') continue
-      const sourcePath = join(source, entry.name)
-      const targetPath = join(target, entry.name)
-      if (entry.name === 'node_modules') {
-        if (!(await pathExists(targetPath))) {
-          await symlink(sourcePath, targetPath, 'junction')
-          linked.push(relative(targetRoot, targetPath))
-        }
-        continue
-      }
-      if (await pathExists(join(sourcePath, '.git'))) continue
-      if (await pathExists(targetPath)) await walk(sourcePath, targetPath)
-    }
-  }
-  await walk(sourceRoot, targetRoot)
-  return linked
-}
-
-async function addWorktree(baseline: RepositoryBaseline, target: string): Promise<string[]> {
-  await mkdir(dirname(target), { recursive: true })
-  await git(baseline.repoRoot, ['worktree', 'add', '--detach', target, baseline.baselineCommit])
-  return linkDependencyDirectories(baseline.repoRoot, target)
-}
-
-export async function createWriterIsolation(options: {
-  cwd: string
+export async function createIsolation(options: {
+  destination: IsolationDestination
   integration: IsolationIntegration
+  parent: WorkspaceContext
+  relativeCwd: string
+  spawnOrdinal: number
   writerId: string
-}): Promise<WriterIsolation> {
-  const root = await repositoryRoot(options.cwd)
-  const nested = await nestedRepositories(root)
-  const baselines = await Promise.all([
-    syntheticBaseline(root, ''),
-    ...nested.map(async (path) => syntheticBaseline(join(root, path), path)),
-  ])
-  const attemptId = randomUUID()
-  const commonDir = baselines[0]?.commonDir
-  if (commonDir === undefined) throw new Error('The root repository baseline is unavailable.')
-  const storageRoot = join(commonDir, 'pi-subagent')
-  const baseDir = join(storageRoot, WORKTREE_DIR, `${safeSegment(options.writerId)}-${attemptId}`)
-  await mkdir(dirname(baseDir), { recursive: true })
-  await recoverWriterIsolations(root)
-  const lease = await acquireDirectoryLease(
-    baseDir,
-    await currentLeaseOwner(options.writerId, attemptId),
-    join(storageRoot, RECOVERY_DIR),
-  )
-  const rootWorktree = join(baseDir, 'root')
-  const repositories: RepositoryIsolation[] = []
-  try {
-    const rootBaseline = baselines[0]
-    if (rootBaseline === undefined) throw new Error('The root repository baseline is unavailable.')
-    const rootDependencies = await addWorktree(rootBaseline, rootWorktree)
-    repositories.push({
-      ...rootBaseline,
-      dependencyPaths: rootDependencies,
-      worktree: rootWorktree,
-    })
-    for (const baseline of baselines.slice(1)) {
-      const target = join(rootWorktree, baseline.relativePath)
-      await rm(target, { force: true, recursive: true })
-      const dependencyPaths = await addWorktree(baseline, target)
-      repositories.push({ ...baseline, dependencyPaths, worktree: target })
-    }
-    const isolation: WriterIsolation = {
-      attemptId,
-      baseDir,
-      integration: options.integration,
-      leasePath: lease.path,
-      leaseToken: lease.token,
-      repositories,
-      rootWorktree,
-      writerId: options.writerId,
-    }
-    await writeAtomicJson(join(baseDir, ISOLATION_FILE), isolation)
-    return isolation
-  } catch (error) {
-    for (const repository of [...repositories].reverse()) {
-      await git(repository.repoRoot, ['worktree', 'remove', '--force', repository.worktree]).catch(
-        () => '',
-      )
-    }
-    await quarantine(baseDir, join(storageRoot, RECOVERY_DIR)).catch(() => '')
-    await releaseDirectoryLease(lease)
-    throw error
-  }
-}
-
-async function captureTree(
-  repository: RepositoryIsolation,
-  nestedRepositories: readonly RepositoryIsolation[],
-): Promise<string> {
-  const indexPath = join(await mkdtemp(join(tmpdir(), 'pi-subagent-index-')), 'index')
-  try {
-    await gitWithIndex(repository.worktree, indexPath, ['read-tree', repository.baselineCommit])
-    await gitWithIndex(repository.worktree, indexPath, ['add', '-A', '--', '.'])
-    for (const path of repository.dependencyPaths) {
-      await gitWithIndex(repository.worktree, indexPath, [
-        'update-index',
-        '--force-remove',
-        '--',
-        path,
-      ])
-    }
-    if (repository.relativePath.length === 0) {
-      for (const nested of nestedRepositories) {
-        await gitWithIndex(repository.worktree, indexPath, [
-          'update-index',
-          '--add',
-          '--cacheinfo',
-          `160000,${nested.sourceHead},${nested.relativePath}`,
-        ])
-      }
-    }
-    return (await gitWithIndex(repository.worktree, indexPath, ['write-tree'])).trim()
-  } finally {
-    await rm(dirname(indexPath), { force: true, recursive: true })
-  }
+}): Promise<WriterWorkspace> {
+  return createWriterWorkspace({
+    durableCommonDir: options.destination.durableCommonDir,
+    integration: options.integration,
+    parent: options.parent,
+    parentPhysicalRoot: options.destination.destinationPhysicalRoot,
+    relativeCwd: options.relativeCwd,
+    spawnOrdinal: options.spawnOrdinal,
+    writerId: options.writerId,
+  })
 }
 
 function parseChangedFiles(output: string): IsolationChangedFile[] {
@@ -610,190 +102,269 @@ function parseChangedFiles(output: string): IsolationChangedFile[] {
   return files
 }
 
-async function writePatch(
-  isolation: WriterIsolation,
-  repository: RepositoryIsolation,
-  patch: string,
-): Promise<IsolationPatchRef> {
-  const artifactDir = join(dirname(dirname(isolation.baseDir)), 'artifacts', isolation.attemptId)
-  await mkdir(artifactDir, { recursive: true })
-  const name = repository.relativePath.length === 0 ? 'root' : safeSegment(repository.relativePath)
-  const target = join(artifactDir, `${name}.patch`)
-  const temporary = `${target}.${randomUUID()}.tmp`
-  await writeFile(temporary, patch, { encoding: 'utf8', flag: 'wx' })
-  await rename(temporary, target)
-  return {
-    byteLength: Buffer.byteLength(patch, 'utf8'),
-    sha256: digest(patch),
-    uri: pathToFileURL(target).href,
+export async function captureIsolation(workspace: WriterWorkspace): Promise<IsolationReceipt> {
+  const owner = await currentLockOwner(workspace.writerId, workspace.attemptId)
+  const expectedNested = workspace.repositories
+    .filter((repository) => repository.relativePath.length > 0)
+    .map((repository) => repository.relativePath)
+  const actualNested = await nestedRepositories(workspace.rootWorktree)
+  if (
+    expectedNested.length !== actualNested.length ||
+    expectedNested.some((path, index) => path !== actualNested[index])
+  ) {
+    return failureReceipt(workspace, 'The isolated task changed a nested repository boundary.')
+  }
+
+  const repositories: IsolationRepositoryReceipt[] = []
+  try {
+    for (const repository of workspace.repositories) {
+      repositories.push(await captureRepository(workspace, repository, owner))
+    }
+    await deleteBaselineRefs(workspace, owner)
+    return {
+      attemptId: workspace.attemptId,
+      captureStatus: 'captured',
+      cleanupDebt: false,
+      dependencyMode: workspace.repositories[0]?.dependencyMode ?? 'none',
+      integration: workspace.integration,
+      integrationStatus: 'not-requested',
+      manifestUri: workspace.manifestPath,
+      parentWorkspaceId: workspace.context.parentWorkspaceId,
+      repositories,
+      rootWorkspaceId: workspace.context.rootWorkspaceId,
+      rootVisibility: 'pending',
+      status: 'captured',
+      workspaceId: workspace.context.workspaceId,
+      writerId: workspace.writerId,
+    }
+  } catch (error) {
+    const receipt = failureReceipt(workspace, errorMessage(error))
+    receipt.repositories = repositories
+    return receipt
   }
 }
 
-async function updateArtifactRef(
-  repository: RepositoryIsolation,
-  ref: string,
-  commit: string,
-): Promise<void> {
-  await git(repository.repoRoot, ['update-ref', ref, commit])
+function failureReceipt(workspace: WriterWorkspace, error: string): IsolationReceipt {
+  return {
+    attemptId: workspace.attemptId,
+    captureStatus: 'failed',
+    cleanupDebt: true,
+    dependencyMode: workspace.repositories[0]?.dependencyMode ?? 'none',
+    error,
+    integration: workspace.integration,
+    integrationStatus: 'not-requested',
+    manifestUri: workspace.manifestPath,
+    parentWorkspaceId: workspace.context.parentWorkspaceId,
+    repositories: [],
+    retainedPath: workspace.baseDir,
+    rootWorkspaceId: workspace.context.rootWorkspaceId,
+    rootVisibility: 'pending',
+    status: 'conflict',
+    workspaceId: workspace.context.workspaceId,
+    writerId: workspace.writerId,
+  }
 }
 
-function artifactRef(isolation: WriterIsolation, repository: RepositoryIsolation): string {
-  const repo = repository.relativePath.length === 0 ? 'root' : safeSegment(repository.relativePath)
-  return `refs/pi-subagent/${safeSegment(isolation.writerId)}/${isolation.attemptId}/${repo}`
-}
-
-function branchName(isolation: WriterIsolation, repository: RepositoryIsolation): string {
-  const repo = repository.relativePath.length === 0 ? 'root' : safeSegment(repository.relativePath)
-  return `pi-subagent/${safeSegment(isolation.writerId)}/${isolation.attemptId.slice(0, 8)}/${repo}`
+function descendantRepositoryPaths(
+  repositories: readonly { relativePath: string }[],
+  repositoryRelativePath: string,
+): string[] {
+  return repositories
+    .filter((candidate) => {
+      if (candidate.relativePath.length === 0) return false
+      if (repositoryRelativePath.length === 0) return true
+      return candidate.relativePath.startsWith(`${repositoryRelativePath}/`)
+    })
+    .map((candidate) =>
+      repositoryRelativePath.length === 0
+        ? candidate.relativePath
+        : candidate.relativePath.slice(repositoryRelativePath.length + 1),
+    )
 }
 
 async function captureRepository(
-  isolation: WriterIsolation,
+  workspace: WriterWorkspace,
   repository: RepositoryIsolation,
+  owner: LockOwner,
 ): Promise<IsolationRepositoryReceipt> {
-  const resultTree = await captureTree(
-    repository,
-    isolation.repositories.filter((candidate) => candidate.relativePath.length > 0),
+  const relevantNestedPaths = descendantRepositoryPaths(
+    workspace.repositories,
+    repository.relativePath,
   )
-  const patch = await git(repository.worktree, [
-    'diff',
-    '--binary',
-    '--full-index',
-    repository.baselineTree,
-    resultTree,
-  ])
+  const resultTree = await captureResultTree(repository, relevantNestedPaths)
+  const patch =
+    resultTree === repository.baselineTree
+      ? ''
+      : await git(repository.worktree, [
+          'diff',
+          '--binary',
+          '--full-index',
+          repository.baselineTree,
+          resultTree,
+        ])
   const resultCommit = await commitTree(
     repository.worktree,
     resultTree,
     repository.baselineCommit,
-    `pi-subagent result ${isolation.attemptId}`,
+    `pi-subagent result ${workspace.attemptId}`,
   )
-  const internalRef = artifactRef(isolation, repository)
-  await updateArtifactRef(repository, internalRef, resultCommit)
-  const branch = branchName(isolation, repository)
-  if (isolation.integration === 'branch') {
-    await git(repository.repoRoot, ['branch', '-f', branch, resultCommit])
+  const ref = internalRef(
+    workspace.context.rootWorkspaceId,
+    workspace.writerId,
+    workspace.attemptId,
+    repository.repositoryId,
+  )
+  await promoteCommit({
+    commit: resultCommit,
+    durableCommonDir: repository.durableCommonDir,
+    owner,
+    ref,
+    sourceRepoRoot: repository.worktree,
+  })
+  let branch: string | undefined
+  if (workspace.integration === 'branch') {
+    const branchName = `pi-subagent/${workspace.writerId}/${workspace.attemptId.slice(0, 8)}/${repository.repositoryId}`
+    branch = branchName
+    await withRepositoryLock(repository.durableCommonDir, 'refs', owner, async () => {
+      await git(repository.durableCommonDir, ['branch', '-f', branchName, resultCommit])
+    })
   }
   const changedFiles = parseChangedFiles(
-    await git(repository.worktree, [
-      'diff',
-      '--name-status',
-      '-z',
-      repository.baselineTree,
-      resultTree,
-    ]),
+    resultTree === repository.baselineTree
+      ? ''
+      : await git(repository.worktree, [
+          'diff',
+          '--name-status',
+          '-z',
+          repository.baselineTree,
+          resultTree,
+        ]),
   )
-  const diffstat = (
-    await git(repository.worktree, ['diff', '--stat', repository.baselineTree, resultTree])
-  ).trim()
-  const receipt: IsolationRepositoryReceipt = {
+  const diffstat =
+    resultTree === repository.baselineTree
+      ? ''
+      : (
+          await git(repository.worktree, ['diff', '--stat', repository.baselineTree, resultTree])
+        ).trim()
+  const patchRef: IsolationPatchRef = await writePatchArtifact({
+    artifactRoot: artifactDirectory(workspace.storeRoot, workspace.attemptId),
+    name: repository.relativePath.length === 0 ? 'root' : repository.repositoryId,
+    patch,
+  })
+  const captured: IsolationRepositoryReceipt = {
     baselineCommit: repository.baselineCommit,
     baselineTree: repository.baselineTree,
     changedFiles,
-    destinationHeadBefore: repository.sourceHead,
+    destinationHeadBefore: repository.sourceHead ?? '',
     diffstat,
-    patch: await writePatch(isolation, repository, patch),
+    durableRef: ref,
+    headState: repository.headState,
+    patch: patchRef,
     relativePath: repository.relativePath,
-    repoRoot: repository.repoRoot,
+    repoRoot: repository.worktree,
+    repositoryId: repository.repositoryId,
     resultCommit,
     resultTree,
     status: 'captured',
+    transactionPhase: 'planned',
   }
-  if (isolation.integration === 'branch') receipt.branch = branch
-  return receipt
+  if (branch !== undefined) captured.branch = branch
+  return captured
 }
 
-async function sourceTree(repository: IsolationRepositoryReceipt): Promise<string> {
-  const baseline = await syntheticBaseline(repository.repoRoot, repository.relativePath)
-  return baseline.baselineTree
-}
-
-async function integrationLockRoot(repoRoot: string): Promise<string> {
-  return join(await commonDirectory(repoRoot), 'pi-subagent')
-}
-
-async function withIntegrationLock<Result>(
-  repoRoot: string,
-  owner: LeaseOwner,
-  operation: () => Promise<Result>,
-): Promise<Result> {
-  const root = await integrationLockRoot(repoRoot)
-  const lock = join(root, 'integration.lock')
-  await mkdir(root, { recursive: true })
-  for (let attempt = 0; attempt < 2_400; attempt += 1) {
-    try {
-      const lease = await acquireDirectoryLease(lock, owner, join(root, RECOVERY_DIR))
-      try {
-        return await operation()
-      } finally {
-        await rm(lock, { force: true, recursive: true })
-        await releaseDirectoryLease(lease)
-      }
-    } catch (error) {
-      if (!errorMessage(error).includes('belongs to live process')) throw error
-      await delay(50)
-    }
+async function deleteBaselineRefs(workspace: WriterWorkspace, owner: LockOwner): Promise<void> {
+  for (const repository of workspace.repositories) {
+    await deleteRef(
+      repository.durableCommonDir,
+      owner,
+      baselineRef(workspace.attemptId, repository.repositoryId),
+    ).catch(() => {})
   }
-  throw new Error(`Timed out while waiting for the integration lock at ${lock}.`)
 }
 
-async function applyRepository(
-  isolation: Pick<IsolationReceipt, 'attemptId' | 'writerId'>,
-  repository: IsolationRepositoryReceipt,
-): Promise<IsolationRepositoryReceipt> {
-  if (repository.changedFiles.length === 0) {
-    return {
+export async function integrateStagedReceipt(
+  receipt: IsolationReceipt,
+  destination: IsolationDestination,
+  writerId: string,
+): Promise<IsolationReceipt> {
+  if (receipt.integration !== 'apply') return receipt
+  if (receipt.repositories.length === 0) {
+    return receipt.captureStatus === 'captured'
+      ? { ...receipt, integrationStatus: 'integrated', status: 'integrated' }
+      : receipt
+  }
+  const owner = await currentLockOwner(writerId, receipt.attemptId)
+  const specs: RepositoryIntegrationSpec[] = receipt.repositories.map((repository) => ({
+    baselineCommit: repository.baselineCommit,
+    baselineTree: repository.baselineTree,
+    destinationPhysicalRoot: destination.destinationPhysicalRoot,
+    durableCommonDir: destination.durableCommonDir,
+    nestedPaths: descendantRepositoryPaths(receipt.repositories, repository.relativePath),
+    patch: repository.patch,
+    relativePath: repository.relativePath,
+    repositoryId: repository.repositoryId ?? '',
+    resultCommit: repository.resultCommit,
+    resultTree: repository.resultTree,
+  }))
+  const outcomes = await integrateRepositories({
+    artifactRoot: receiptArtifactDirectory(receipt),
+    destinationWorkspaceId: destination.destinationWorkspaceId,
+    owner,
+    repositories: specs,
+  })
+  const repositories = receipt.repositories.map((repository) => {
+    const outcome = outcomes.find((candidate) => candidate.repositoryId === repository.repositoryId)
+    if (outcome === undefined) return repository
+    const updated: IsolationRepositoryReceipt = {
       ...repository,
-      destinationHeadAfter: repository.destinationHeadBefore,
-      status: 'integrated',
+      status:
+        outcome.status === 'integrated'
+          ? 'integrated'
+          : outcome.status === 'conflict'
+            ? 'conflict'
+            : 'recovery-required',
+      transactionPhase: outcome.transactionPhase,
+    }
+    if (outcome.currentTree !== undefined) updated.currentTree = outcome.currentTree
+    if (outcome.destinationHeadAfter !== undefined) {
+      updated.destinationHeadAfter = outcome.destinationHeadAfter
+    }
+    if (outcome.mergedTree !== undefined) updated.mergedTree = outcome.mergedTree
+    if (outcome.mergeArtifacts !== undefined) updated.mergeArtifacts = outcome.mergeArtifacts
+    if (outcome.error !== undefined) updated.error = outcome.error
+    return updated
+  })
+  if (receipt.manifestUri !== undefined && outcomes[0] !== undefined) {
+    const manifest = await readManifest(receipt.manifestUri)
+    if (manifest !== undefined && !manifest.journals.includes(outcomes[0].journalUri)) {
+      manifest.journals.push(outcomes[0].journalUri)
+      await writeManifest(manifest)
     }
   }
-  const owner = await currentLeaseOwner(isolation.writerId, isolation.attemptId)
-  try {
-    return await withIntegrationLock(repository.repoRoot, owner, async () => {
-      const currentHead = (await git(repository.repoRoot, ['rev-parse', 'HEAD'])).trim()
-      if (currentHead !== repository.destinationHeadBefore) {
-        throw new Error(
-          `The destination HEAD changed from ${repository.destinationHeadBefore} to ${currentHead}.`,
-        )
-      }
-      const currentTree = await sourceTree(repository)
-      if (currentTree !== repository.baselineTree) {
-        throw new Error(
-          `The destination tree changed from ${repository.baselineTree} to ${currentTree}.`,
-        )
-      }
-      const patchPath = fileURLToPath(repository.patch.uri)
-      await git(repository.repoRoot, ['apply', '--binary', patchPath])
-      const destinationHeadAfter = (await git(repository.repoRoot, ['rev-parse', 'HEAD'])).trim()
-      if (destinationHeadAfter !== repository.destinationHeadBefore) {
-        throw new Error('The destination HEAD changed during patch integration.')
-      }
-      const integratedTree = await sourceTree(repository)
-      if (integratedTree !== repository.resultTree) {
-        throw new Error(
-          `Patch integration produced tree ${integratedTree} instead of ${repository.resultTree}.`,
-        )
-      }
-      return { ...repository, destinationHeadAfter, status: 'integrated' }
-    })
-  } catch (error) {
-    return { ...repository, error: errorMessage(error), status: 'conflict' }
+  const status = isolationStatus(repositories)
+  const integrated: IsolationReceipt = {
+    ...receipt,
+    destinationWorkspaceId: destination.destinationWorkspaceId,
+    integrationStatus:
+      status === 'integrated' ? 'integrated' : status === 'conflict' ? 'conflict' : 'blocked',
+    repositories,
+    rootVisibility:
+      status !== 'integrated'
+        ? 'blocked'
+        : destination.destinationWorkspaceId === receipt.rootWorkspaceId
+          ? 'visible'
+          : 'pending',
+    status,
   }
+  if (outcomes[0] !== undefined) integrated.journalUri = outcomes[0].journalUri
+  return integrated
 }
 
-async function cleanupWorktrees(isolation: WriterIsolation): Promise<boolean> {
-  let debt = false
-  for (const repository of [...isolation.repositories].reverse()) {
-    try {
-      await git(repository.repoRoot, ['worktree', 'remove', '--force', repository.worktree])
-    } catch {
-      debt = true
-    }
+function receiptArtifactDirectory(receipt: IsolationReceipt): string {
+  if (receipt.manifestUri !== undefined && receipt.manifestUri.length > 0) {
+    return join(dirname(dirname(dirname(receipt.manifestUri))), 'artifacts', receipt.attemptId)
   }
-  if (!debt) await rm(isolation.baseDir, { force: true, recursive: true })
-  await releaseDirectoryLease({ path: isolation.leasePath, token: isolation.leaseToken })
-  return debt
+  return join('.pi-subagent-artifacts', receipt.attemptId)
 }
 
 function isolationStatus(
@@ -801,70 +372,152 @@ function isolationStatus(
 ): IsolationReceipt['status'] {
   const integrated = repositories.filter((repository) => repository.status === 'integrated').length
   const conflicts = repositories.filter((repository) => repository.status === 'conflict').length
+  const failures = repositories.filter(
+    (repository) => repository.status === 'recovery-required',
+  ).length
+  if (failures > 0) return 'partial'
   if (conflicts === 0) {
     return integrated === repositories.length && repositories.length > 0 ? 'integrated' : 'captured'
   }
   return integrated > 0 ? 'partial' : 'conflict'
 }
 
-export async function integrateWriterIsolation(
-  receipt: IsolationReceipt,
-): Promise<IsolationReceipt> {
-  if (receipt.integration !== 'apply') return receipt
-  const repositories: IsolationRepositoryReceipt[] = []
-  for (const repository of receipt.repositories) {
-    if (repositories.some((candidate) => candidate.status === 'conflict')) {
-      repositories.push(repository)
-    } else {
-      repositories.push(await applyRepository(receipt, repository))
-    }
+export async function cleanupWorkspaceArtifacts(workspace: WriterWorkspace): Promise<boolean> {
+  try {
+    await rm(workspace.baseDir, { force: true, recursive: true })
+    await removeFromRegistry(workspace.storeRoot, workspace.manifestPath, workspace.manifest.owner)
+    return false
+  } catch {
+    return true
   }
-  return { ...receipt, repositories, status: isolationStatus(repositories) }
 }
 
-export async function captureWriterIsolation(
-  isolation: WriterIsolation,
-  allowIntegration: boolean,
-): Promise<IsolationReceipt> {
-  const captured: IsolationRepositoryReceipt[] = []
-  let retainedPath: string | undefined
+export async function cleanupCapturedReceipt(receipt: IsolationReceipt): Promise<boolean> {
+  if (receipt.manifestUri === undefined) return receipt.cleanupDebt
+  const manifest = await readManifest(receipt.manifestUri)
+  if (manifest === undefined) return receipt.cleanupDebt
   try {
-    const expectedNested = isolation.repositories
-      .filter((repository) => repository.relativePath.length > 0)
-      .map((repository) => repository.relativePath)
-    const actualNested = await nestedRepositories(isolation.rootWorktree)
-    if (
-      expectedNested.length !== actualNested.length ||
-      expectedNested.some((path, index) => path !== actualNested[index])
-    ) {
-      throw new Error('The isolated task changed a nested repository boundary.')
-    }
-    for (const repository of isolation.repositories) {
-      captured.push(await captureRepository(isolation, repository))
-    }
-    const cleanupDebt = await cleanupWorktrees(isolation)
-    if (cleanupDebt) retainedPath = isolation.baseDir
-    const receipt: IsolationReceipt = {
-      attemptId: isolation.attemptId,
-      cleanupDebt,
-      integration: isolation.integration,
-      repositories: captured,
-      status: 'captured',
-      writerId: isolation.writerId,
-    }
-    if (retainedPath !== undefined) receipt.retainedPath = retainedPath
-    return allowIntegration ? integrateWriterIsolation(receipt) : receipt
-  } catch (error) {
-    retainedPath = isolation.baseDir
-    return {
-      attemptId: isolation.attemptId,
-      cleanupDebt: true,
-      error: errorMessage(error),
-      integration: isolation.integration,
-      repositories: captured,
-      retainedPath,
-      status: 'conflict',
-      writerId: isolation.writerId,
-    }
+    await rm(
+      join(manifest.storeRoot, 'worktrees', `${manifest.workspaceId}-${manifest.attemptId}`),
+      { force: true, recursive: true },
+    )
+    await removeFromRegistry(manifest.storeRoot, receipt.manifestUri, manifest.owner)
+    return false
+  } catch {
+    return true
   }
 }
+
+export async function recoverIsolations(cwd: string): Promise<IsolationRecovery[]> {
+  const root = await repositoryRoot(cwd)
+  if (root === undefined) return []
+  return recoverIsolationStore(join(await commonDirectory(root), 'pi-subagent'))
+}
+
+export async function recoverIsolationStore(storeRoot: string): Promise<IsolationRecovery[]> {
+  await recoverIntegrationTransactions(storeRoot)
+  const manifestPaths = await listManifests(storeRoot)
+  const manifests: { manifest: WorkspaceManifest; path: string }[] = []
+  for (const path of manifestPaths) {
+    const manifest = await readManifest(path)
+    if (manifest !== undefined) manifests.push({ manifest, path })
+  }
+
+  const classifications = new Map<string, 'ambiguous' | 'dead' | 'live'>()
+  for (const { manifest } of manifests) {
+    classifications.set(manifest.workspaceId, await ownerStatus(manifest.owner))
+  }
+
+  const remaining = new Map(manifests.map((entry) => [entry.manifest.workspaceId, entry]))
+  const ordered: typeof manifests = []
+  while (remaining.size > 0) {
+    const leaves = [...remaining.values()].filter(
+      (entry) =>
+        ![...remaining.values()].some(
+          (candidate) =>
+            candidate.manifest.workspaceId !== entry.manifest.workspaceId &&
+            candidate.manifest.parentWorkspaceId === entry.manifest.workspaceId,
+        ),
+    )
+    if (leaves.length === 0) {
+      for (const workspaceId of remaining.keys()) classifications.set(workspaceId, 'ambiguous')
+      ordered.push(...remaining.values())
+      break
+    }
+    leaves.sort((left, right) =>
+      left.manifest.workspaceId.localeCompare(right.manifest.workspaceId),
+    )
+    for (const leaf of leaves) {
+      ordered.push(leaf)
+      remaining.delete(leaf.manifest.workspaceId)
+    }
+  }
+
+  const recoveries: IsolationRecovery[] = []
+  for (const { manifest, path } of ordered) {
+    const classification = classifications.get(manifest.workspaceId) ?? 'ambiguous'
+    if (classification === 'live' || manifest.state === 'cleaned') continue
+    let receipt: IsolationReceipt | undefined
+    if (classification === 'dead' && manifest.repositories.length > 0) {
+      const workspace = workspaceFromManifest(manifest, path)
+      receipt = await captureIsolation(workspace).catch(() => undefined)
+      const durableCapture =
+        receipt?.captureStatus === 'captured' &&
+        receipt.repositories.length === manifest.repositories.length &&
+        receipt.repositories.every((repository) => repository.durableRef !== undefined)
+      if (durableCapture) {
+        await rm(
+          join(manifest.storeRoot, 'worktrees', `${manifest.workspaceId}-${manifest.attemptId}`),
+          { force: true, recursive: true },
+        ).catch(() => {})
+        await removeFromRegistry(manifest.storeRoot, path, manifest.owner).catch(() => {})
+      }
+    }
+    recoveries.push({
+      attemptId: manifest.attemptId,
+      manifestPath: path,
+      ownerStatus: classification,
+      receipt,
+      workspaceId: manifest.workspaceId,
+      writerId: manifest.writerId,
+    })
+  }
+  return recoveries
+}
+
+function workspaceFromManifest(manifest: WorkspaceManifest, path: string): WriterWorkspace {
+  const repositories: RepositoryIsolation[] = manifest.repositories.map((entry) => ({
+    ...entry,
+    worktree:
+      entry.worktree.length > 0
+        ? entry.worktree
+        : entry.relativePath.length === 0
+          ? manifest.physicalRoot
+          : join(manifest.physicalRoot, entry.relativePath),
+  }))
+  return {
+    attemptId: manifest.attemptId,
+    baseDir: join(manifest.storeRoot, 'worktrees', `${manifest.workspaceId}-${manifest.attemptId}`),
+    context: {
+      logicalCwd: manifest.logicalCwd,
+      ownerSessionId: manifest.ownerSessionId,
+      parentWorkspaceId: manifest.parentWorkspaceId,
+      physicalRoot: manifest.physicalRoot,
+      relativeCwd: manifest.relativeCwd,
+      rootWorkspaceId: manifest.rootWorkspaceId,
+      scopeId: manifest.scopeId,
+      spawnOrdinal: 0,
+      workspaceId: manifest.workspaceId,
+    },
+    durableCommonDir: manifest.repositories[0]?.durableCommonDir ?? manifest.storeRoot,
+    integration: manifest.integration ?? 'manual',
+    manifest,
+    manifestPath: path,
+    repositories,
+    rootWorktree: manifest.physicalRoot,
+    storeRoot: manifest.storeRoot,
+    writerId: manifest.writerId,
+  }
+}
+
+export { randomUUID as isolationAttemptId }

@@ -1,5 +1,6 @@
 import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-agent'
-import type { TSchema } from 'typebox'
+import { type StaticDecode, Type, type TSchema } from 'typebox'
+import { Value } from 'typebox/value'
 
 import type { CapabilityContract } from './schema.ts'
 
@@ -23,6 +24,49 @@ export interface ResolvedCapabilities {
   contract: CapabilityContract
   extensions: readonly InlineExtension[]
   tools: readonly string[]
+}
+
+const MAX_NESTED_DEPTH = 16
+
+const CapabilityProfileSchema = Type.Object(
+  {
+    id: Type.String({ minLength: 1 }),
+    nested: Type.Optional(
+      Type.Object(
+        { maxDepth: Type.Integer({ maximum: MAX_NESTED_DEPTH, minimum: 1 }) },
+        { additionalProperties: false },
+      ),
+    ),
+    registrations: Type.Array(Type.String({ minLength: 1 }), {
+      maxItems: 64,
+      uniqueItems: true,
+    }),
+  },
+  { additionalProperties: false },
+)
+
+const CapabilityProfileRegistrationSchema = Type.Object(
+  {
+    profiles: Type.Array(CapabilityProfileSchema, { maxItems: 32, minItems: 1 }),
+    sourceId: Type.String({ maxLength: 128, minLength: 1 }),
+  },
+  { additionalProperties: false },
+)
+
+export interface CapabilityProfileRegistration {
+  profiles: readonly CapabilityProfile[]
+  sourceId: string
+}
+
+export function decodeCapabilityProfileRegistration<Input>(
+  value: Input,
+): CapabilityProfileRegistration | undefined {
+  if (!Value.Check(CapabilityProfileRegistrationSchema, value)) return undefined
+  const decoded: StaticDecode<typeof CapabilityProfileRegistrationSchema> = Value.Decode(
+    CapabilityProfileRegistrationSchema,
+    value,
+  )
+  return { profiles: decoded.profiles, sourceId: decoded.sourceId }
 }
 
 const KNOWN_MUTABLE_TOOLS = new Set(['bash', 'powershell', 'edit', 'write'])
@@ -74,30 +118,43 @@ export class CapabilityRegistry {
   }
 
   registerProfile(profile: CapabilityProfile): void {
-    validateIdentifier(profile.id, 'Capability profile ID')
-    if (this.profiles.has(profile.id))
-      throw new Error(`Capability profile "${profile.id}" already exists.`)
-    if (
-      profile.nested !== undefined &&
-      (!Number.isInteger(profile.nested.maxDepth) || profile.nested.maxDepth < 1)
-    ) {
-      throw new Error('A nested capability profile requires a positive finite maxDepth.')
-    }
-    const registrations = new Set<string>()
-    for (const registration of profile.registrations) {
-      if (registrations.has(registration)) {
+    this.registerProfiles([profile])
+  }
+
+  registerProfiles(profiles: readonly CapabilityProfile[]): void {
+    const staged = new Map<string, CapabilityProfile>()
+    for (const profile of profiles) {
+      validateIdentifier(profile.id, 'Capability profile ID')
+      if (this.profiles.has(profile.id) || staged.has(profile.id)) {
+        throw new Error(`Capability profile "${profile.id}" already exists.`)
+      }
+      if (
+        profile.nested !== undefined &&
+        (!Number.isInteger(profile.nested.maxDepth) ||
+          profile.nested.maxDepth < 1 ||
+          profile.nested.maxDepth > MAX_NESTED_DEPTH)
+      ) {
         throw new Error(
-          `Capability registration "${registration}" occurs more than once in profile "${profile.id}".`,
+          `A nested capability profile requires maxDepth from 1 through ${MAX_NESTED_DEPTH}.`,
         )
       }
-      registrations.add(registration)
+      const registrations = new Set<string>()
+      for (const registration of profile.registrations) {
+        if (registrations.has(registration)) {
+          throw new Error(
+            `Capability registration "${registration}" occurs more than once in profile "${profile.id}".`,
+          )
+        }
+        registrations.add(registration)
+      }
+      const stored: CapabilityProfile = {
+        id: profile.id,
+        registrations: [...profile.registrations],
+      }
+      if (profile.nested !== undefined) stored.nested = { maxDepth: profile.nested.maxDepth }
+      staged.set(profile.id, stored)
     }
-    const stored: CapabilityProfile = {
-      id: profile.id,
-      registrations: [...profile.registrations],
-    }
-    if (profile.nested !== undefined) stored.nested = { maxDepth: profile.nested.maxDepth }
-    this.profiles.set(profile.id, stored)
+    for (const [id, profile] of staged) this.profiles.set(id, profile)
   }
 
   resolve(profileId: string | undefined, readonly = false): ResolvedCapabilities {
@@ -120,7 +177,7 @@ export class CapabilityRegistry {
         throw new Error(`Capability registration "${registrationId}" does not exist.`)
       }
       registrations.push({ id: registration.id, version: registration.version })
-      extensions.push(...registration.extensions)
+      if (!readonly) extensions.push(...registration.extensions)
       if (registration.tools.length > 0) {
         extensions.push({
           factory: (pi) => {

@@ -82,6 +82,15 @@ describe('SubagentResolver', () => {
     )
   })
 
+  it('reads the background default from agent frontmatter', async () => {
+    const base = await root()
+    const path = await agentFile(base, '.pi', 'background-agent', 'prompt')
+    await writeFile(path, '---\ndescription: Background agent\nis_background: true\n---\nprompt')
+    expect((await new SubagentResolver().resolve('background-agent', base))?.is_background).toBe(
+      true,
+    )
+  })
+
   it('canonicalizes symlinked agent files', async () => {
     const base = await root()
     const target = join(base, 'target.md')

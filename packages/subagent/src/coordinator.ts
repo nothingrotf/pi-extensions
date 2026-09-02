@@ -2,10 +2,19 @@ import { randomUUID } from 'node:crypto'
 
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 
+import { commonDirectory, repositoryRoot } from './git-isolation.ts'
 import { buildTaskGraph } from './graph.ts'
+import {
+  captureIsolation,
+  cleanupWorkspaceArtifacts,
+  createIsolation,
+  integrateStagedReceipt,
+  type IsolationDestination,
+  type WriterWorkspace,
+} from './isolation.ts'
 import { RunMailbox } from './mailbox.ts'
 import { readArtifact } from './output.ts'
-import type { RuntimeResult, SubagentRuntime } from './runtime.ts'
+import type { RuntimeResult, SubagentInvocation, SubagentRuntime } from './runtime.ts'
 import type {
   ArtifactRef,
   BatchTaskInput,
@@ -17,6 +26,7 @@ import type {
   TaskInput,
   TaskNodeInput,
 } from './schema.ts'
+import { createRootWorkspaceContext, type WorkspaceContext } from './workspace.ts'
 
 export type BatchItemStatus = 'completed' | 'failed' | 'aborted' | 'blocked'
 
@@ -43,6 +53,7 @@ function taskInput(node: TaskNodeInput, prompt: string): TaskInput {
   const input: TaskInput = {
     description: node.description,
     prompt,
+    run_in_background: false,
     subagent_type: node.subagent_type,
   }
   if (node.capability_profile !== undefined) input.capability_profile = node.capability_profile
@@ -128,10 +139,52 @@ export async function runBatch(options: {
   signal: AbortSignal | undefined
 }): Promise<BatchResult> {
   const graph = buildTaskGraph(options.input.tasks)
-  const baseInputs = graph.nodes.map((node) => taskInput(node, node.prompt))
-  await options.runtime.preflight(options.ctx, baseInputs)
-
   const runId = randomUUID()
+  const rootContext = await createRootWorkspaceContext(
+    options.ctx.cwd,
+    `scope-coordination-${runId}`,
+    options.ctx.sessionManager.getSessionId(),
+  )
+  const baseInputs = graph.nodes.map((node) => taskInput(node, node.prompt))
+  const readonlyPolicies = await options.runtime.preflight(options.ctx, baseInputs)
+  const mutableTaskIds = new Set(
+    graph.nodes.filter((_node, index) => readonlyPolicies[index] === false).map((node) => node.id),
+  )
+  const needsAggregate = mutableTaskIds.size > 0
+  let aggregate: WriterWorkspace | undefined
+  let rootDestination: IsolationDestination | undefined
+  if (needsAggregate) {
+    const repoRoot = await repositoryRoot(rootContext.physicalRoot)
+    if (repoRoot === undefined) {
+      throw new Error(`Git repository not found from ${rootContext.physicalRoot}.`)
+    }
+    rootDestination = {
+      destinationPhysicalRoot: rootContext.physicalRoot,
+      destinationWorkspaceId: rootContext.workspaceId,
+      durableCommonDir: await commonDirectory(repoRoot),
+    }
+  }
+  const ensureAggregate = async (): Promise<WorkspaceContext> => {
+    if (aggregate !== undefined) return aggregate.context
+    if (rootDestination === undefined)
+      throw new Error('The aggregate workspace root is unavailable.')
+    aggregate = await createIsolation({
+      destination: rootDestination,
+      integration: 'apply',
+      parent: rootContext,
+      relativeCwd: '',
+      spawnOrdinal: 0,
+      writerId: `coordination-${runId}`,
+    })
+    options.runtime.registerWorkspace(aggregate)
+    return aggregate.context
+  }
+  for (const [index, input] of baseInputs.entries()) {
+    if (readonlyPolicies[index] === false && input.isolation === undefined) {
+      input.isolation = { integration: 'apply', mode: 'worktree' }
+    }
+  }
+  if (needsAggregate) await ensureAggregate()
   const mailbox = new RunMailbox(graph.nodes.map((node) => node.id))
   const results = new Map<string, BatchItemResult>()
   let runState: CoordinationRunState = {
@@ -179,7 +232,19 @@ export async function runBatch(options: {
             })
           }
           const prompt = `${node.prompt}${dependencyEnvelope(options.input.context, upstream)}`
-          const invocation = { ctx: options.ctx, input: taskInput(node, prompt) }
+          const nodeInput = taskInput(node, prompt)
+          let parentWorkspace: WorkspaceContext | undefined
+          if (mutableTaskIds.has(node.id)) {
+            parentWorkspace = await ensureAggregate()
+            if (nodeInput.isolation === undefined) {
+              nodeInput.isolation = { integration: 'apply', mode: 'worktree' }
+            }
+          }
+          const invocation: SubagentInvocation = {
+            ctx: options.ctx,
+            input: nodeInput,
+          }
+          if (parentWorkspace !== undefined) invocation.parentWorkspace = parentWorkspace
           const result = await options.runtime.runCoordinated(
             options.signal === undefined ? invocation : { ...invocation, signal: options.signal },
             { mailbox: mailbox.endpoint(node.id), runId, taskId: node.id },
@@ -215,6 +280,37 @@ export async function runBatch(options: {
         }
       }),
     )
+    for (const node of wave) {
+      const result = waveResults.find((candidate) => candidate.taskId === node.id)
+      if (
+        result === undefined ||
+        result.status !== 'completed' ||
+        !mutableTaskIds.has(node.id) ||
+        result.isolation?.integration !== 'apply'
+      ) {
+        continue
+      }
+      const aggregateWorkspace = aggregate
+      if (aggregateWorkspace === undefined) {
+        result.status = 'failed'
+        result.error = 'The aggregate workspace is unavailable.'
+        continue
+      }
+      const joined = await options.runtime.joinCoordinated(
+        result.agentId ?? '',
+        {
+          destinationPhysicalRoot: aggregateWorkspace.context.physicalRoot,
+          destinationWorkspaceId: aggregateWorkspace.context.workspaceId,
+          durableCommonDir: aggregateWorkspace.durableCommonDir,
+        },
+        runId,
+      )
+      result.isolation = joined.receipt
+      if (joined.status !== 'joined') {
+        result.status = 'failed'
+        result.error = `The coordinated writer could not integrate: ${joined.reason ?? joined.status}.`
+      }
+    }
     for (const result of waveResults) results.set(result.taskId, result)
     const waveById = new Map(wave.map((node) => [node.id, node]))
     const resultById = new Map(waveResults.map((result) => [result.taskId, result]))
@@ -243,11 +339,52 @@ export async function runBatch(options: {
       : 'completed'
   runState = { ...runState, status, updatedAt: Date.now() }
   options.runtime.updateCoordinationRun(runState)
+  let aggregateError: string | undefined
+  if (aggregate !== undefined && rootDestination !== undefined) {
+    const receipt = await captureIsolation(aggregate)
+    await options.runtime.updateWorkspaceLifecycle(aggregate, 'captured', 'pending')
+    const anyApplied =
+      status === 'completed' &&
+      items.some((item) => item.status === 'completed' && item.isolation?.integration === 'apply')
+    if (anyApplied) {
+      await options.runtime.updateWorkspaceLifecycle(aggregate, 'integrating', 'pending')
+    }
+    const finalReceipt = anyApplied
+      ? await integrateStagedReceipt(receipt, rootDestination, runId)
+      : receipt
+    const recoveryRequired = finalReceipt.repositories.some(
+      (repository) => repository.status === 'recovery-required',
+    )
+    await options.runtime.updateWorkspaceLifecycle(
+      aggregate,
+      !anyApplied ? 'captured' : finalReceipt.status === 'integrated' ? 'integrated' : 'conflict',
+      finalReceipt.rootVisibility ?? 'pending',
+    )
+    if (!recoveryRequired) {
+      await options.runtime.updateWorkspaceLifecycle(
+        aggregate,
+        'cleanup-pending',
+        finalReceipt.rootVisibility ?? 'pending',
+      )
+      const cleanupDebt = await cleanupWorkspaceArtifacts(aggregate)
+      await options.runtime.updateWorkspaceLifecycle(
+        aggregate,
+        cleanupDebt ? 'cleanup-debt' : 'cleaned',
+        finalReceipt.rootVisibility ?? 'pending',
+      )
+    }
+    if (finalReceipt.status === 'conflict' || finalReceipt.status === 'partial') {
+      aggregateError = `The coordinated result could not be integrated without a conflict.`
+    }
+  }
+  const aggregateStatus =
+    aggregateError === undefined ? status : status === 'aborted' ? 'aborted' : 'failed'
   const content = items
     .map(
       (item) =>
         `${item.taskId}: ${item.status}${item.error === undefined ? '' : ` - ${item.error}`}`,
     )
+    .concat(aggregateError === undefined ? [] : [`aggregate: failed - ${aggregateError}`])
     .join('\n')
-  return { content, items, runId, status }
+  return { content, items, runId, status: aggregateStatus }
 }

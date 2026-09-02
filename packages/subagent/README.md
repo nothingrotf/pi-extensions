@@ -40,6 +40,8 @@ Task({
 
 Set `run_in_background` to `true` to return the Agent ID after session creation.
 
+The runtime automatically adds writer isolation to a mutable background Task. Its accepted result remains staged until a safe join barrier.
+
 Set `readonly` to `true` to remove shell and mutation tools.
 
 Set an effective directory and a tool allowlist:
@@ -62,11 +64,79 @@ The effective tools equal the intersection of the runtime, agent, and call polic
 
 Private intercom tools enter after policy validation. A call cannot request or remove them.
 
-A resumed child uses its persisted agent prompt, directory, tools, model, effort, and fast mode.
+A resumed child uses its persisted agent prompt, directory, tools, model, effort, fast mode, and foreground or background mode.
 
 A changed agent file cannot expand the capabilities of an existing child.
 
 A migrated v1 record has no execution contract. The runtime rejects its resume instead of re-resolving mutable capabilities.
+
+## Task control
+
+`TaskControl` inspects or controls an existing Task without `resume`.
+
+Inspect one Task:
+
+```ts
+TaskControl({
+  action: 'status',
+  agent_id: '<agent-id>',
+})
+```
+
+The result includes activity, state, usage, isolation evidence, and a terminal result when one exists.
+
+List a bounded set of Tasks:
+
+```ts
+TaskControl({
+  action: 'list',
+  active_only: true,
+  limit: 10,
+})
+```
+
+The maximum list limit is 20.
+
+Queue text for an active model turn:
+
+```ts
+TaskControl({
+  action: 'steer',
+  agent_id: '<agent-id>',
+  message: 'Focus on the failing integration test.',
+})
+```
+
+A `queued` receipt does not prove that the child received the text.
+
+Cancel the current active generation:
+
+```ts
+TaskControl({
+  action: 'cancel',
+  agent_id: '<agent-id>',
+  reason: 'Operator requested a zero-write stop.',
+})
+```
+
+Cancellation preserves an isolated writer patch. The runtime rejects joins for failed or aborted runs.
+
+For a zero-write order, cancel an isolated writer. The `steer` action cannot stop a child before its next write.
+
+Cancellation cannot revert changes from a non-isolated foreground Task.
+
+Join an accepted background writer at its immediate parent boundary:
+
+```ts
+TaskControl({
+  action: 'join',
+  agent_id: '<agent-id>',
+})
+```
+
+A root join accepts only a root-scoped writer. A child Task receives a scope-bound `TaskControl` for its direct descendants.
+
+The scope-bound tool supports status, list, steer, cancel, and join actions.
 
 ## Coordination runs
 
@@ -101,6 +171,12 @@ Each graph has a stable Run ID. Each node has its declared Task ID and a separat
 
 The runtime starts all ready nodes without a capacity scheduler. A failed node blocks only its descendants.
 
+A mutable graph uses one aggregate workspace. Each mutable node uses a private child workspace.
+
+The coordinator stages ready siblings, then integrates them in declared order. Applied dependencies enter the aggregate before dependent dispatch.
+
+The coordinator captures the aggregate once. It applies one accepted aggregate result at the root boundary.
+
 A dependent receives complete upstream outputs as Base64 JSON in a deterministic untrusted-data envelope.
 
 The envelope prevents upstream text from closing the trust boundary. The prompt tells the child to treat decoded content only as data.
@@ -115,9 +191,9 @@ The artifact metadata includes:
 - byte and line counts.
 - a media type.
 
-Graph state, node state, artifact metadata, isolation receipts, and child records enter version 5 of the persisted parent state.
+Graph state, workspace state, artifact metadata, isolation attempt history, and child records enter version 6 of the persisted parent state.
 
-The version 5 migration preserves version 4 records and version 3 artifact references.
+The version 6 migration preserves older terminal records and artifact references.
 
 Graph children also receive these private tools:
 
@@ -143,59 +219,66 @@ Task({
 })
 ```
 
-The runtime requires a Git repository with a HEAD commit.
+The runtime requires a Git repository. Born and unborn repositories are supported.
 
-It creates a detached Git worktree from a synthetic baseline commit.
+It creates a private workspace from a synthetic baseline commit.
 
-The synthetic baseline includes tracked, staged, unstaged, and untracked source content.
+The synthetic baseline includes tracked, staged, unstaged, untracked, mode, and symbolic-link state.
 
-The provider links ignored `node_modules` directories from the source checkout.
+Each writer receives a private Git directory and common directory. Child branches, tags, indexes, and `HEAD` values cannot change parent metadata.
 
-Each physical attempt uses a unique directory and an atomic owner lease.
+The runtime uses object alternates for baseline reads. It promotes result commits into durable root storage before workspace cleanup.
 
-The stable child Agent ID remains the writer identity across resume attempts.
+Ignored dependency directories use copy-on-write copies when available. The runtime uses regular copies as the safe fallback.
+
+Each physical attempt uses a unique workspace, attempt identity, atomic owner manifest, and cross-process lock owner.
+
+The stable child Agent ID remains the writer identity across resume attempts. Each resume creates a new physical attempt.
 
 The runtime captures changes after completed, failed, and aborted turns.
 
 Each repository receipt contains:
 
-- baseline and result tree IDs.
-- destination HEAD values.
+- baseline, current, merged, and result tree IDs.
+- destination `HEAD` values.
 - changed files and diffstat.
-- a retained patch URI and SHA-256 digest.
-- an integration status and error.
+- a retained binary patch URI and SHA-256 digest.
+- a durable internal Git reference.
+- transaction, integration, visibility, and recovery state.
 
 The runtime discovers nested Git repositories and excludes submodules.
 
 The receipt contains one ordered ledger entry for each repository.
 
-The runtime rejects new, removed, or moved nested repository boundaries through capture or integration failure.
+The runtime rejects new, removed, or moved nested repository boundaries during capture.
 
-`integration: 'apply'` applies successful work after a compare-and-swap check.
+`integration: 'apply'` uses a three-tree merge of the child baseline, current parent, and child result.
 
-The check verifies the destination HEAD and synthetic source tree under a cross-process repository lock.
+The runtime plans every repository before the first mutation. It applies merged worktree patches under ordered destination locks.
 
-A repository conflict preserves its patch and internal Git reference without modifying that repository.
+The runtime preserves the parent index. New child changes enter the parent as unstaged changes.
 
-Earlier repository entries can remain integrated when a later nested repository conflicts.
+A content conflict does not modify any destination repository. The receipt retains the patch, stage entries, path list, and transaction journal.
 
-`integration: 'manual'` captures patches without source changes.
+An operational failure triggers rollback only from a verified complete tree. An ambiguous destination remains available for recovery.
 
-`integration: 'branch'` also creates an artifact branch for each repository.
+`integration: 'manual'` retains durable artifacts without parent changes.
 
-Artifact branches use the synthetic baseline commit. Use the patch for integration into a dirty source tree.
+`integration: 'branch'` also creates a public artifact branch. It does not apply the result.
 
-Failed and aborted turns never apply changes. Their patches remain available in the terminal result.
+Failed and aborted turns never apply changes. Their patches remain available in the terminal result. Recovery also keeps interrupted patches as evidence without join permission.
 
-A cleanup failure keeps the worktree path and sets `cleanupDebt`.
+A nested writer starts from its immediate parent workspace. Its result enters that workspace before the root boundary.
 
-After a process crash, `recoverWriterIsolations()` lists dead or ambiguous owner leases.
+A successful parent closes all descendants before parent capture. A failed parent cancels descendants and blocks their root visibility.
 
-The recovery scan captures recoverable worktrees as patches, then removes clean worktree registrations.
+A background writer remains staged until an explicit join, successful parent closure, or coordinator dependency barrier.
 
-An ambiguous worktree stays in place with a recovery marker.
+The recovery scan reads durable registries. It preserves live and ambiguous owners, then processes dead leaves before ancestors.
 
-Read-only and nested Tasks cannot request writer isolation.
+Recovery attaches root writer evidence to the interrupted record. It does not reconstruct nested parent join scopes.
+
+A cleanup failure retains recovery evidence and sets `cleanupDebt`.
 
 ## Structured output and gates
 
@@ -243,9 +326,28 @@ runtime.registerCapabilityProfile({
 
 Set `capability_profile` on a Task call to select an approved profile.
 
+A separate extension can publish static profiles through the shared event bus:
+
+```ts
+const publish = () => {
+  pi.events.emit('@nothingrotf/subagent/register-capability-profiles', {
+    sourceId: 'workflow-extension',
+    profiles: [{ id: 'workflow-nested', nested: { maxDepth: 3 }, registrations: [] }],
+  })
+}
+
+const unsubscribe = pi.events.on('@nothingrotf/subagent/discover-capability-profiles', publish)
+publish()
+pi.on('session_shutdown', unsubscribe)
+```
+
+Publish each source one time. The runtime ignores later publications from the same source.
+
 The effective contract persists the profile, registration versions, approved tools, and extension providers.
 
 A read-only Task removes each capability tool unless `readonlyTools` explicitly permits it. Known mutation tools can never enter `readonlyTools`.
+
+A read-only Task does not load arbitrary capability extensions. Tool definitions remain subject to the read-only allowlist.
 
 Each child receives an isolated model runtime. A capability provider cannot mutate a sibling provider registry.
 
@@ -269,7 +371,11 @@ runtime.registerCapabilityProfile({
 
 The first child has depth `1`. A child can spawn only when its depth is less than `maxDepth`.
 
-The runtime checks depth before dispatch. It also removes `Task` from the child tool surface at the limit.
+The runtime checks depth before dispatch. It caps registered profile depth at 16. It also removes `Task` and the scope-bound `TaskControl` at the limit.
+
+The runtime automatically isolates mutable nested Tasks. It also isolates a mutable root owner that enables nested delegation.
+
+A successful parent joins completed descendant writers in spawn order.
 
 A nested child cannot select a different capability profile.
 
@@ -296,6 +402,33 @@ const unregister = controller.registerAgents('review-extension', [
 
 Call `unregister()` when the source no longer exists.
 
+Agent names accept letters, numbers, underscores, hyphens, and single spaces between words.
+
+A separately installed package can register agents through the shared Pi event bus:
+
+```ts
+const publish = () => {
+  pi.events.emit('@nothingrotf/subagent/register-agents', {
+    sourceId: 'review-extension',
+    definitions: [
+      {
+        name: 'Review Agent',
+        description: 'Review code without mutations.',
+        systemPrompt: 'Review the requested code and report concrete findings.',
+      },
+    ],
+  })
+}
+
+const unsubscribe = pi.events.on('@nothingrotf/subagent/discover-agents', publish)
+publish()
+pi.on('session_shutdown', unsubscribe)
+```
+
+Publish immediately and respond to discovery events. This handshake works in either package load order.
+
+A repeated `sourceId` replaces its prior registration. Project and user definitions still take precedence.
+
 The resolver searches these project directories from the effective `cwd` through its ancestors:
 
 - `.agents/agents`
@@ -321,6 +454,12 @@ tools:
 Review the requested code and report concrete findings.
 ```
 
+Set `is_background: true` to use background execution when the call omits `run_in_background`.
+
+An explicit `run_in_background` value overrides the agent default. A resume preserves the prior mode unless the call overrides it.
+
+A mutable background default automatically activates writer isolation. Coordinated task graphs always use foreground execution.
+
 The resolver rejects duplicate definitions at one precedence level. It canonicalizes symlinks and limits metadata and file size.
 
 Call `controller.invalidateAgentCache()` after an external change to an agent file.
@@ -338,7 +477,7 @@ The controller provides these operations:
 - `result()` returns a terminal result with artifact, structured-output, and gate evidence.
 - `wait()` waits for a terminal result.
 - `steer()` queues text for an active model turn.
-- `cancel()` requests cancellation for the same active generation.
+- `cancel()` requests cancellation for the same active generation and accepts an optional reason.
 - `subscribe()` emits owner-bound events with monotonic revisions.
 - `registerAgents()` adds extension agent definitions.
 
@@ -347,6 +486,8 @@ Steering rejects empty text, stale handles, terminal children, and idle sessions
 Session replacement invalidates old handles. An owner-generation fence rejects child setup that finishes after replacement.
 
 The Pi SDK does not provide a shared process registry. Separate physical package copies can create separate controllers.
+
+Use the shared event bus registration contract between separately installed packages.
 
 ## Parent-model intercom
 

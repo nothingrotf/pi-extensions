@@ -1,7 +1,9 @@
 import { Codec, type StaticDecode, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-export const SubagentTypeSchema = Type.String({ minLength: 1, pattern: '^[A-Za-z0-9_-]+$' })
+export const SUBAGENT_NAME_PATTERN = '^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$'
+
+export const SubagentTypeSchema = Type.String({ minLength: 1, pattern: SUBAGENT_NAME_PATTERN })
 
 export const EffortSchema = Type.Union([
   Type.Literal('off'),
@@ -19,6 +21,53 @@ export const IsolationIntegrationSchema = Type.Union([
   Type.Literal('apply'),
   Type.Literal('branch'),
   Type.Literal('manual'),
+])
+
+export const WorkspaceLifecycleSchema = Type.Union([
+  Type.Literal('allocating'),
+  Type.Literal('active'),
+  Type.Literal('closing'),
+  Type.Literal('captured'),
+  Type.Literal('staged'),
+  Type.Literal('integrating'),
+  Type.Literal('integrated'),
+  Type.Literal('cleanup-pending'),
+  Type.Literal('cleaned'),
+  Type.Literal('aborted'),
+  Type.Literal('capture-conflict'),
+  Type.Literal('conflict'),
+  Type.Literal('recovery-required'),
+  Type.Literal('cleanup-debt'),
+])
+
+export const RootVisibilitySchema = Type.Union([
+  Type.Literal('pending'),
+  Type.Literal('visible'),
+  Type.Literal('blocked'),
+  Type.Literal('not-requested'),
+])
+
+export const OwnerStatusSchema = Type.Union([
+  Type.Literal('live'),
+  Type.Literal('dead'),
+  Type.Literal('ambiguous'),
+])
+
+export const HeadStateSchema = Type.Union([Type.Literal('committed'), Type.Literal('unborn')])
+
+export const DependencyModeSchema = Type.Union([
+  Type.Literal('copy-on-write'),
+  Type.Literal('copy'),
+  Type.Literal('omitted'),
+  Type.Literal('none'),
+])
+
+export const TransactionPhaseSchema = Type.Union([
+  Type.Literal('planned'),
+  Type.Literal('applied'),
+  Type.Literal('verified'),
+  Type.Literal('rolled-back'),
+  Type.Literal('failed'),
 ])
 
 export const IsolationRequestSchema = Type.Object(
@@ -245,13 +294,35 @@ export const IsolationChangedFileSchema = Type.Object({
   status: Type.String({ minLength: 1 }),
 })
 
+export const MergeArtifactsSchema = Type.Object({
+  baseTree: Type.String({ minLength: 1 }),
+  currentRef: Type.Optional(Type.String({ minLength: 1 })),
+  currentTree: Type.String({ minLength: 1 }),
+  resultTree: Type.String({ minLength: 1 }),
+  mergedRef: Type.Optional(Type.String({ minLength: 1 })),
+  mergedTree: Type.Optional(Type.String({ minLength: 1 })),
+  patch: Type.Optional(IsolationPatchRefSchema),
+  mergeMessage: Type.Optional(Type.String()),
+  unmergedPaths: Type.Array(Type.String({ minLength: 1 })),
+  stageEntries: Type.Array(
+    Type.Object({
+      mode: Type.String(),
+      oid: Type.String(),
+      path: Type.String(),
+      stage: Type.Number(),
+    }),
+  ),
+  destinationHead: Type.Optional(Type.String({ minLength: 1 })),
+  journalUri: Type.Optional(Type.String({ minLength: 1 })),
+})
+
 export const IsolationRepositoryReceiptSchema = Type.Object({
   baselineCommit: Type.String({ minLength: 1 }),
   baselineTree: Type.String({ minLength: 1 }),
   branch: Type.Optional(Type.String({ minLength: 1 })),
   changedFiles: Type.Array(IsolationChangedFileSchema),
-  destinationHeadAfter: Type.Optional(Type.String({ minLength: 1 })),
-  destinationHeadBefore: Type.String({ minLength: 1 }),
+  destinationHeadAfter: Type.Optional(Type.String()),
+  destinationHeadBefore: Type.String(),
   diffstat: Type.String(),
   error: Type.Optional(Type.String()),
   patch: IsolationPatchRefSchema,
@@ -263,7 +334,15 @@ export const IsolationRepositoryReceiptSchema = Type.Object({
     Type.Literal('captured'),
     Type.Literal('integrated'),
     Type.Literal('conflict'),
+    Type.Literal('recovery-required'),
   ]),
+  repositoryId: Type.Optional(Type.String({ minLength: 1 })),
+  durableRef: Type.Optional(Type.String({ minLength: 1 })),
+  headState: Type.Optional(HeadStateSchema),
+  currentTree: Type.Optional(Type.String({ minLength: 1 })),
+  mergedTree: Type.Optional(Type.String({ minLength: 1 })),
+  mergeArtifacts: Type.Optional(MergeArtifactsSchema),
+  transactionPhase: Type.Optional(TransactionPhaseSchema),
 })
 
 export const IsolationReceiptSchema = Type.Object({
@@ -280,7 +359,52 @@ export const IsolationReceiptSchema = Type.Object({
     Type.Literal('conflict'),
   ]),
   writerId: Type.String({ minLength: 1 }),
+  workspaceId: Type.Optional(Type.String({ minLength: 1 })),
+  rootWorkspaceId: Type.Optional(Type.String({ minLength: 1 })),
+  parentWorkspaceId: Type.Optional(Type.String({ minLength: 1 })),
+  destinationWorkspaceId: Type.Optional(Type.String({ minLength: 1 })),
+  captureStatus: Type.Optional(Type.Union([Type.Literal('captured'), Type.Literal('failed')])),
+  integrationStatus: Type.Optional(
+    Type.Union([
+      Type.Literal('not-requested'),
+      Type.Literal('staged'),
+      Type.Literal('integrated'),
+      Type.Literal('conflict'),
+      Type.Literal('blocked'),
+    ]),
+  ),
+  rootVisibility: Type.Optional(RootVisibilitySchema),
+  dependencyMode: Type.Optional(DependencyModeSchema),
+  manifestUri: Type.Optional(Type.String({ minLength: 1 })),
+  journalUri: Type.Optional(Type.String({ minLength: 1 })),
 })
+
+export const WorkspaceRecordSchema = Type.Object({
+  version: Type.Literal(6),
+  workspaceId: Type.String({ minLength: 1 }),
+  rootWorkspaceId: Type.String({ minLength: 1 }),
+  parentWorkspaceId: Type.String({ minLength: 1 }),
+  scopeId: Type.String({ minLength: 1 }),
+  writerId: Type.String({ minLength: 1 }),
+  attemptId: Type.String({ minLength: 1 }),
+  logicalCwd: Type.String({ minLength: 1 }),
+  relativeCwd: Type.String(),
+  repositoryIds: Type.Array(Type.String({ minLength: 1 })),
+  spawnOrdinal: Type.Number({ minimum: 0 }),
+  lifecycleState: WorkspaceLifecycleSchema,
+  rootVisibility: RootVisibilitySchema,
+  ownerStatus: Type.Optional(OwnerStatusSchema),
+  recoveryStatus: Type.Optional(Type.String({ minLength: 1 })),
+  manifestUri: Type.Optional(Type.String({ minLength: 1 })),
+  journalUri: Type.Optional(Type.String({ minLength: 1 })),
+  createdAt: Type.Number({ minimum: 0 }),
+  updatedAt: Type.Number({ minimum: 0 }),
+})
+
+export type WorkspaceRecord = StaticDecode<typeof WorkspaceRecordSchema>
+export type RootVisibility = StaticDecode<typeof RootVisibilitySchema>
+export type WorkspaceLifecycle = StaticDecode<typeof WorkspaceLifecycleSchema>
+export type MergeArtifacts = StaticDecode<typeof MergeArtifactsSchema>
 
 export const AgentSourceSchema = Type.Union([
   Type.Object({ kind: Type.Literal('bundled') }),
@@ -334,6 +458,7 @@ export const ExecutionContractSchema = Type.Object({
   agentDescription: Type.String(),
   agentName: Type.String({ minLength: 1 }),
   agentSource: AgentSourceSchema,
+  backgroundDefault: Type.Optional(Type.Boolean()),
   capability: Type.Optional(CapabilityContractSchema),
   cwd: Type.String({ minLength: 1 }),
   effort: EffortSchema,
@@ -351,6 +476,21 @@ export const ExecutionContractSchema = Type.Object({
   version: Type.Literal(2),
 })
 
+const ExecutionContractV3Base = Type.Omit(ExecutionContractSchema, ['cwd'])
+
+export const ExecutionContractV3Schema = Type.Object({
+  ...ExecutionContractV3Base.properties,
+  logicalCwd: Type.String({ minLength: 1 }),
+  relativeCwd: Type.String(),
+  version: Type.Literal(3),
+})
+
+export const ExecutionContractAnySchema = Type.Union([
+  ExecutionContractV1Schema,
+  ExecutionContractSchema,
+  ExecutionContractV3Schema,
+])
+
 const RunRecordFields = {
   agentId: Type.String({ minLength: 1 }),
   artifact: Type.Optional(ArtifactRefSchema),
@@ -366,6 +506,7 @@ const RunRecordFields = {
   gateResults: Type.Optional(Type.Array(GateResultSchema)),
   intercomUsage: Type.Optional(RunUsageSchema),
   isolation: Type.Optional(IsolationReceiptSchema),
+  isolationAttempts: Type.Optional(Type.Array(IsolationReceiptSchema)),
   itemId: Type.Optional(Type.String({ minLength: 1 })),
   model: Type.String({ minLength: 1 }),
   modelSelector: Type.String({ minLength: 1 }),
@@ -393,13 +534,13 @@ export const RunRecordV2Schema = Type.Object({
 })
 export const RunRecordSchema = Type.Object({
   ...RunRecordFields,
-  execution: Type.Optional(Type.Union([ExecutionContractV1Schema, ExecutionContractSchema])),
+  execution: Type.Optional(ExecutionContractAnySchema),
 })
 
 export const RunRecordV3Schema = Type.Object({
   ...RunRecordFields,
   artifact: Type.Optional(LegacyArtifactRefSchema),
-  execution: Type.Optional(Type.Union([ExecutionContractV1Schema, ExecutionContractSchema])),
+  execution: Type.Optional(ExecutionContractAnySchema),
 })
 
 export const RuntimeStateV1Schema = Type.Object({
@@ -489,12 +630,23 @@ export const RuntimeStateV4Schema = Type.Object({
   version: Type.Literal(4),
 })
 
-export const RuntimeStateSchema = Type.Object({
+export const RuntimeStateV5Schema = Type.Object({
   ownerSessionId: Type.String({ minLength: 1 }),
   records: Type.Array(RunRecordSchema),
   runs: Type.Optional(Type.Array(CoordinationRunStateSchema)),
   version: Type.Literal(5),
 })
+
+export const RuntimeStateSchema = Type.Object({
+  ownerSessionId: Type.String({ minLength: 1 }),
+  records: Type.Array(RunRecordSchema),
+  rootStores: Type.Array(Type.String({ minLength: 1 })),
+  runs: Type.Array(CoordinationRunStateSchema),
+  version: Type.Literal(6),
+  workspaces: Type.Array(WorkspaceRecordSchema),
+})
+
+export type ExecutionContractV3 = StaticDecode<typeof ExecutionContractV3Schema>
 
 export type AgentSource = StaticDecode<typeof AgentSourceSchema>
 export type ArtifactRef = StaticDecode<typeof ArtifactRefSchema>
@@ -509,6 +661,8 @@ export type ExecutionContract = StaticDecode<typeof ExecutionContractSchema>
 export type ExecutionContractV1 = StaticDecode<typeof ExecutionContractV1Schema>
 export type GateDefinition = StaticDecode<typeof GateDefinitionSchema>
 export type GateResult = StaticDecode<typeof GateResultSchema>
+export type DependencyMode = StaticDecode<typeof DependencyModeSchema>
+export type HeadState = StaticDecode<typeof HeadStateSchema>
 export type IsolationChangedFile = StaticDecode<typeof IsolationChangedFileSchema>
 export type IsolationIntegration = StaticDecode<typeof IsolationIntegrationSchema>
 export type IsolationPatchRef = StaticDecode<typeof IsolationPatchRefSchema>
@@ -518,6 +672,9 @@ export type IsolationRequest = StaticDecode<typeof IsolationRequestSchema>
 export type LegacyArtifactRef = StaticDecode<typeof LegacyArtifactRefSchema>
 export type RuntimeStateV3 = StaticDecode<typeof RuntimeStateV3Schema>
 export type RuntimeStateV4 = StaticDecode<typeof RuntimeStateV4Schema>
+export type RuntimeStateV5 = StaticDecode<typeof RuntimeStateV5Schema>
+export type TransactionPhase = StaticDecode<typeof TransactionPhaseSchema>
+export type OwnerStatus = StaticDecode<typeof OwnerStatusSchema>
 export type RetryFailure = StaticDecode<typeof RetryFailureSchema>
 export type RetryState = StaticDecode<typeof RetryStateSchema>
 export type RunRecord = StaticDecode<typeof RunRecordSchema>

@@ -2,12 +2,22 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import { Value } from 'typebox/value'
 
+import { decodeSubagentRegistration } from './agents.ts'
+import { decodeCapabilityProfileRegistration } from './capabilities.ts'
+import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
 import { formatUsage, oneLineLabel, statusIcon } from './format.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
 import { SubagentTui } from './ui.ts'
+
+export const SUBAGENT_DISCOVERY_EVENT = '@nothingrotf/subagent/discover-agents'
+export const SUBAGENT_REGISTRATION_EVENT = '@nothingrotf/subagent/register-agents'
+export const SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT =
+  '@nothingrotf/subagent/discover-capability-profiles'
+export const SUBAGENT_CAPABILITY_PROFILE_REGISTRATION_EVENT =
+  '@nothingrotf/subagent/register-capability-profiles'
 
 interface BatchToolDetails {
   items: readonly BatchItemResult[]
@@ -29,6 +39,28 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   if (host.registered) return runtime
   host.registered = true
   const tui = new SubagentTui(runtime)
+  const agentRegistrations = new Map<string, () => void>()
+  const capabilityProfileSources = new Set<string>()
+  const unregisterAgentEvents = pi.events.on(SUBAGENT_REGISTRATION_EVENT, (value) => {
+    const registration = decodeSubagentRegistration(value)
+    if (registration === undefined) return
+    agentRegistrations.get(registration.sourceId)?.()
+    agentRegistrations.set(
+      registration.sourceId,
+      host.registerAgents(registration.sourceId, registration.definitions),
+    )
+  })
+  const unregisterCapabilityProfileEvents = pi.events.on(
+    SUBAGENT_CAPABILITY_PROFILE_REGISTRATION_EVENT,
+    (value) => {
+      const registration = decodeCapabilityProfileRegistration(value)
+      if (registration === undefined || capabilityProfileSources.has(registration.sourceId)) return
+      runtime.registerCapabilityProfiles(registration.profiles)
+      capabilityProfileSources.add(registration.sourceId)
+    },
+  )
+  pi.events.emit(SUBAGENT_DISCOVERY_EVENT, { version: 1 })
+  pi.events.emit(SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT, { version: 1 })
 
   pi.on('agent_start', (_event, ctx) => {
     tui.agentStart(ctx)
@@ -49,6 +81,10 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     if (await host.replaceSession(ctx)) tui.sessionStart(ctx)
   })
   pi.on('session_shutdown', async (_event, ctx) => {
+    unregisterAgentEvents()
+    unregisterCapabilityProfileEvents()
+    for (const unregister of agentRegistrations.values()) unregister()
+    agentRegistrations.clear()
     if (await host.stopSession(ctx)) tui.sessionShutdown(ctx)
   })
 
@@ -75,9 +111,11 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     handler: async (ctx) => tui.openPeek(ctx),
   })
 
+  registerTaskControl(pi, host, runtime)
+
   pi.registerTool<typeof TaskInputSchema, TaskToolDetails>({
     description:
-      'Run an isolated subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default. Set run_in_background only for independent work.',
+      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default unless the selected agent defines background mode.',
     execute: async (_callId, input, signal, _onUpdate, ctx) => {
       if ('tasks' in input) {
         const decoded = Value.Decode(BatchTaskInputSchema, input)
@@ -135,7 +173,8 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
           0,
         )
       }
-      const mode = args.run_in_background === true ? 'bg' : 'fg'
+      const mode =
+        args.run_in_background === undefined ? 'auto' : args.run_in_background ? 'bg' : 'fg'
       const parts = [args.model, args.readonly === true ? 'read-only' : undefined].filter(
         (part) => part !== undefined,
       )
@@ -199,6 +238,8 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 }
 
 export { acquireSubagentController } from './controller.ts'
+export { TaskControlInputSchema } from './control.ts'
+export type { TaskControlDetails, TaskControlInput } from './control.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
 export type {
   CapabilityProfile,
@@ -234,7 +275,7 @@ export type {
   TaskInput,
   TaskNodeInput,
 } from './schema.ts'
-export { recoverWriterIsolations } from './isolation.ts'
+export { recoverIsolations } from './isolation.ts'
 export type { IsolationRecovery } from './isolation.ts'
 
 export default function subagentExtension(pi: ExtensionAPI): void {

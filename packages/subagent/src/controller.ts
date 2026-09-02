@@ -152,7 +152,7 @@ export class SubagentControllerHost implements SubagentController {
     return this.runtime.steer(handle, message)
   }
 
-  async cancel(handle: SubagentHandle): Promise<CancelReceipt> {
+  async cancel(handle: SubagentHandle, reason?: string): Promise<CancelReceipt> {
     if (
       handle.ownerSessionId !== this.runtime.ownerSessionId ||
       handle.ownerGeneration !== this.runtime.currentOwnerGeneration
@@ -173,7 +173,7 @@ export class SubagentControllerHost implements SubagentController {
     ) {
       return { revision: this.runtime.currentRevision, status: 'stale-handle' }
     }
-    this.runtime.requestCancel(handle.agentId)
+    this.runtime.requestCancel(handle.agentId, reason)
     return {
       handle: { ...handle },
       revision: this.runtime.currentRevision,
