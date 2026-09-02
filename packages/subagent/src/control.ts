@@ -481,16 +481,44 @@ export async function executeTaskControl(
   }
 }
 
-export function renderTaskControlCall(input: TaskControlInput, theme: SubagentTheme): Component {
+export interface TaskControlRenderState {
+  hasResult?: boolean
+}
+
+class PendingLine implements Component {
+  constructor(
+    private readonly state: TaskControlRenderState,
+    private readonly line: string,
+  ) {}
+
+  invalidate(): void {}
+
+  render(): string[] {
+    return this.state.hasResult === true ? [] : [this.line]
+  }
+}
+
+function pendingTarget(input: TaskControlInput): string | undefined {
+  if (input.action === 'jobs') return 'background jobs'
+  if (input.action !== 'wait') return undefined
+  if (input.agent_ids === undefined) return 'all running jobs'
+  const first = input.agent_ids[0]
+  return input.agent_ids.length === 1 && first !== undefined
+    ? `poll ${first}`
+    : `poll ${input.agent_ids.length} jobs`
+}
+
+export function renderTaskControlCall(
+  input: TaskControlInput,
+  theme: SubagentTheme,
+  state: TaskControlRenderState,
+): Component {
+  const pending = pendingTarget(input)
+  if (pending !== undefined) {
+    return new PendingLine(state, `${theme.fg('muted', '⏳')} ${theme.fg('accent', pending)}`)
+  }
   const title = theme.fg('toolTitle', theme.bold('TaskControl'))
-  const target =
-    input.action === 'wait'
-      ? input.agent_ids === undefined
-        ? 'all running jobs'
-        : `${input.agent_ids.length} job${input.agent_ids.length === 1 ? '' : 's'}`
-      : input.action === 'jobs' || input.action === 'list'
-        ? ''
-        : input.agent_id
+  const target = 'agent_id' in input ? input.agent_id : ''
   return new Text(
     `${title} ${theme.fg('accent', input.action)}${target === '' ? '' : ` ${theme.fg('muted', target)}`}`,
     0,
@@ -503,15 +531,19 @@ export function renderTaskControlResult(
   text: string,
   options: { expanded: boolean; isPartial: boolean },
   theme: SubagentTheme,
+  state: TaskControlRenderState,
 ): Component {
   if (details === undefined) return new Text(text, 0, 0)
   if ('status' in details) {
+    state.hasResult = true
     return new JobTree(details.jobs, { expanded: options.expanded, isPartial: true }, theme)
   }
   if (details.action === 'wait') {
+    state.hasResult = true
     return new JobTree(details.jobs, { expanded: options.expanded, isPartial: false }, theme)
   }
   if (details.action === 'jobs') {
+    state.hasResult = true
     return new JobTree(
       details.jobs,
       { expanded: options.expanded, isPartial: false, retainRunning: true },
@@ -537,7 +569,7 @@ export function registerTaskControl(
     snapshots: () => runtime.listSnapshots(),
     steer: (handle, message) => host.steer(handle, message),
   }
-  pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails>({
+  pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
     description: taskControlDescription,
     execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
       const details = await executeTaskControl(
@@ -553,13 +585,14 @@ export function registerTaskControl(
     label: 'Task Control',
     name: 'TaskControl',
     parameters: TaskControlInputSchema,
-    renderCall: (args, theme) => renderTaskControlCall(args, theme),
-    renderResult: (result, options, theme) =>
+    renderCall: (args, theme, context) => renderTaskControlCall(args, theme, context.state),
+    renderResult: (result, options, theme, context) =>
       renderTaskControlResult(
         result.details,
         result.content.find((item) => item.type === 'text')?.text ?? '',
         options,
         theme,
+        context.state,
       ),
   })
 }

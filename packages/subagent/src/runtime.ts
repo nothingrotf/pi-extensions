@@ -32,6 +32,7 @@ import {
   taskControlDescription,
   type TaskControlDetails,
   TaskControlInputSchema,
+  type TaskControlRenderState,
   type TaskControlScope,
 } from './control.ts'
 import { resolveInvocationCwd, resolveTools } from './execution.ts'
@@ -996,7 +997,7 @@ export class SubagentRuntime {
   private scopeBoundTaskControlExtension(): InlineExtension {
     return {
       factory: (pi) => {
-        pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails>({
+        pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
           description: `${taskControlDescription} Access stays within this Task scope.`,
           execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
             const callerId = ctx.sessionManager.getSessionId()
@@ -1039,13 +1040,14 @@ export class SubagentRuntime {
           label: 'Task Control',
           name: 'TaskControl',
           parameters: TaskControlInputSchema,
-          renderCall: (args, theme) => renderTaskControlCall(args, theme),
-          renderResult: (result, options, theme) =>
+          renderCall: (args, theme, context) => renderTaskControlCall(args, theme, context.state),
+          renderResult: (result, options, theme, context) =>
             renderTaskControlResult(
               result.details,
               result.content.find((item) => item.type === 'text')?.text ?? '',
               options,
               theme,
+              context.state,
             ),
         })
       },

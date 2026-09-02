@@ -7,6 +7,7 @@ import {
   renderTaskControlResult,
   serializeTaskControl,
   TaskControlInputSchema,
+  type TaskControlRenderState,
   type TaskControlScope,
   waitForJobs,
 } from '../src/control.ts'
@@ -151,13 +152,15 @@ describe('task control wait', () => {
   })
 
   it('renders the call and result frames with the job tree', () => {
+    const state: TaskControlRenderState = {}
     const call = (input: Parameters<typeof renderTaskControlCall>[0]): string[] =>
-      renderTaskControlCall(input, theme)
+      renderTaskControlCall(input, theme, state)
         .render(80)
         .map((line) => stripTerminalSequences(line).trimEnd())
-    expect(call({ action: 'wait' })).toEqual(['TaskControl wait all running jobs'])
-    expect(call({ action: 'wait', agent_ids: ['a'] })).toEqual(['TaskControl wait 1 job'])
-    expect(call({ action: 'jobs' })).toEqual(['TaskControl jobs'])
+    expect(call({ action: 'wait' })).toEqual(['⏳ all running jobs'])
+    expect(call({ action: 'wait', agent_ids: ['a'] })).toEqual(['⏳ poll a'])
+    expect(call({ action: 'wait', agent_ids: ['a', 'b'] })).toEqual(['⏳ poll 2 jobs'])
+    expect(call({ action: 'jobs' })).toEqual(['⏳ background jobs'])
     expect(call({ action: 'status', agent_id: 'a' })).toEqual(['TaskControl status a'])
     const jobs = [
       {
@@ -180,14 +183,18 @@ describe('task control wait', () => {
       '',
       { expanded: false, isPartial: true },
       theme,
+      state,
     ).render(80)
     expect(progress[0]).toBe('ⓘ waiting on 1 of 2 jobs 1 done')
     expect(progress).toHaveLength(3)
+    expect(call({ action: 'wait' })).toEqual([])
+    expect(call({ action: 'status', agent_id: 'a' })).toEqual(['TaskControl status a'])
     const sealed = renderTaskControlResult(
       { action: 'wait', jobs, outcome: 'settled', settled: ['b'] },
       '',
       { expanded: false, isPartial: false },
       theme,
+      state,
     ).render(80)
     expect(sealed).toEqual(['✔ 1 job settled 1 done', '└─ • ⟦task⟧ b lane 4.0s'])
     const listing = renderTaskControlResult(
@@ -195,6 +202,7 @@ describe('task control wait', () => {
       '',
       { expanded: false, isPartial: false },
       theme,
+      state,
     ).render(80)
     expect(listing).toEqual([
       'ⓘ waiting on 1 of 2 jobs 1 done',
