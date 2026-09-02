@@ -10,6 +10,7 @@
         "@oxlint/plugins": "1.79.0",
         "@types/bun": "1.4.0",
         "oxlint": "1.79.0",
+        "typebox": "catalog:",
         "typescript": "7.0.2",
         "vite-plus": "0.3.0",
       },
