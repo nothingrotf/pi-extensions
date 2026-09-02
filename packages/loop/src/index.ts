@@ -18,14 +18,33 @@ import {
   type Watch,
 } from './machine.ts'
 import { formatDuration, parseLoopInput, type ParsedLoop } from './policy.ts'
+import {
+  consumeRepeatIteration,
+  decodeRepeatState,
+  describeRepeat,
+  describeRepeatLimit,
+  describeRepeatLimitConfig,
+  disableRepeat,
+  enableRepeat,
+  isRepeatExpired,
+  parseRepeatArgs,
+  pauseRepeat,
+  type RepeatState,
+  setRepeatPrompt,
+} from './repeat.ts'
 import { type LoopWatcher, startWatcher, validateWatch } from './watcher.ts'
 
 const entryType = 'pi-loop-state'
+const repeatEntryType = 'pi-loop-repeat'
 const statusKey = 'pi-loop'
+const repeatDelayMs = 800
 const maximumTimerDelayMs = 2_147_483_647
 const maximumDelaySeconds = 8_000_000_000_000
 
-function describeState(state: LoopState | null): string {
+function describeState(state: LoopState | null, repeat: RepeatState | null = null): string {
+  if (repeat?.enabled === true && !isActiveLoop(state)) {
+    return describeRepeat(repeat)
+  }
   if (state === null) {
     return 'No loop exists in this session.'
   }
@@ -82,6 +101,23 @@ export default function loop(pi: ExtensionAPI): void {
   let watcher: LoopWatcher | undefined
   let watcherGeneration = 0
   let sessionContext: ExtensionContext | null = null
+  let repeat: RepeatState | null = null
+  let repeatTimer: ReturnType<typeof setTimeout> | undefined
+
+  const cancelRepeatTimer = () => {
+    if (repeatTimer !== undefined) {
+      clearTimeout(repeatTimer)
+      repeatTimer = undefined
+    }
+  }
+
+  const persistRepeat = (ctx: ExtensionContext) => {
+    if (repeat === null) {
+      return
+    }
+    pi.appendEntry(repeatEntryType, repeat)
+    refreshStatus(ctx)
+  }
 
   const clearTimer = () => {
     timerGeneration += 1
@@ -99,6 +135,15 @@ export default function loop(pi: ExtensionAPI): void {
 
   const refreshStatus = (ctx: ExtensionContext) => {
     if (!isActiveLoop(state)) {
+      if (repeat?.enabled === true) {
+        const count =
+          repeat.limit?.kind === 'iterations'
+            ? `${repeat.iterations}/${repeat.limit.initial}`
+            : String(repeat.iterations)
+        const phase = repeat.paused ? 'paused' : repeat.prompt === null ? 'waiting' : 'running'
+        ctx.ui.setStatus(statusKey, `loop repeat ${count} ${phase}`)
+        return
+      }
       ctx.ui.setStatus(statusKey, undefined)
       return
     }
@@ -122,21 +167,157 @@ export default function loop(pi: ExtensionAPI): void {
   const restore = (ctx: ExtensionContext) => {
     clearTimer()
     stopWatcher()
+    cancelRepeatTimer()
     state = null
+    repeat = null
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === 'custom' && entry.customType === entryType) {
+      if (entry.type !== 'custom') {
+        continue
+      }
+      if (entry.customType === entryType) {
         state = decodeLoopState(entry.data)
+      } else if (entry.customType === repeatEntryType) {
+        repeat = decodeRepeatState(entry.data)
       }
     }
     if (isActiveLoop(state)) {
       state = recoverLoop(state)
     }
+    if (repeat?.enabled === true && !repeat.paused) {
+      repeat = pauseRepeat(repeat)
+      pi.appendEntry(repeatEntryType, repeat)
+      ctx.ui.notify(
+        'Repeat loop paused on session resume. Send a prompt or /loop resume to continue.',
+        'info',
+      )
+    }
     refreshStatus(ctx)
+  }
+
+  const stopRepeat = (message: string, ctx: ExtensionContext): boolean => {
+    cancelRepeatTimer()
+    if (repeat?.enabled !== true) {
+      return false
+    }
+    repeat = disableRepeat(repeat)
+    persistRepeat(ctx)
+    ctx.ui.notify(message, 'info')
+    return true
+  }
+
+  const submitRepeatPrompt = (prompt: string) => {
+    pi.sendUserMessage(prompt, { expandPromptTemplates: true })
+  }
+
+  const repeatBlocked = (ctx: ExtensionContext): boolean => {
+    if (repeat?.enabled !== true || repeat.paused || repeat.prompt === null) {
+      return true
+    }
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      return true
+    }
+    return ctx.hasUI && ctx.ui.getEditorText().trim().length > 0
+  }
+
+  const runRepeatIteration = (ctx: ExtensionContext) => {
+    if (repeat === null || repeatBlocked(ctx)) {
+      return
+    }
+    const now = Date.now()
+    if (isRepeatExpired(repeat, now)) {
+      stopRepeat('Loop time limit reached. Repeat loop disabled.', ctx)
+      return
+    }
+    const consumed = consumeRepeatIteration(repeat, now)
+    if (!consumed.ok) {
+      stopRepeat(`${consumed.reason} Repeat loop disabled.`, ctx)
+      return
+    }
+    repeat = consumed.state
+    persistRepeat(ctx)
+    const prompt = consumed.state.prompt
+    if (prompt === null) {
+      return
+    }
+    if (consumed.state.between === 'compact') {
+      ctx.compact({
+        onComplete: () => submitRepeatPrompt(prompt),
+        onError: () => submitRepeatPrompt(prompt),
+      })
+      return
+    }
+    submitRepeatPrompt(prompt)
+  }
+
+  const scheduleRepeat = (ctx: ExtensionContext) => {
+    cancelRepeatTimer()
+    if (repeatBlocked(ctx)) {
+      return
+    }
+    repeatTimer = setTimeout(() => {
+      repeatTimer = undefined
+      runRepeatIteration(ctx)
+    }, repeatDelayMs)
+  }
+
+  const startRepeat = (args: string, ctx: ExtensionContext) => {
+    if (!supportsLoops(ctx)) {
+      ctx.ui.notify('A loop requires a persistent TUI or RPC session.', 'error')
+      return
+    }
+    if (repeat?.enabled === true) {
+      stopRepeat('Repeat loop disabled.', ctx)
+      return
+    }
+    if (isActiveLoop(state)) {
+      ctx.ui.notify('Stop the scheduled loop before a repeat loop starts.', 'warning')
+      return
+    }
+    const result = parseRepeatArgs(args)
+    if (!result.ok) {
+      ctx.ui.notify(result.error, 'error')
+      return
+    }
+    const parsed = result.args
+    repeat = enableRepeat(parsed, Date.now())
+    persistRepeat(ctx)
+    const limitSuffix = parsed.limit
+      ? ` Limited to ${describeRepeatLimitConfig(parsed.limit)}.`
+      : ''
+    const remainingSuffix = repeat.limit ? ` ${describeRepeatLimit(repeat.limit)}.` : ''
+    const betweenSuffix = parsed.between === 'compact' ? ' Compacts before each iteration.' : ''
+    const tail = parsed.prompt
+      ? 'Repeating it after each turn.'
+      : 'Your next prompt will repeat after each turn.'
+    ctx.ui.notify(
+      `Repeat loop enabled.${limitSuffix}${remainingSuffix}${betweenSuffix} ${tail} Esc pauses; /loop repeat again disables.`,
+      'info',
+    )
+    if (parsed.prompt !== undefined) {
+      submitRepeatPrompt(parsed.prompt)
+    }
+  }
+
+  const resumeRepeat = (ctx: ExtensionContext) => {
+    if (repeat?.enabled !== true) {
+      ctx.ui.notify('No repeat loop exists.', 'warning')
+      return
+    }
+    if (repeat.prompt === null) {
+      repeat = { ...repeat, paused: false }
+      persistRepeat(ctx)
+      ctx.ui.notify('Repeat loop waiting. Your next prompt will repeat after each turn.', 'info')
+      return
+    }
+    repeat = { ...repeat, paused: false }
+    persistRepeat(ctx)
+    ctx.ui.notify('Repeat loop resumed.', 'info')
+    scheduleRepeat(ctx)
   }
 
   const finish = (reason: string, ctx: ExtensionContext): boolean => {
     if (!isActiveLoop(state)) {
-      return false
+      return stopRepeat(`Repeat loop stopped. ${reason}`, ctx)
     }
     state = stopLoop(state, reason)
     clearTimer()
@@ -261,6 +442,10 @@ export default function loop(pi: ExtensionAPI): void {
       ctx.ui.notify(parsed.error, 'warning')
       return
     }
+    if (repeat?.enabled === true) {
+      ctx.ui.notify('Stop the repeat loop before a scheduled loop starts.', 'warning')
+      return
+    }
     if (state !== null && isExactDuplicate(state, parsed)) {
       ctx.ui.notify(`The matching loop is already active. ${describeState(state)}`, 'info')
       return
@@ -314,7 +499,44 @@ export default function loop(pi: ExtensionAPI): void {
   pi.on('session_shutdown', () => {
     clearTimer()
     stopWatcher()
+    cancelRepeatTimer()
     sessionContext = null
+  })
+
+  pi.on('input', (event, ctx) => {
+    if (repeat?.enabled !== true || event.source === 'extension') {
+      return
+    }
+    const text = event.text.trim()
+    if (text.length === 0 || text.startsWith('/')) {
+      return
+    }
+    cancelRepeatTimer()
+    repeat = setRepeatPrompt(repeat, text)
+    persistRepeat(ctx)
+  })
+
+  pi.on('agent_start', () => {
+    cancelRepeatTimer()
+  })
+
+  pi.on('agent_end', (event, ctx) => {
+    if (repeat?.enabled !== true || repeat.paused) {
+      return
+    }
+    for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+      const message = event.messages[index]
+      if (message?.role !== 'assistant') {
+        continue
+      }
+      if (message.stopReason === 'aborted') {
+        cancelRepeatTimer()
+        repeat = pauseRepeat(repeat)
+        persistRepeat(ctx)
+        ctx.ui.notify('Repeat loop paused. Send a prompt or /loop resume to continue.', 'info')
+      }
+      return
+    }
   })
 
   pi.on('before_agent_start', (event, ctx) => {
@@ -326,6 +548,7 @@ export default function loop(pi: ExtensionAPI): void {
 
   pi.on('agent_settled', (_event, ctx) => {
     if (!isActiveLoop(state)) {
+      scheduleRepeat(ctx)
       return
     }
     if (state.inFlight) {
@@ -442,7 +665,26 @@ export default function loop(pi: ExtensionAPI): void {
     async handler(args, ctx) {
       const trimmed = args.trim()
       if (trimmed === 'status' || trimmed === 'list') {
-        ctx.ui.notify(describeState(state), 'info')
+        ctx.ui.notify(describeState(state, repeat), 'info')
+        return
+      }
+      if (trimmed === 'repeat' || trimmed.startsWith('repeat ')) {
+        startRepeat(trimmed.slice(6).trim(), ctx)
+        return
+      }
+      if (trimmed === 'pause') {
+        if (repeat?.enabled !== true) {
+          ctx.ui.notify('No repeat loop exists.', 'warning')
+          return
+        }
+        cancelRepeatTimer()
+        repeat = pauseRepeat(repeat)
+        persistRepeat(ctx)
+        ctx.ui.notify('Repeat loop paused.', 'info')
+        return
+      }
+      if (trimmed === 'resume') {
+        resumeRepeat(ctx)
         return
       }
       if (trimmed === 'stop' || trimmed.startsWith('stop ')) {
@@ -456,7 +698,7 @@ export default function loop(pi: ExtensionAPI): void {
   pi.registerCommand('loop-list', {
     description: 'Show the loop state for this session',
     handler: async (_args, ctx) => {
-      ctx.ui.notify(describeState(state), 'info')
+      ctx.ui.notify(describeState(state, repeat), 'info')
     },
   })
 

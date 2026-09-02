@@ -15,6 +15,9 @@ function harness(branch = [], initialIdle = true, mode = 'tui') {
   const statuses = new Map()
   let idle = initialIdle
   let confirmations = 0
+  let pending = false
+  let editorText = ''
+  let compactions = 0
   const api = {
     on(name, handler) {
       handlers.set(name, handler)
@@ -39,6 +42,13 @@ function harness(branch = [], initialIdle = true, mode = 'tui') {
     isIdle() {
       return idle
     },
+    hasPendingMessages() {
+      return pending
+    },
+    compact(options) {
+      compactions += 1
+      options?.onComplete?.({})
+    },
     sessionManager: {
       getBranch() {
         return branch
@@ -54,6 +64,9 @@ function harness(branch = [], initialIdle = true, mode = 'tui') {
       },
       setStatus(key, value) {
         statuses.set(key, value)
+      },
+      getEditorText() {
+        return editorText
       },
     },
   }
@@ -85,10 +98,29 @@ function harness(branch = [], initialIdle = true, mode = 'tui') {
     notices,
     statuses,
     confirmationCount: () => confirmations,
+    compactionCount: () => compactions,
     setIdle(value) {
       idle = value
     },
+    setPending(value) {
+      pending = value
+    },
+    setEditorText(value) {
+      editorText = value
+    },
   }
+}
+
+function latestRepeat(instance) {
+  const entry = instance.entries.filter((item) => item.customType === 'pi-loop-repeat').at(-1)
+  if (entry === undefined) {
+    throw new Error('No repeat state was persisted')
+  }
+  return entry.data
+}
+
+function assistant(stopReason = 'stop') {
+  return { role: 'assistant', content: [], stopReason }
 }
 
 function latestState(instance) {
@@ -302,5 +334,174 @@ describe('loop lifecycle', () => {
     const scheduled = await instance.tool('loop_next', { delaySeconds: 60 })
     expect(scheduled.details.scheduled).toBe(false)
     await instance.emit('session_shutdown')
+  })
+})
+
+describe('repeat loop', () => {
+  test('repeats the inline prompt after each settled turn until the count runs out', async () => {
+    vi.useFakeTimers()
+    try {
+      const instance = harness()
+      await instance.emit('session_start')
+      await instance.command('loop', 'repeat 2 fix the tests')
+      expect(instance.notices.at(-1).text).toContain(
+        'Repeat loop enabled. Limited to 2 iterations.',
+      )
+      expect(instance.messages).toEqual([
+        { prompt: 'fix the tests', options: { expandPromptTemplates: true } },
+      ])
+      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 0/2 running')
+
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(2)
+      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 1/2 running')
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(3)
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(3)
+      expect(instance.notices.at(-1).text).toBe('Loop limit reached. Repeat loop disabled.')
+      expect(latestRepeat(instance).enabled).toBe(false)
+      expect(instance.statuses.get('pi-loop')).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('captures the next typed prompt, pauses on abort, and resumes', async () => {
+    vi.useFakeTimers()
+    try {
+      const instance = harness()
+      await instance.emit('session_start')
+      await instance.command('loop', 'repeat')
+      expect(instance.notices.at(-1).text).toContain(
+        'Your next prompt will repeat after each turn.',
+      )
+      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 0 waiting')
+      await instance.emit('input', { text: '/loop status', source: 'interactive' })
+      expect(latestRepeat(instance).prompt).toBeNull()
+      await instance.emit('input', { text: 'keep going', source: 'interactive' })
+      expect(latestRepeat(instance).prompt).toBe('keep going')
+      await instance.emit('input', { text: 'from extension', source: 'extension' })
+      expect(latestRepeat(instance).prompt).toBe('keep going')
+
+      await instance.emit('agent_end', { messages: [assistant('aborted')] })
+      expect(latestRepeat(instance).paused).toBe(true)
+      expect(instance.notices.at(-1).text).toContain('Repeat loop paused.')
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(0)
+
+      await instance.command('loop', 'resume')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toEqual([
+        { prompt: 'keep going', options: { expandPromptTemplates: true } },
+      ])
+
+      await instance.command('loop', 'pause')
+      expect(latestRepeat(instance).paused).toBe(true)
+      await instance.emit('input', { text: 'new prompt', source: 'interactive' })
+      expect(latestRepeat(instance)).toMatchObject({ prompt: 'new prompt', paused: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('waits while busy, pending, or drafting, and stops at the duration limit', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    try {
+      const instance = harness()
+      await instance.emit('session_start')
+      await instance.command('loop', 'repeat 10m poll ci')
+      instance.setEditorText('draft')
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(1)
+      instance.setEditorText('')
+      instance.setPending(true)
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(1)
+      instance.setPending(false)
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(2)
+      vi.setSystemTime(11 * 60_000)
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.messages).toHaveLength(2)
+      expect(instance.notices.at(-1).text).toBe('Loop time limit reached. Repeat loop disabled.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('compacts before each iteration in compact mode', async () => {
+    vi.useFakeTimers()
+    try {
+      const instance = harness()
+      await instance.emit('session_start')
+      await instance.command('loop', 'repeat compact 5 poll ci')
+      expect(instance.notices.at(-1).text).toContain('Compacts before each iteration.')
+      await instance.emit('agent_settled')
+      await vi.advanceTimersByTimeAsync(800)
+      expect(instance.compactionCount()).toBe(1)
+      expect(instance.messages).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('toggles off, refuses mixed modes, and pauses on resume', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    await instance.command('loop', '5m check ci')
+    await instance.command('loop', 'repeat 3')
+    expect(instance.notices.at(-1).text).toBe(
+      'Stop the scheduled loop before a repeat loop starts.',
+    )
+    await instance.command('loop', 'stop done')
+    await instance.command('loop', 'repeat 3')
+    await instance.command('loop', '5m check ci')
+    expect(instance.notices.at(-1).text).toBe(
+      'Stop the repeat loop before a scheduled loop starts.',
+    )
+    await instance.command('loop', 'status')
+    expect(instance.notices.at(-1).text).toBe(
+      'Repeat loop waiting for the next prompt. Iterations: 0. 3 of 3 iterations remaining.',
+    )
+    await instance.command('loop', 'repeat')
+    expect(instance.notices.at(-1).text).toBe('Repeat loop disabled.')
+    await instance.command('loop', 'repeat -1')
+    expect(instance.notices.at(-1)).toEqual({
+      text: expect.stringContaining('Usage: /loop repeat'),
+      level: 'error',
+    })
+    await instance.command('loop', 'repeat 1.5h')
+    expect(instance.notices.at(-1).level).toBe('error')
+
+    const resumed = harness([
+      {
+        type: 'custom',
+        customType: 'pi-loop-repeat',
+        data: {
+          version: 1,
+          enabled: true,
+          paused: false,
+          prompt: 'go',
+          between: 'prompt',
+          limit: null,
+          iterations: 4,
+          startedAt: 1,
+        },
+      },
+    ])
+    await resumed.emit('session_start')
+    expect(latestRepeat(resumed).paused).toBe(true)
+    expect(resumed.notices.at(-1).text).toContain('Repeat loop paused on session resume.')
+    expect(resumed.statuses.get('pi-loop')).toBe('loop repeat 4 paused')
   })
 })

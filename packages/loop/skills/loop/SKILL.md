@@ -81,6 +81,24 @@ Confirm these facts:
 - The selected fallback delay applies.
 - The watcher is the primary wake source, if present.
 
+## Repeat schedule
+
+Run this command to repeat one prompt after every settled turn:
+
+```text
+/loop repeat [compact] [count|duration] [prompt]
+```
+
+- No prompt: the next user prompt becomes the loop prompt.
+- `count`: stop after that many iterations. `duration`: stop after that time.
+- `compact`: compact the context before each iteration.
+- `/loop repeat` again disables the loop. `/loop pause` and `/loop resume` control it.
+- An aborted turn pauses the loop.
+
+Do not call `loop_next` for a repeat loop. The loop machine re-sends the prompt 800 ms after each settled turn.
+
+While any loop is active, an active goal does not send its own continuation. The loop owns the cadence.
+
 ## Stop
 
 Stop the active loop with this command:
