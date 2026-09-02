@@ -4,6 +4,7 @@ export const maximumStopReminders = 3
 export const midRunNudgeMutationThreshold = 12
 export const midRunNudgeMaximumPerCycle = 2
 export const mutatingToolNames: readonly string[] = ['bash', 'edit', 'write']
+export const awaitingUserAnswerLineWindow = 12
 
 const markdownPromptPrefix = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/
 const promptLabel = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i
@@ -56,8 +57,12 @@ export function isAwaitingUserAnswer(assistantText: string): boolean {
   if (text.length === 0) {
     return false
   }
-  const lastLine = text.split(/\r?\n/).at(-1)?.trim()
-  return lastLine !== undefined && (isQuestionPromptLine(lastLine) || isResponseCueLine(lastLine))
+  const trailingLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(-awaitingUserAnswerLineWindow)
+  return trailingLines.some((line) => isQuestionPromptLine(line) || isResponseCueLine(line))
 }
 
 export interface ReminderCycle {
@@ -90,7 +95,7 @@ export function recordToolResult(
       : mutated
         ? cycle.mutationsSinceLastTouch + 1
         : cycle.mutationsSinceLastTouch,
-    reminderAwaitingProgress: false,
+    reminderAwaitingProgress: touchedTodo ? cycle.reminderAwaitingProgress : false,
   }
 }
 

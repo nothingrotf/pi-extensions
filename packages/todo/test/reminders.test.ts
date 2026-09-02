@@ -28,6 +28,26 @@ describe('awaiting user answer detection', () => {
     expect(isAwaitingUserAnswer('Let me know which option you prefer.')).toBe(true)
   })
 
+  test('detects a question followed by options and a closing statement', () => {
+    const text = [
+      'Onde preciso da sua decisão',
+      '',
+      'Como você quer finalizar essa skill?',
+      '',
+      '1. Manter como PR próprio empilhado acima de feature/obs-59.',
+      '2. Mover o commit para dentro de feature/obs-59 e atualizar o PR #71.',
+      '3. Outra coisa que eu não entendi.',
+      '',
+      'Enquanto isso não toco no stack nem spawno mais nada.',
+    ].join('\n')
+    expect(isAwaitingUserAnswer(text)).toBe(true)
+  })
+
+  test('ignores questions outside the trailing window', () => {
+    const filler = Array.from({ length: 12 }, (_, index) => `Step ${index + 1} done.`)
+    expect(isAwaitingUserAnswer(['Should I continue?', ...filler].join('\n'))).toBe(false)
+  })
+
   test('ignores incidental question marks and plain statements', () => {
     expect(isAwaitingUserAnswer('Added `foo?: string` to the type.')).toBe(false)
     expect(isAwaitingUserAnswer('All tests pass.')).toBe(false)
@@ -45,6 +65,27 @@ describe('reminder cycle', () => {
     expect(cycle.mutationsSinceLastTouch).toBe(2)
     cycle = recordToolResult(cycle, 'todo_write', false)
     expect(cycle.mutationsSinceLastTouch).toBe(0)
+  })
+
+  test('todo_write alone does not count as progress after a stop reminder', () => {
+    const todos = [todo('1', 'pending')]
+    const stop = { text: 'Waiting.', hadToolCalls: false, stopReason: 'stop' }
+    const first = decideStopReminder(createReminderCycle(), todos, stop)
+    if (first.kind !== 'remind') {
+      throw new Error('expected reminder')
+    }
+    const touched = recordToolResult(first.cycle, 'todo_write', false)
+    expect(decideStopReminder(touched, todos, stop)).toEqual({
+      kind: 'silent',
+      reason: 'awaiting-progress',
+    })
+    const progressed = recordToolResult(touched, 'edit', false)
+    const second = decideStopReminder(progressed, todos, stop)
+    expect(second.kind).toBe('remind')
+    if (second.kind !== 'remind') {
+      throw new Error('expected reminder')
+    }
+    expect(second.attempt).toBe(2)
   })
 
   test('decides stop reminders with the documented guards', () => {

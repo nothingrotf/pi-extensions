@@ -206,9 +206,9 @@ When an agent run ends with a text-only assistant message and open todos exist, 
 
 The reminder does not fire when:
 
-- the last assistant message ends with a question or a response cue
+- one of the last 12 non-empty lines of the assistant message is a question or a response cue
 - the last assistant message called tools, was aborted, or errored
-- a previous reminder still waits for progress
+- a previous reminder still waits for progress. A `todo_write` call alone does not count as progress
 - three reminders already fired for the current prompt
 - only `blocked` todos remain
 - `todo_write` is not an active tool
