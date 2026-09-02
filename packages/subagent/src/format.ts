@@ -125,7 +125,7 @@ function themedTaskLine(snapshot: SubagentSnapshot, theme: SubagentTheme): strin
   }
   const activity =
     snapshot.lastActivity === undefined ? '' : `${theme.fg('dim', `→ ${snapshot.lastActivity}`)} · `
-  return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${activity}${colorNumbers(tail, theme)}`
+  return `${theme.fg('accent', statusIcon(snapshot.status))} ${theme.fg('accent', theme.bold(oneLineLabel(snapshot.description)))} · ${activity}${colorNumbers(tail, theme)}`
 }
 
 const WIDGET_MAX_LINES = 10
@@ -146,7 +146,7 @@ export class SubagentsWidget implements Component {
     const head = live > 0 ? 'accent' : 'dim'
     const lines = [
       truncateToWidth(
-        `${this.theme.fg(head, live > 0 ? '●' : '○')} ${this.theme.fg(head, `Subagents (${done}/${snapshots.length})`)}`,
+        `${this.theme.bold(this.theme.fg(head, 'Subagents'))} ${this.theme.fg('dim', `${done}/${snapshots.length}`)}`,
         width,
         '…',
       ),
@@ -158,7 +158,7 @@ export class SubagentsWidget implements Component {
       if (snapshot === undefined) continue
       lines.push(
         truncateToWidth(
-          `${this.theme.fg('dim', index === shown - 1 && shown === snapshots.length ? '└─' : '├─')} ${themedTaskLine(snapshot, this.theme)}`,
+          ` ${this.theme.fg('dim', index === shown - 1 && shown === snapshots.length ? '└─' : '├─')} ${themedTaskLine(snapshot, this.theme)}`,
           width,
           '…',
         ),
@@ -166,7 +166,7 @@ export class SubagentsWidget implements Component {
     }
     const hidden = snapshots.length - shown
     if (hidden > 0) {
-      lines.push(`${this.theme.fg('dim', '└─')} ${this.theme.fg('dim', `+${hidden} more`)}`)
+      lines.push(` ${this.theme.fg('dim', '└─')} ${this.theme.fg('dim', `+${hidden} more`)}`)
     }
     return lines
   }

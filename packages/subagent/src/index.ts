@@ -1,5 +1,10 @@
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
+import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { decodeSubagentRegistration } from './agents.ts'
@@ -8,6 +13,8 @@ import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
 import { formatUsage, oneLineLabel, statusIcon } from './format.ts'
+import { type JobProgressDetails, type JobSnapshot, JobTree, toJobSnapshot } from './jobs.ts'
+import { JobProgress } from './progress.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
 import { SubagentTui } from './ui.ts'
@@ -26,7 +33,24 @@ interface BatchToolDetails {
   succeeded: boolean
 }
 
-type TaskToolDetails = RuntimeDetails | BatchToolDetails
+type TaskToolDetails = RuntimeDetails | BatchToolDetails | JobProgressDetails
+
+function batchJobs(
+  items: readonly BatchItemResult[],
+  snapshots: ReadonlyMap<string, JobSnapshot>,
+): JobSnapshot[] {
+  return items.map((item) => {
+    const known = item.agentId === undefined ? undefined : snapshots.get(item.agentId)
+    if (known !== undefined) return known
+    return {
+      agentId: item.agentId ?? item.taskId,
+      description: item.taskId,
+      durationMs: 0,
+      lastActivity: undefined,
+      status: item.status,
+    }
+  })
+}
 
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
@@ -116,49 +140,12 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   pi.registerTool<typeof TaskInputSchema, TaskToolDetails>({
     description:
       'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default unless the selected agent defines background mode.',
-    execute: async (_callId, input, signal, _onUpdate, ctx) => {
-      if ('tasks' in input) {
-        const decoded = Value.Decode(BatchTaskInputSchema, input)
-        const batch = await runBatch({ ctx, input: decoded, runtime, signal })
-        return {
-          content: [{ text: `Run ID: ${batch.runId}\n\n${batch.content}`, type: 'text' }],
-          details: {
-            items: batch.items,
-            runId: batch.runId,
-            status: 'batch',
-            succeeded: batch.status === 'completed',
-          },
-          isError: batch.status !== 'completed',
-        }
-      }
-      const decoded = Value.Decode(SingleTaskInputSchema, input)
-      const result = await runtime.run({ ctx, input: decoded, signal })
-
-      if (result.kind === 'background') {
-        return {
-          content: [
-            {
-              text: `Task started in the background.\nAgent ID: ${result.details.agentId}`,
-              type: 'text',
-            },
-          ],
-          details: result.details,
-        }
-      }
-
-      if (result.kind === 'failed') {
-        return {
-          content: [{ text: failedContent(result), type: 'text' }],
-          details: result.details,
-          isError: true,
-        }
-      }
-
-      return {
-        content: [
-          { text: `Agent ID: ${result.details.agentId}\n\n${result.content}`, type: 'text' },
-        ],
-        details: result.details,
+    execute: async (_callId, input, signal, onUpdate, ctx) => {
+      const progress = new JobProgress(runtime, ctx, onUpdate)
+      try {
+        return await executeTask(runtime, input, signal, ctx, progress)
+      } finally {
+        progress.stop()
       }
     },
     executionMode: 'parallel',
@@ -185,19 +172,27 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
         0,
       )
     },
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded, isPartial }, theme) {
       const details = result.details
       if (details === undefined) {
         const text = result.content.find((content) => content.type === 'text')?.text ?? ''
         return new Text(text, 0, 0)
       }
+      if (details.status === 'progress') {
+        return new JobTree(details.jobs, { expanded, isPartial, now: Date.now() }, theme)
+      }
       if (details.status === 'batch') {
-        const summary = details.items
-          .map(
-            (item) => `${item.status === 'completed' ? '✓' : '✗'} ${item.taskId}: ${item.status}`,
-          )
-          .join('\n')
-        return new Text(`${theme.fg('accent', details.runId)}\n${summary}`, 0, 0)
+        const snapshots = new Map<string, JobSnapshot>()
+        const now = Date.now()
+        for (const snapshot of runtime.listSnapshots()) {
+          snapshots.set(snapshot.agentId, toJobSnapshot(snapshot, now))
+        }
+        return new JobTree(
+          batchJobs(details.items, snapshots),
+          { expanded, isPartial: false, now },
+          theme,
+          theme.fg('accent', details.runId),
+        )
       }
       if (details.status === 'background') {
         return new Text(
@@ -235,6 +230,60 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   })
 
   return runtime
+}
+
+async function executeTask(
+  runtime: SubagentRuntime,
+  input: Static<typeof TaskInputSchema>,
+  signal: AbortSignal | undefined,
+  ctx: ExtensionContext,
+  progress: JobProgress,
+): Promise<AgentToolResult<TaskToolDetails>> {
+  if ('tasks' in input) {
+    const decoded = Value.Decode(BatchTaskInputSchema, input)
+    const batch = await runBatch({
+      ctx,
+      input: decoded,
+      onStarted: progress.started,
+      runtime,
+      signal,
+    })
+    return {
+      content: [{ text: `Run ID: ${batch.runId}\n\n${batch.content}`, type: 'text' }],
+      details: {
+        items: batch.items,
+        runId: batch.runId,
+        status: 'batch',
+        succeeded: batch.status === 'completed',
+      },
+    }
+  }
+  const decoded = Value.Decode(SingleTaskInputSchema, input)
+  const result = await runtime.run({ ctx, input: decoded, onStarted: progress.started, signal })
+
+  if (result.kind === 'background') {
+    return {
+      content: [
+        {
+          text: `Task started in the background.\nAgent ID: ${result.details.agentId}`,
+          type: 'text',
+        },
+      ],
+      details: result.details,
+    }
+  }
+
+  if (result.kind === 'failed') {
+    return {
+      content: [{ text: failedContent(result), type: 'text' }],
+      details: result.details,
+    }
+  }
+
+  return {
+    content: [{ text: `Agent ID: ${result.details.agentId}\n\n${result.content}`, type: 'text' }],
+    details: result.details,
+  }
 }
 
 export { acquireSubagentController } from './controller.ts'

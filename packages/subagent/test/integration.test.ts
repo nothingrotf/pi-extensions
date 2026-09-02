@@ -1387,6 +1387,7 @@ describe('subagent Task integration', () => {
       for (const release of harness.state.blocked.splice(0)) release()
       await harness.state.notification.promise
 
+      const started: string[] = []
       const foreground = await harness.runtime.run({
         ctx: harness.context(),
         input: {
@@ -1395,11 +1396,13 @@ describe('subagent Task integration', () => {
           run_in_background: false,
           subagent_type: 'Comment Sicko',
         },
+        onStarted: (agentId) => started.push(agentId),
         signal: undefined,
       })
       expect(foreground.kind).toBe('completed')
       if (foreground.kind !== 'completed') throw new Error('The explicit override did not finish.')
       expect(foreground.content).toContain('profile:custom')
+      expect(started).toEqual([foreground.details.agentId])
       expect(latestState(harness).records.at(-1)?.background).toBe(false)
 
       const resumed = await harness.runtime.run({

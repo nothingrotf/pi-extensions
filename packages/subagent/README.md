@@ -509,7 +509,21 @@ The side turn does not guarantee the parent hooks, cache identity, transport, re
 
 ## TUI
 
-The widget above the editor shows live status, activity, tool calls, token use, cost, and elapsed time.
+The `Subagents` widget above the editor shows live status, activity, tool calls, token use, cost, and elapsed time.
+
+A foreground or batch Task call streams a job tree into its tool result while the children run:
+
+```text
+ⓘ waiting on 2 of 3 jobs · 1 done
+├─ ⠹ [task] Ampere lane 8m8s → Read runtime.ts
+├─ ⠹ [task] Ada lane 8m8s
+└─ ✓ [task] Blackwell lane 2m1s
+```
+
+The tree updates on every child change and once per second for the durations.
+The working status shows the same title while at least one child runs.
+After the call settles, the tree keeps only the settled rows.
+A background Task returns at once and does not stream a tree.
 
 Open the subagent pane:
 

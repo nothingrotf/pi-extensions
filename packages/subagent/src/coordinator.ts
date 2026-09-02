@@ -135,6 +135,7 @@ function failedResult(node: TaskNodeInput, result: RuntimeResult): BatchItemResu
 export async function runBatch(options: {
   ctx: ExtensionContext
   input: BatchTaskInput
+  onStarted?: (agentId: string) => void
   runtime: SubagentRuntime
   signal: AbortSignal | undefined
 }): Promise<BatchResult> {
@@ -245,6 +246,7 @@ export async function runBatch(options: {
             input: nodeInput,
           }
           if (parentWorkspace !== undefined) invocation.parentWorkspace = parentWorkspace
+          if (options.onStarted !== undefined) invocation.onStarted = options.onStarted
           const result = await options.runtime.runCoordinated(
             options.signal === undefined ? invocation : { ...invocation, signal: options.signal },
             { mailbox: mailbox.endpoint(node.id), runId, taskId: node.id },

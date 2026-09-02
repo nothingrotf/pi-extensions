@@ -221,6 +221,7 @@ export type SubagentEvent =
 export interface SubagentInvocation {
   ctx: ExtensionContext
   input: TaskInput
+  onStarted?: (agentId: string) => void
   parentWorkspace?: WorkspaceContext
   signal?: AbortSignal
 }
@@ -332,6 +333,7 @@ interface StartOptions {
   attenuation?: NestedAttenuation
   mailbox?: MailboxEndpoint
   maxDepth?: number
+  onStarted?: (agentId: string) => void
   parentAgentId?: string
   parentWorkspace?: WorkspaceContext
   rootAgentId?: string
@@ -1148,6 +1150,7 @@ export class SubagentRuntime {
     if (invocation.parentWorkspace !== undefined) {
       startOptions.parentWorkspace = invocation.parentWorkspace
     }
+    if (invocation.onStarted !== undefined) startOptions.onStarted = invocation.onStarted
     return this.run(startOptions)
   }
 
@@ -1491,6 +1494,7 @@ export class SubagentRuntime {
       workspaceContext: isolation?.context ?? parentContext,
     }
     this.active.set(record.agentId, active)
+    options.onStarted?.(record.agentId)
     this.emitChange()
     const turn = this.completeRun(
       record,
