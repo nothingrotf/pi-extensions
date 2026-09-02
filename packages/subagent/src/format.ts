@@ -136,9 +136,9 @@ export function renderSubagentHudLines(
   )
   if (hidden > 0) rows.push(theme.fg('dim', `… ${hidden} more running`))
   return [
-    '',
     ` ${theme.bold(theme.fg('accent', 'Subagents'))}`,
     ...rows.map((row) => `  ${row}`),
+    '',
   ].map((line) => truncateToWidth(line, width, '…'))
 }
 

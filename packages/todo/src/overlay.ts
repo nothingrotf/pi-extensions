@@ -111,6 +111,7 @@ export function renderTodoHudLines(
     const branch = theme.fg(index < filled ? 'accent' : 'dim', last ? treeLast : treeBranch)
     lines.push(`  ${branch} ${row}`)
   })
+  lines.push('')
   return lines.map((line) => truncateToWidth(line, width, '…'))
 }
 

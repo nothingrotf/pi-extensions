@@ -1,5 +1,5 @@
 import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
-import { Loader, type TUI } from '@earendil-works/pi-tui'
+import { type Component, Container, Loader, Spacer, type TUI } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
@@ -13,6 +13,23 @@ export function decodeWorkingMessage<Input>(data: Input): string | null | undefi
 }
 
 export const defaultWorkingMessage = 'Working...'
+
+export function trimWidgetSpacer(
+  tui: Pick<TUI, 'children' | 'requestRender'>,
+  self: Component,
+): void {
+  for (const child of tui.children) {
+    if (!(child instanceof Container) || !child.children.includes(self)) continue
+    const first = child.children[0]
+    if (!(first instanceof Spacer)) return
+    queueMicrotask(() => {
+      if (child.children[0] !== first) return
+      child.removeChild(first)
+      tui.requestRender()
+    })
+    return
+  }
+}
 
 export class WorkingDock {
   private message: string | undefined
@@ -67,10 +84,14 @@ export class WorkingDock {
     )
     this.loader = loader
     if (this.active) loader.start()
-    return {
+    const widget = {
       dispose: () => loader.stop(),
       invalidate: () => loader.invalidate(),
-      render: (width: number): string[] => (this.active ? [...loader.render(width), ''] : []),
+      render: (width: number): string[] => {
+        trimWidgetSpacer(tui, widget)
+        return this.active ? [...loader.render(width).slice(1), ''] : []
+      },
     }
+    return widget
   }
 }

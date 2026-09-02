@@ -73,6 +73,7 @@ describe('persistent todo tree', () => {
       '  ├─ ☑ ~done~',
       '  ├─ ☐ active',
       '  └─ ☐ pending',
+      '',
     ])
   })
 
@@ -81,7 +82,7 @@ describe('persistent todo tree', () => {
     instance.overlay.update()
     expect(instance.render()).toContain('  ├─ ☑ ~done~')
     instance.overlay.hideCompletedFromPreviousRun()
-    expect(instance.render()).toEqual([' TODO · 0/1', '  └─ ☐ next'])
+    expect(instance.render()).toEqual([' TODO · 0/1', '  └─ ☐ next', ''])
   })
 
   test('keeps active rows within the row budget', () => {
@@ -102,7 +103,7 @@ describe('persistent todo tree', () => {
       todo('d', 'in_progress'),
     ])
     instance.overlay.update()
-    expect(instance.render()).toEqual([' TODO · 3/4', '  ├─ ☐ ~c~', '  └─ ☐ d'])
+    expect(instance.render()).toEqual([' TODO · 3/4', '  ├─ ☐ ~c~', '  └─ ☐ d', ''])
   })
 
   test('keeps the widget registered and renders nothing when empty', () => {
