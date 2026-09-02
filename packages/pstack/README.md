@@ -84,6 +84,8 @@ The `poteto-agent` defaults to background mode. Mutable background work runs in 
 
 Inspect a completed writer with `TaskControl`. Use `action: "join"` only when the parent workspace must receive its accepted patch.
 
+Background results arrive as follow-up messages. The skills do not poll. When the parent is blocked with no other work, it calls `TaskControl` with `action: "wait"`, which streams the job tree until the first Task settles.
+
 ## Stack backends
 
 Poteto supports Graphite `gt` and GitHub `github/gh-stack`.

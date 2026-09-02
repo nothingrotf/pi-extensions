@@ -27,7 +27,7 @@ Use `todo_write` to create one item per phase before you launch anything.
 
 ## Phase B: Fan out
 
-Spawn all N workers in one message with parallel `Task` calls. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Native `Task` notifications report completion. Do not poll.
+Spawn all N workers in one message with parallel `Task` calls. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
 
 Use `readonly: true` for static analysis. A worker that runs shell verification must be mutable and isolated. Keep its incidental patch unjoined unless the parent accepts it.
 
