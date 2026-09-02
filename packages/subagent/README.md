@@ -138,7 +138,33 @@ TaskControl({
 
 A root join accepts only a root-scoped writer. A child Task receives a scope-bound `TaskControl` for its direct descendants.
 
-The scope-bound tool supports status, list, steer, cancel, and join actions.
+Wait for background Tasks:
+
+```ts
+TaskControl({
+  action: 'wait',
+  agent_ids: ['<agent-id>'],
+  timeout_ms: 300000,
+})
+```
+
+Omit `agent_ids` to watch every running Task. The call returns on the first of: a watched Task settles, the timeout elapses, or the call is aborted. It does not wait for every Task. Re-issue `wait` to keep waiting. Each settled result still arrives as a follow-up message.
+
+While `wait` runs, the tool result streams the same job tree as a foreground Task call, and the working loader shows `Waiting on N jobs`. After the call settles, the tree keeps only the settled rows.
+
+Use `wait` only when the parent has no other work. The model receives that rule in the tool description.
+
+Take a status snapshot without waiting:
+
+```ts
+TaskControl({
+  action: 'jobs',
+})
+```
+
+The result renders the job tree with every Task, including running rows.
+
+The scope-bound tool supports status, list, steer, cancel, join, wait, and jobs actions.
 
 ## Coordination runs
 

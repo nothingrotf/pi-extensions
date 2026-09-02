@@ -133,6 +133,7 @@ export interface JobTreeOptions {
   expanded: boolean
   isPartial: boolean
   now: number
+  retainRunning?: boolean
   width: number
 }
 
@@ -148,7 +149,10 @@ export function renderJobTree(
   options: JobTreeOptions,
   theme: SubagentTheme,
 ): string[] {
-  const visible = options.isPartial ? jobs : jobs.filter((job) => job.status !== 'running')
+  const visible =
+    options.isPartial || options.retainRunning === true
+      ? jobs
+      : jobs.filter((job) => job.status !== 'running')
   if (visible.length === 0) return []
   const running = visible.filter((job) => job.status === 'running').length
   const failed = visible.some((job) => job.status === 'failed')

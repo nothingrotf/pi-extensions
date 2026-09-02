@@ -1,9 +1,24 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import type {
+  AgentToolUpdateCallback,
+  ExtensionAPI,
+  ExtensionContext,
+} from '@earendil-works/pi-coding-agent'
+import { type Component, Text } from '@earendil-works/pi-tui'
 import { type StaticDecode, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import type { SubagentControllerHost } from './controller.ts'
+import { oneLineLabel, type SubagentTheme } from './format.ts'
 import type { IsolationDestination } from './isolation.ts'
+import {
+  formatJobDuration,
+  type JobProgressDetails,
+  type JobSnapshot,
+  JobTree,
+  jobTitle,
+  toJobSnapshot,
+} from './jobs.ts'
+import { JobProgress, type JobProgressHost } from './progress.ts'
 import type {
   CancelReceipt,
   SteerReceipt,
@@ -15,6 +30,8 @@ import type {
 
 const MAX_LIST_RESULTS = 20
 const DEFAULT_LIST_RESULTS = 10
+const DEFAULT_WAIT_MS = 300_000
+const MAX_WAIT_MS = 3_600_000
 
 const StatusInputSchema = Type.Object(
   {
@@ -50,6 +67,31 @@ const JoinInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
+const WaitInputSchema = Type.Object(
+  {
+    action: Type.Literal('wait'),
+    agent_ids: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        description: 'Narrow the wait to these agents. Omit to watch every running Task.',
+        minItems: 1,
+      }),
+    ),
+    timeout_ms: Type.Optional(
+      Type.Integer({
+        description: 'Return after this many milliseconds when nothing settles. Default 300000.',
+        maximum: MAX_WAIT_MS,
+        minimum: 1_000,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+)
+
+const JobsInputSchema = Type.Object(
+  { action: Type.Literal('jobs') },
+  { additionalProperties: false },
+)
+
 const ListInputSchema = Type.Object(
   {
     action: Type.Literal('list'),
@@ -65,6 +107,8 @@ export const TaskControlInputSchema = Type.Union([
   CancelInputSchema,
   JoinInputSchema,
   ListInputSchema,
+  WaitInputSchema,
+  JobsInputSchema,
 ])
 
 export type TaskControlInput = StaticDecode<typeof TaskControlInputSchema>
@@ -136,6 +180,26 @@ export type TaskControlDetails =
       tasks: TaskStatusSummary[]
       total: number
     }
+  | TaskWaitDetails
+  | { action: 'jobs'; jobs: JobSnapshot[] }
+  | JobProgressDetails
+
+export interface TaskWaitDetails {
+  action: 'wait'
+  jobs: JobSnapshot[]
+  outcome: 'settled' | 'timeout' | 'aborted' | 'idle'
+  settled: string[]
+}
+
+export interface TaskControlExecution {
+  onUpdate: AgentToolUpdateCallback<JobProgressDetails> | undefined
+  signal: AbortSignal | undefined
+}
+
+export type TaskControlRuntime = Pick<
+  SubagentRuntime,
+  'currentRevision' | 'handle' | 'joinStaged' | 'latestResult' | 'subscribe'
+>
 
 export interface TaskControlScope {
   allows: (agentId: string) => boolean
@@ -160,7 +224,7 @@ function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
   }
 }
 
-function status(runtime: SubagentRuntime, snapshot: SubagentSnapshot): TaskStatus {
+function status(runtime: TaskControlRuntime, snapshot: SubagentSnapshot): TaskStatus {
   return {
     ...summary(snapshot),
     context_state: snapshot.contextState ?? null,
@@ -175,11 +239,11 @@ function status(runtime: SubagentRuntime, snapshot: SubagentSnapshot): TaskStatu
   }
 }
 
-function activeHandle(runtime: SubagentRuntime, agentId: string): SubagentHandle | undefined {
+function activeHandle(runtime: TaskControlRuntime, agentId: string): SubagentHandle | undefined {
   return runtime.handle(agentId)
 }
 
-function inactiveSteerReceipt(runtime: SubagentRuntime, agentId: string): SteerReceipt {
+function inactiveSteerReceipt(runtime: TaskControlRuntime, agentId: string): SteerReceipt {
   return {
     reason: runtime.latestResult(agentId) === undefined ? 'not-active' : 'terminal',
     revision: runtime.currentRevision,
@@ -187,23 +251,134 @@ function inactiveSteerReceipt(runtime: SubagentRuntime, agentId: string): SteerR
   }
 }
 
-function inactiveCancelReceipt(runtime: SubagentRuntime, agentId: string): CancelReceipt {
+function inactiveCancelReceipt(runtime: TaskControlRuntime, agentId: string): CancelReceipt {
   return {
     revision: runtime.currentRevision,
     status: runtime.latestResult(agentId) === undefined ? 'not-found' : 'already-terminal',
   }
 }
 
-function serialize(details: TaskControlDetails): string {
+function jobLine(job: JobSnapshot): string {
+  return `- ${job.agentId} ${job.status} "${oneLineLabel(job.description, 80)}" ${formatJobDuration(job.durationMs)}`
+}
+
+function jobsText(jobs: readonly JobSnapshot[]): string {
+  return jobs.length === 0 ? 'No jobs.' : jobs.map(jobLine).join('\n')
+}
+
+export function serializeTaskControl(details: TaskControlDetails): string {
+  if ('status' in details) return jobTitle(details.jobs)
+  if (details.action === 'jobs') return `${jobTitle(details.jobs)}\n${jobsText(details.jobs)}`
+  if (details.action === 'wait') {
+    const head =
+      details.outcome === 'idle'
+        ? 'No running jobs to wait on.'
+        : details.outcome === 'settled'
+          ? `Settled: ${details.settled.join(', ')}. Each result arrives as a follow-up message.`
+          : details.outcome === 'timeout'
+            ? 'Wait window elapsed. Re-issue wait to keep waiting.'
+            : 'Wait aborted.'
+    return `${head}\n${jobsText(details.jobs)}`
+  }
   return JSON.stringify(details, null, 2)
+}
+
+function watchedJobs(
+  scope: TaskControlScope,
+  ids: ReadonlySet<string>,
+  now: number,
+): JobSnapshot[] {
+  return scope
+    .snapshots()
+    .filter((snapshot) => ids.has(snapshot.agentId) && scope.allows(snapshot.agentId))
+    .map((snapshot) => toJobSnapshot(snapshot, now))
+}
+
+export type WaitInput = StaticDecode<typeof WaitInputSchema>
+
+export async function waitForJobs(
+  input: WaitInput,
+  host: JobProgressHost,
+  runtime: Pick<TaskControlRuntime, 'subscribe'>,
+  scope: TaskControlScope,
+  execution: TaskControlExecution,
+): Promise<TaskWaitDetails> {
+  const running = scope
+    .snapshots()
+    .filter((snapshot) => snapshot.running && scope.allows(snapshot.agentId))
+    .map((snapshot) => snapshot.agentId)
+  const requested = input.agent_ids?.map((id) => id.trim())
+  const ids = new Set(
+    requested === undefined ? running : requested.filter((id) => running.includes(id)),
+  )
+  if (ids.size === 0) {
+    return { action: 'wait', jobs: [], outcome: 'idle', settled: [] }
+  }
+  const progress = new JobProgress(
+    {
+      listSnapshots: () => scope.snapshots(),
+      subscribe: (listener) => runtime.subscribe(listener),
+    },
+    host,
+    execution.onUpdate,
+  )
+  for (const id of ids) progress.started(id)
+  const settledIds = (): string[] =>
+    watchedJobs(scope, ids, Date.now())
+      .filter((job) => job.status !== 'running')
+      .map((job) => job.agentId)
+  try {
+    const outcome = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
+      let unsubscribe = (): void => undefined
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = (value: 'settled' | 'timeout' | 'aborted'): void => {
+        unsubscribe()
+        if (timer !== undefined) clearTimeout(timer)
+        execution.signal?.removeEventListener('abort', onAbort)
+        resolve(value)
+      }
+      const onAbort = (): void => finish('aborted')
+      const check = (): void => {
+        if (settledIds().length > 0) finish('settled')
+      }
+      if (execution.signal?.aborted === true) {
+        finish('aborted')
+        return
+      }
+      execution.signal?.addEventListener('abort', onAbort)
+      unsubscribe = runtime.subscribe(check)
+      timer = setTimeout(() => finish('timeout'), input.timeout_ms ?? DEFAULT_WAIT_MS)
+      check()
+    })
+    return {
+      action: 'wait',
+      jobs: watchedJobs(scope, ids, Date.now()),
+      outcome,
+      settled: settledIds(),
+    }
+  } finally {
+    progress.stop()
+  }
 }
 
 export async function executeTaskControl(
   input: TaskControlInput,
   ctx: ExtensionContext,
-  runtime: SubagentRuntime,
+  runtime: TaskControlRuntime,
   scope: TaskControlScope,
+  execution: TaskControlExecution = { onUpdate: undefined, signal: undefined },
 ): Promise<TaskControlDetails> {
+  if (input.action === 'wait') return waitForJobs(input, ctx, runtime, scope, execution)
+  if (input.action === 'jobs') {
+    const now = Date.now()
+    return {
+      action: 'jobs',
+      jobs: scope
+        .snapshots()
+        .filter((snapshot) => scope.allows(snapshot.agentId))
+        .map((snapshot) => toJobSnapshot(snapshot, now)),
+    }
+  }
   if (input.action === 'status') {
     const agentId = input.agent_id.trim()
     const snapshot = scope
@@ -306,6 +481,49 @@ export async function executeTaskControl(
   }
 }
 
+export function renderTaskControlCall(input: TaskControlInput, theme: SubagentTheme): Component {
+  const title = theme.fg('toolTitle', theme.bold('TaskControl'))
+  const target =
+    input.action === 'wait'
+      ? input.agent_ids === undefined
+        ? 'all running jobs'
+        : `${input.agent_ids.length} job${input.agent_ids.length === 1 ? '' : 's'}`
+      : input.action === 'jobs' || input.action === 'list'
+        ? ''
+        : input.agent_id
+  return new Text(
+    `${title} ${theme.fg('accent', input.action)}${target === '' ? '' : ` ${theme.fg('muted', target)}`}`,
+    0,
+    0,
+  )
+}
+
+export function renderTaskControlResult(
+  details: TaskControlDetails | undefined,
+  text: string,
+  options: { expanded: boolean; isPartial: boolean },
+  theme: SubagentTheme,
+): Component {
+  if (details === undefined) return new Text(text, 0, 0)
+  if ('status' in details) {
+    return new JobTree(details.jobs, { expanded: options.expanded, isPartial: true }, theme)
+  }
+  if (details.action === 'wait') {
+    return new JobTree(details.jobs, { expanded: options.expanded, isPartial: false }, theme)
+  }
+  if (details.action === 'jobs') {
+    return new JobTree(
+      details.jobs,
+      { expanded: options.expanded, isPartial: false, retainRunning: true },
+      theme,
+    )
+  }
+  return new Text(text, 0, 0)
+}
+
+export const taskControlDescription =
+  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. wait blocks until the first watched job settles, the timeout elapses, or the call is aborted; use it only when you have no other work. jobs returns a status snapshot without waiting. Steer only queues text. Cancel prevents later integration only for isolated writers.'
+
 export function registerTaskControl(
   pi: ExtensionAPI,
   host: SubagentControllerHost,
@@ -320,20 +538,28 @@ export function registerTaskControl(
     steer: (handle, message) => host.steer(handle, message),
   }
   pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails>({
-    description:
-      'Inspect, steer, cancel, or join an existing Task without resume. Steer only queues text. Cancel prevents later integration only for isolated writers.',
-    execute: async (_callId, rawInput, _signal, _onUpdate, ctx) => {
+    description: taskControlDescription,
+    execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
       const details = await executeTaskControl(
         Value.Decode(TaskControlInputSchema, rawInput),
         ctx,
         runtime,
         scope,
+        { onUpdate, signal },
       )
-      return { content: [{ text: serialize(details), type: 'text' }], details }
+      return { content: [{ text: serializeTaskControl(details), type: 'text' }], details }
     },
     executionMode: 'parallel',
     label: 'Task Control',
     name: 'TaskControl',
     parameters: TaskControlInputSchema,
+    renderCall: (args, theme) => renderTaskControlCall(args, theme),
+    renderResult: (result, options, theme) =>
+      renderTaskControlResult(
+        result.details,
+        result.content.find((item) => item.type === 'text')?.text ?? '',
+        options,
+        theme,
+      ),
   })
 }

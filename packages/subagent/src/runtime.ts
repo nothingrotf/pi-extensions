@@ -24,7 +24,16 @@ import {
   createChildSession,
   createChildSessionManager,
 } from './child.ts'
-import { executeTaskControl, TaskControlInputSchema, type TaskControlScope } from './control.ts'
+import {
+  executeTaskControl,
+  renderTaskControlCall,
+  renderTaskControlResult,
+  serializeTaskControl,
+  taskControlDescription,
+  type TaskControlDetails,
+  TaskControlInputSchema,
+  type TaskControlScope,
+} from './control.ts'
 import { resolveInvocationCwd, resolveTools } from './execution.ts'
 import { activitySnippet, describeCall, oneLineLabel } from './format.ts'
 import { commonDirectory, repositoryRoot } from './git-isolation.ts'
@@ -987,10 +996,9 @@ export class SubagentRuntime {
   private scopeBoundTaskControlExtension(): InlineExtension {
     return {
       factory: (pi) => {
-        pi.registerTool({
-          description:
-            'Inspect, steer, cancel, or join a direct child Task. Access stays within this Task scope.',
-          execute: async (_callId, rawInput, _signal, _onUpdate, ctx) => {
+        pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails>({
+          description: `${taskControlDescription} Access stays within this Task scope.`,
+          execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
             const callerId = ctx.sessionManager.getSessionId()
             const caller = this.active.get(callerId)
             if (caller === undefined) throw new Error('The calling Task is not active.')
@@ -1021,15 +1029,24 @@ export class SubagentRuntime {
               ctx,
               this,
               scope,
+              { onUpdate, signal },
             )
             return {
-              content: [{ text: JSON.stringify(details, null, 2), type: 'text' }],
+              content: [{ text: serializeTaskControl(details), type: 'text' }],
               details,
             }
           },
           label: 'Task Control',
           name: 'TaskControl',
           parameters: TaskControlInputSchema,
+          renderCall: (args, theme) => renderTaskControlCall(args, theme),
+          renderResult: (result, options, theme) =>
+            renderTaskControlResult(
+              result.details,
+              result.content.find((item) => item.type === 'text')?.text ?? '',
+              options,
+              theme,
+            ),
         })
       },
       hidden: true,
