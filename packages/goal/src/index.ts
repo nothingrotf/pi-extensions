@@ -162,16 +162,38 @@ function truncate(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, width - 1)}…` : text
 }
 
+const GOAL_ICON = '◎'
+
+function goalStatusLine(
+  options: { badge?: string; description?: string; icon: string; meta?: readonly string[] },
+  theme: Theme,
+): string {
+  let line = `${options.icon} ${theme.fg('accent', 'Goal')}`
+  if (options.description !== undefined) line += `: ${theme.fg('muted', options.description)}`
+  if (options.badge !== undefined) line += ` ${options.badge}`
+  const meta = (options.meta ?? []).filter((part) => part.length > 0)
+  if (meta.length > 0) line += ` ${theme.fg('dim', meta.join(' · '))}`
+  return line
+}
+
 function renderGoalResult(details: GoalToolDetails, theme: Theme): string {
-  const title = theme.fg('toolTitle', theme.bold('Goal'))
-  const op = theme.fg('dim', describeOp(details.op))
+  const description = describeOp(details.op)
   const goalRecord = details.goal
   if (goalRecord === null) {
-    return `${title} ${op} ${theme.fg('warning', 'no active goal')}`
+    return goalStatusLine(
+      {
+        description,
+        icon: theme.fg('warning', '⚠'),
+        meta: [theme.fg('warning', 'no active goal')],
+      },
+      theme,
+    )
   }
-  const badge = theme.fg(goalBadgeColor(goalRecord.status), `[${goalRecord.status}]`)
-  const lines = [`${title} ${op} ${badge}`]
-  lines.push(theme.italic(theme.fg('muted', `"${truncate(goalRecord.objective.trim(), 120)}"`)))
+  const badge = theme.fg(goalBadgeColor(goalRecord.status), `⟦${goalRecord.status}⟧`)
+  const lines = [goalStatusLine({ badge, description, icon: theme.fg('accent', GOAL_ICON) }, theme)]
+  lines.push(
+    `  ${theme.italic(theme.fg('muted', `"${truncate(goalRecord.objective.trim(), 120)}"`))}`,
+  )
   const used = formatTokens(goalRecord.tokensUsed)
   const tokensLine =
     goalRecord.tokenBudget !== undefined
@@ -181,9 +203,12 @@ function renderGoalResult(details: GoalToolDetails, theme: Theme): string {
   if (goalRecord.timeUsedSeconds > 0) {
     meta.push(`${formatDuration(goalRecord.timeUsedSeconds * 1000)} elapsed`)
   }
-  lines.push(theme.fg('dim', meta.join(' · ')))
+  lines.push(`  ${theme.fg('dim', meta.join(' · '))}`)
   if (details.completionBudgetReport !== null) {
-    lines.push(theme.fg('muted', details.completionBudgetReport))
+    lines.push(`  ${theme.fg('dim', 'Report')}`)
+    for (const line of details.completionBudgetReport.split('\n')) {
+      lines.push(`    ${theme.fg('muted', line)}`)
+    }
   }
   return lines.join('\n')
 }
@@ -253,7 +278,7 @@ export default function goal(pi: ExtensionAPI): void {
         ? formatTokens(goalState.tokensUsed)
         : `${formatTokens(goalState.tokensUsed)}/${formatTokens(goalState.tokenBudget)}`
     const label = state.enabled ? goalState.status : 'paused'
-    context.ui.setStatus(statusKey, `goal ${label} ${tokens}`)
+    context.ui.setStatus(statusKey, `Goal ${label} ${tokens}`)
   }
 
   const syncToolExposure = (exposed: boolean) => {
@@ -844,25 +869,33 @@ export default function goal(pi: ExtensionAPI): void {
       }
     },
     renderCall(args, theme) {
-      const parts = [
-        theme.fg('toolTitle', theme.bold('Goal')),
-        theme.fg('dim', describeOp(args.op)),
-      ]
+      const meta: string[] = []
       const objective = args.objective?.trim()
       if (args.op === 'create' && objective !== undefined && objective.length > 0) {
-        parts.push(theme.italic(theme.fg('muted', `"${truncate(objective, 80)}"`)))
+        meta.push(theme.italic(theme.fg('muted', `"${truncate(objective, 80)}"`)))
       }
       if (args.op === 'create' && args.token_budget !== undefined) {
-        parts.push(theme.fg('dim', `budget ${formatTokens(args.token_budget)}`))
+        meta.push(`budget ${formatTokens(args.token_budget)}`)
       }
-      return new Text(parts.join(' '), 0, 0)
+      return new Text(
+        goalStatusLine(
+          { description: describeOp(args.op), icon: theme.fg('muted', '⏳'), meta },
+          theme,
+        ),
+        0,
+        0,
+      )
     },
     renderResult(result, _options, theme) {
       const details = decodeGoalToolDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Goal tool failed'
-        return new Text(theme.fg('error', message), 0, 0)
+        return new Text(
+          `${goalStatusLine({ icon: theme.fg('error', '✘') }, theme)}\n  ${theme.fg('error', message)}`,
+          0,
+          0,
+        )
       }
       return new Text(renderGoalResult(details, theme), 0, 0)
     },

@@ -44,7 +44,7 @@ describe('compact HUD', () => {
 
     expect(line).toContain('…/projects/pi-extensions · feature/hud [+1 !2]')
     expect(line).toContain(' · anthropic/Opus 4.8 (High)')
-    expect(line).toContain(' · ⚑ goal: shipping')
+    expect(line).toContain(' · 🎯 goal: shipping')
     expect(line).toContain('5h 3% 3h37m   wk 92% 1d19h · 42%/1.0M')
     expect(line).not.toContain('ctx ')
     expect(line).not.toContain('\n')

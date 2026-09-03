@@ -255,7 +255,7 @@ describe('goal lifecycle', () => {
     })
     expect(instance.activeTools()).toContain('goal')
     expect(instance.userMessages).toEqual([{ content: 'ship the release', options: undefined }])
-    expect(instance.statuses.get('pi-goal')).toBe('goal active 0')
+    expect(instance.statuses.get('pi-goal')).toBe('Goal active 0')
     const injected = await instance.emit('before_agent_start', { systemPrompt: 'base' })
     expect(injected.message.customType).toBe('goal-mode-context')
     expect(injected.message.content).toContain('<objective>\nship the release\n</objective>')
@@ -349,7 +349,7 @@ describe('goal lifecycle', () => {
       text: 'Goal paused. Use /goal resume to continue.',
       level: 'info',
     })
-    expect(instance.statuses.get('pi-goal')).toBe('goal paused 0')
+    expect(instance.statuses.get('pi-goal')).toBe('Goal paused 0')
     expect(instance.activeTools()).toContain('goal')
   })
 
@@ -378,7 +378,7 @@ describe('goal lifecycle', () => {
       timeUsedSeconds: 3,
       status: 'active',
     })
-    expect(instance.statuses.get('pi-goal')).toBe('goal active 6/10')
+    expect(instance.statuses.get('pi-goal')).toBe('Goal active 6/10')
 
     await instance.emit('message_end', { message: assistant({ input: 3, output: 3 }) })
     await instance.emit('tool_execution_end', {
@@ -650,15 +650,17 @@ describe('goal lifecycle', () => {
     const instance = harness()
     await instance.emit('session_start', { reason: 'startup' })
     expect(instance.renderCall({ op: 'create', objective: 'ship it', token_budget: 5000 })).toBe(
-      'Goal set <muted>"ship it"</muted> budget 5,000',
+      '<muted>⏳</muted> <accent>Goal</accent>: <muted>set</muted> <muted>"ship it"</muted> · budget 5,000',
     )
-    expect(instance.renderCall({ op: 'get' })).toBe('Goal check')
+    expect(instance.renderCall({ op: 'get' })).toBe(
+      '<muted>⏳</muted> <accent>Goal</accent>: <muted>check</muted>',
+    )
     const created = await instance.tool({ op: 'create', objective: 'ship it', token_budget: 5000 })
     expect(instance.renderResult(created)).toBe(
       [
-        'Goal set <accent>[active]</accent>',
-        '<muted>"ship it"</muted>',
-        '0 / 5,000 tokens (5,000 left)',
+        '<accent>◎</accent> <accent>Goal</accent>: <muted>set</muted> <accent>⟦active⟧</accent>',
+        '  <muted>"ship it"</muted>',
+        '  0 / 5,000 tokens (5,000 left)',
       ].join('\n'),
     )
     await instance.emit('agent_start')
@@ -667,23 +669,26 @@ describe('goal lifecycle', () => {
     const completed = await instance.tool({ op: 'complete' })
     expect(instance.renderResult(completed)).toBe(
       [
-        'Goal complete <success>[complete]</success>',
-        '<muted>"ship it"</muted>',
-        '0 / 5,000 tokens (5,000 left) · 1m 2s elapsed',
-        '<muted>Goal achieved. Report final budget usage to the user: tokens used: 0 of 5000; time used: 62 seconds.</muted>',
+        '<accent>◎</accent> <accent>Goal</accent>: <muted>complete</muted> <success>⟦complete⟧</success>',
+        '  <muted>"ship it"</muted>',
+        '  0 / 5,000 tokens (5,000 left) · 1m 2s elapsed',
+        '  Report',
+        '    <muted>Goal achieved. Report final budget usage to the user: tokens used: 0 of 5000; time used: 62 seconds.</muted>',
       ].join('\n'),
     )
     const dropped = await instance.tool({ op: 'get' })
-    expect(instance.renderResult(dropped)).toContain('<success>[complete]</success>')
+    expect(instance.renderResult(dropped)).toContain('<success>⟦complete⟧</success>')
     expect(
       instance.renderResult({ content: [{ type: 'text', text: 'boom' }], details: undefined }),
-    ).toBe('boom')
+    ).toBe('✘ <accent>Goal</accent>\n  boom')
     expect(
       instance.renderResult({
         content: [],
         details: { op: 'get', goal: null, remainingTokens: null, completionBudgetReport: null },
       }),
-    ).toBe('Goal check <warning>no active goal</warning>')
+    ).toBe(
+      '<warning>⚠</warning> <accent>Goal</accent>: <muted>check</muted> <warning>no active goal</warning>',
+    )
   })
 
   test('does not continue while a scheduled or repeat loop is active', async () => {

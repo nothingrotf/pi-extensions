@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
 import {
@@ -38,8 +39,40 @@ const entryType = 'pi-loop-state'
 const repeatEntryType = 'pi-loop-repeat'
 const statusKey = 'pi-loop'
 const repeatDelayMs = 800
-const maximumTimerDelayMs = 2_147_483_647
 const maximumDelaySeconds = 8_000_000_000_000
+const LOOP_ICON = '↻'
+
+interface LoopNextDetails {
+  nextRunAt?: number | null
+  scheduled: boolean
+}
+
+interface LoopStopDetails {
+  stopped: boolean
+}
+
+const LoopNextSchema = Type.Object({
+  delaySeconds: Type.Integer({ minimum: 1, maximum: maximumDelaySeconds }),
+  prompt: Type.Optional(Type.String({ minLength: 1 })),
+  watch: Type.Optional(
+    Type.Object({
+      command: Type.String({ minLength: 1 }),
+      pattern: Type.Optional(Type.String({ minLength: 1 })),
+    }),
+  ),
+})
+
+const LoopStopSchema = Type.Object({ reason: Type.String({ minLength: 1 }) })
+
+function loopStatusLine(
+  options: { icon: string; meta?: readonly string[]; title: string },
+  theme: Theme,
+): string {
+  const meta = (options.meta ?? []).filter((part) => part.length > 0)
+  const suffix = meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''
+  return `${options.icon} ${theme.fg('accent', options.title)}${suffix}`
+}
+const maximumTimerDelayMs = 2_147_483_647
 
 function describeState(state: LoopState | null, repeat: RepeatState | null = null): string {
   if (repeat?.enabled === true && !isActiveLoop(state)) {
@@ -141,19 +174,15 @@ export default function loop(pi: ExtensionAPI): void {
             ? `${repeat.iterations}/${repeat.limit.initial}`
             : String(repeat.iterations)
         const phase = repeat.paused ? 'paused' : repeat.prompt === null ? 'waiting' : 'running'
-        ctx.ui.setStatus(statusKey, `loop repeat ${count} ${phase}`)
+        ctx.ui.setStatus(statusKey, `Loop ${phase} ${count}`)
         return
       }
       ctx.ui.setStatus(statusKey, undefined)
       return
     }
-    const cadence = state.mode === 'fixed' ? formatDuration(state.intervalMs) : 'dynamic'
-    const phase = state.pendingWake
-      ? 'pending'
-      : state.nextRunAt === null
-        ? 'awaiting next'
-        : cadence
-    ctx.ui.setStatus(statusKey, `loop ${state.iterations} ${phase}`)
+    const cadence = state.mode === 'fixed' ? `every ${formatDuration(state.intervalMs)}` : 'dynamic'
+    const phase = state.pendingWake ? 'running' : 'waiting'
+    ctx.ui.setStatus(statusKey, `Loop ${phase} ${state.iterations} ${cadence}`)
   }
 
   const persist = (ctx: ExtensionContext) => {
@@ -558,22 +587,40 @@ export default function loop(pi: ExtensionAPI): void {
     dispatchPending(ctx)
   })
 
-  pi.registerTool({
+  pi.registerTool<typeof LoopNextSchema, LoopNextDetails>({
     name: 'loop_next',
     label: 'Loop next',
     description: 'Set the next wake for an active dynamic loop. An optional watcher wakes earlier.',
     promptSnippet: 'Schedule the next wake for an active dynamic loop',
-    parameters: Type.Object({
-      delaySeconds: Type.Integer({ minimum: 1, maximum: maximumDelaySeconds }),
-      prompt: Type.Optional(Type.String({ minLength: 1 })),
-      watch: Type.Optional(
-        Type.Object({
-          command: Type.String({ minLength: 1 }),
-          pattern: Type.Optional(Type.String({ minLength: 1 })),
-        }),
-      ),
-    }),
+    parameters: LoopNextSchema,
     executionMode: 'sequential',
+    renderCall(args, theme) {
+      const meta = [`in ${formatDuration(args.delaySeconds * 1_000)}`]
+      if (args.watch !== undefined) meta.push(`watch ${trimmedText(args.watch.command) ?? ''}`)
+      if (args.prompt !== undefined) meta.push('new prompt')
+      return new Text(
+        loopStatusLine({ icon: theme.fg('muted', '⏳'), meta, title: 'Loop next' }, theme),
+        0,
+        0,
+      )
+    },
+    renderResult(result, _options, theme) {
+      const text = result.content.find((item) => item.type === 'text')
+      const message = text?.type === 'text' ? text.text : ''
+      const scheduled = result.details?.scheduled === true
+      return new Text(
+        loopStatusLine(
+          {
+            icon: scheduled ? theme.fg('accent', LOOP_ICON) : theme.fg('warning', '⚠'),
+            meta: [message],
+            title: 'Loop next',
+          },
+          theme,
+        ),
+        0,
+        0,
+      )
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isDynamicLoop(state)) {
         return {
@@ -630,13 +677,44 @@ export default function loop(pi: ExtensionAPI): void {
     },
   })
 
-  pi.registerTool({
+  pi.registerTool<typeof LoopStopSchema, LoopStopDetails>({
     name: 'loop_stop',
     label: 'Loop stop',
     description: 'Stop the active loop and cancel its timer and watcher.',
     promptSnippet: 'Stop an active loop',
-    parameters: Type.Object({ reason: Type.String({ minLength: 1 }) }),
+    parameters: LoopStopSchema,
     executionMode: 'sequential',
+    renderCall(args, theme) {
+      return new Text(
+        loopStatusLine(
+          {
+            icon: theme.fg('muted', '⏳'),
+            meta: [trimmedText(args.reason) ?? ''],
+            title: 'Loop stop',
+          },
+          theme,
+        ),
+        0,
+        0,
+      )
+    },
+    renderResult(result, _options, theme) {
+      const text = result.content.find((item) => item.type === 'text')
+      const message = text?.type === 'text' ? text.text : ''
+      const stopped = result.details?.stopped === true
+      return new Text(
+        loopStatusLine(
+          {
+            icon: stopped ? theme.fg('warning', '⏹') : theme.fg('warning', '⚠'),
+            meta: [message],
+            title: 'Loop stop',
+          },
+          theme,
+        ),
+        0,
+        0,
+      )
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const reason = trimmedText(params.reason)
       if (!isActiveLoop(state)) {

@@ -350,12 +350,12 @@ describe('repeat loop', () => {
       expect(instance.messages).toEqual([
         { prompt: 'fix the tests', options: { expandPromptTemplates: true } },
       ])
-      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 0/2 running')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop running 0/2')
 
       await instance.emit('agent_settled')
       await vi.advanceTimersByTimeAsync(800)
       expect(instance.messages).toHaveLength(2)
-      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 1/2 running')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop running 1/2')
       await instance.emit('agent_settled')
       await vi.advanceTimersByTimeAsync(800)
       expect(instance.messages).toHaveLength(3)
@@ -379,7 +379,7 @@ describe('repeat loop', () => {
       expect(instance.notices.at(-1).text).toContain(
         'Your next prompt will repeat after each turn.',
       )
-      expect(instance.statuses.get('pi-loop')).toBe('loop repeat 0 waiting')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop waiting 0')
       await instance.emit('input', { text: '/loop status', source: 'interactive' })
       expect(latestRepeat(instance).prompt).toBeNull()
       await instance.emit('input', { text: 'keep going', source: 'interactive' })
@@ -502,6 +502,6 @@ describe('repeat loop', () => {
     await resumed.emit('session_start')
     expect(latestRepeat(resumed).paused).toBe(true)
     expect(resumed.notices.at(-1).text).toContain('Repeat loop paused on session resume.')
-    expect(resumed.statuses.get('pi-loop')).toBe('loop repeat 4 paused')
+    expect(resumed.statuses.get('pi-loop')).toBe('Loop paused 4')
   })
 })

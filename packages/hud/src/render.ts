@@ -89,17 +89,34 @@ export function branchSegment(theme: HudTheme, git: GitStatus): string {
   return flags.length > 0 ? `${branch} ${color(theme, 'dim', `[${flags.join(' ')}]`)}` : branch
 }
 
+export const loopStatusKey = 'pi-loop'
+
 export function goalSegment(theme: HudTheme, statuses: ReadonlyMap<string, string>): string {
   const text = sanitizeScalar(statuses.get(goalStatusKey))
   if (!text) {
     return ''
   }
-  const token = /achieved|complete/iu.test(text)
-    ? 'success'
-    : /unmet|abandoned|dropped|paused|budget-limited|attention/iu.test(text)
-      ? 'warning'
-      : 'accent'
-  return `${color(theme, token, '⚑')} ${color(theme, 'muted', text)}`
+  const glyph = /achieved|complete/iu.test(text)
+    ? '✔'
+    : /paused/iu.test(text)
+      ? '⏸'
+      : /budget-limited|attention|unmet/iu.test(text)
+        ? '⚠'
+        : /abandoned|dropped/iu.test(text)
+          ? '⏹'
+          : '🎯'
+  const token: HudColor =
+    glyph === '✔' ? 'success' : glyph === '⏹' ? 'dim' : glyph === '🎯' ? 'accent' : 'warning'
+  return color(theme, token, `${glyph} ${text}`)
+}
+
+export function loopSegment(theme: HudTheme, statuses: ReadonlyMap<string, string>): string {
+  const text = sanitizeScalar(statuses.get(loopStatusKey))
+  if (!text) {
+    return ''
+  }
+  const paused = /paused/iu.test(text)
+  return color(theme, paused ? 'warning' : 'accent', `${paused ? '⏸' : '↻'} ${text}`)
 }
 
 export function usageSegment(theme: HudTheme, usage: UsageSnapshot | null): string {
@@ -142,10 +159,11 @@ export function renderHud(
   const branch = branchSegment(theme, state.git)
   const identity = modelSegment(theme, state)
   const goal = goalSegment(theme, statuses)
+  const loop = loopSegment(theme, statuses)
   const contextToken = state.contextPercent === null ? 'dim' : loadColor(state.contextPercent)
   const context = color(theme, contextToken, sanitizeScalar(state.contextLabel))
   const usage = usageSegment(theme, state.usage)
-  const left = [workspace, branch, identity, goal].filter(Boolean).join(separator)
+  const left = [workspace, branch, identity, goal, loop].filter(Boolean).join(separator)
   const right = [usage, context].filter(Boolean).join(separator)
   return [row(theme, width, left, right)]
 }
