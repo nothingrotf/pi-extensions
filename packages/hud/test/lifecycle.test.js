@@ -134,11 +134,11 @@ describe('HUD lifecycle', () => {
     await instance.emit('turn_start')
     expect(instance.widgetKeys()).toEqual(['hud-working'])
     const widget = instance.widget('hud-working')
-    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Working…')
+    expect(stripTerminalSequences(widget.render(80)[0])).toContain('waiting for the model')
     instance.emitEvent('hud:working-message', 'Waiting on 2 jobs')
     expect(stripTerminalSequences(widget.render(80)[0])).toContain('Waiting on 2 jobs')
     instance.emitEvent('hud:working-message', null)
-    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Working…')
+    expect(stripTerminalSequences(widget.render(80)[0])).toContain('waiting for the model')
     expect(stripTerminalSequences(widget.render(80)[0])).toMatch(/ · \d+s$/)
     await instance.emit('agent_end')
     expect(widget.render(80)).toEqual([])
@@ -146,8 +146,11 @@ describe('HUD lifecycle', () => {
     expect(instance.widgetKeys()).toEqual([])
   })
 
-  test('formats the elapsed counter', async () => {
-    const { formatElapsed } = await import('../src/working.ts')
+  test('formats the elapsed counter and the spinner', async () => {
+    const { formatElapsed, spinnerFrame } = await import('../src/working.ts')
+    expect(spinnerFrame(0)).toBe('⠋')
+    expect(spinnerFrame(80)).toBe('⠙')
+    expect(spinnerFrame(800)).toBe('⠋')
     expect(formatElapsed(400)).toBe('0s')
     expect(formatElapsed(9_400)).toBe('9s')
     expect(formatElapsed(62_000)).toBe('1m2s')

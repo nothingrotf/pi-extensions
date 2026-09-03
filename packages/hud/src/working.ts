@@ -14,9 +14,14 @@ export function decodeWorkingMessage<Input>(data: Input): string | null | undefi
   return Value.Check(WorkingMessageSchema, data) ? data : undefined
 }
 
-export const defaultWorkingMessage = 'Working…'
+export const defaultWorkingMessage = 'waiting for the model'
 const FRAME_MS = 33
-const ESC_ICON = '⎋'
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const SPINNER_ADVANCE_MS = 80
+
+export function spinnerFrame(now: number): string {
+  return SPINNER_FRAMES[Math.floor(now / SPINNER_ADVANCE_MS) % SPINNER_FRAMES.length] ?? '⠋'
+}
 
 export function formatElapsed(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000))
@@ -92,8 +97,9 @@ export class WorkingDock {
       invalidate: () => undefined,
       render: (width: number): string[] => {
         if (!this.active) return []
-        const elapsed = theme.fg('dim', ` · ${formatElapsed(Date.now() - this.startedAt)}`)
-        const line = ` ${theme.fg('muted', ESC_ICON)} ${shimmerText(this.text(), theme)}${elapsed}`
+        const now = Date.now()
+        const text = `${this.text()} · ${formatElapsed(now - this.startedAt)}`
+        const line = ` ${theme.fg('accent', spinnerFrame(now))} ${shimmerText(text, theme)}`
         return [truncateToWidth(line, width, '…'), '']
       },
     }
