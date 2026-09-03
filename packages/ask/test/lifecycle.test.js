@@ -62,9 +62,9 @@ function harness(mode = 'tui') {
       }
       promptDone(result)
     },
-    renderCall(input) {
+    renderCall(input, state = {}) {
       return tool
-        .renderCall(input, theme)
+        .renderCall(input, theme, { state })
         .render(120)
         .map((line) => line.trimEnd())
     },
@@ -73,6 +73,7 @@ function harness(mode = 'tui') {
         .renderResult(result, { expanded: false }, theme, {
           toolCallId: 'call-1',
           invalidate() {},
+          state: {},
         })
         .render(120)
         .map((line) => line.trimEnd())
@@ -118,8 +119,13 @@ describe('AskQuestion lifecycle', () => {
     const result = await pending
     expect(result.details.status).toBe('success')
     expect(result.content[0].text).toContain('language: ts (TypeScript)')
-    expect(instance.renderResult(result)).toContain('1. Which language?')
-    expect(instance.renderResult(result)).toContain('  [x] TypeScript')
+    expect(instance.renderResult(result)).toEqual([
+      '? Ask 1 question',
+      '[language] options:2',
+      'Which language?',
+      ' ◉ TypeScript',
+      ' ○ Python',
+    ])
   })
 
   it('returns async status and later sends a follow-up message', async () => {
@@ -131,7 +137,7 @@ describe('AskQuestion lifecycle', () => {
       questions: params.questions,
       originalToolCallId: 'call-1',
     })
-    expect(instance.renderResult(result)).toEqual(['Awaiting async responses'])
+    expect(instance.renderResult(result)).toEqual(['⏳ Ask awaiting async responses'])
     instance.completePrompt({
       kind: 'answered',
       answers: [{ questionId: 'language', selectedOptionIds: ['py'], freeformText: '' }],
@@ -154,11 +160,20 @@ describe('AskQuestion lifecycle', () => {
         options: { triggerTurn: true, deliverAs: 'followUp' },
       },
     ])
-    expect(instance.renderResult(result)).toContain('  [x] Python')
+    expect(instance.renderResult(result)).toContain(' ◉ Python')
   })
 
   it('renders the call title and question count', () => {
     const instance = harness()
-    expect(instance.renderCall(params)).toEqual(['AskQuestion Language (1)'])
+    expect(instance.renderCall(params)).toEqual([
+      '⏳ Ask Language · 1 question',
+      '[language] options:2',
+      'Which language?',
+      ' ○ TypeScript',
+      ' ○ Python',
+    ])
+    expect(instance.renderCall(params, { hasResult: true })).toEqual([
+      '⏳ Ask Language · 1 question',
+    ])
   })
 })

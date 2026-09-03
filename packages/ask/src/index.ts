@@ -5,10 +5,10 @@ import {
   type AskAnswer,
   type AskQuestionDetails,
   type AskQuestionInput,
+  type AskQuestionItem,
   AskQuestionSchema,
   asyncDetails,
   decodeAskQuestionDetails,
-  displayOptions,
   errorDetails,
   formatAnswers,
   normalizedTitle,
@@ -98,33 +98,113 @@ function answerForQuestion(
   return answers.find((answer) => answer.questionId === questionId)
 }
 
+const ASK_ICON = '?'
+
+interface AskRenderState {
+  hasResult?: boolean
+}
+
+function askStatusLine(
+  options: { icon: string; meta?: readonly string[]; title?: string },
+  theme: Theme,
+): string {
+  const meta = (options.meta ?? []).filter((part) => part.length > 0)
+  const suffix = meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''
+  return `${options.icon} ${theme.fg('accent', options.title ?? 'Ask')}${suffix}`
+}
+
+function optionMarker(multi: boolean, selected: boolean): string {
+  if (multi) return selected ? '☑' : '☐'
+  return selected ? '◉' : '○'
+}
+
+function questionLabel(question: AskQuestionItem, theme: Theme): string {
+  const meta: string[] = []
+  if (question.allowMultiple) meta.push('multi')
+  meta.push(`options:${question.options.length}`)
+  return `${theme.fg('dim', `[${question.id}]`)} ${theme.fg('dim', meta.join(' · '))}`
+}
+
+export function renderQuestionLines(question: AskQuestionItem, theme: Theme): string[] {
+  const lines = [questionLabel(question, theme), theme.fg('accent', question.prompt)]
+  for (const option of question.options) {
+    lines.push(
+      ` ${theme.fg('dim', optionMarker(question.allowMultiple, false))} ${theme.fg('muted', option.label)}`,
+    )
+  }
+  return lines
+}
+
+function renderAnswerLines(
+  question: AskQuestionItem,
+  answer: { freeformText: string; selectedOptionIds: readonly string[] } | undefined,
+  theme: Theme,
+): string[] {
+  const selected = new Set(answer?.selectedOptionIds ?? [])
+  const custom = answer !== undefined && answer.freeformText.length > 0
+  if (selected.size === 0 && !custom) {
+    return [` ${theme.fg('warning', '⚠')} ${theme.fg('warning', 'Cancelled')}`]
+  }
+  const lines: string[] = []
+  for (const option of question.options) {
+    const isSelected = selected.has(option.id)
+    const marker = optionMarker(question.allowMultiple, isSelected)
+    lines.push(
+      ` ${theme.fg(isSelected ? 'success' : 'dim', marker)} ${theme.fg(isSelected ? 'toolOutput' : 'muted', option.label)}`,
+    )
+  }
+  if (custom) {
+    const [first = '', ...rest] = answer.freeformText.split('\n')
+    lines.push(` ${theme.fg('success', '✔')} ${theme.fg('toolOutput', first)}`)
+    for (const line of rest) lines.push(`   ${theme.fg('toolOutput', line)}`)
+  }
+  return lines
+}
+
+export function renderCallLines(
+  args: { questions: readonly AskQuestionItem[]; title: string },
+  theme: Theme,
+): string[] {
+  const count = args.questions.length
+  const lines = [
+    askStatusLine(
+      {
+        icon: theme.fg('muted', '⏳'),
+        meta: [normalizedTitle(args.title), `${count} question${count === 1 ? '' : 's'}`],
+      },
+      theme,
+    ),
+  ]
+  args.questions.forEach((question, index) => {
+    if (index > 0) lines.push('')
+    lines.push(...renderQuestionLines(question, theme))
+  })
+  return lines
+}
+
 function renderSuccess(details: AskQuestionDetails, theme: Theme): Text {
   if (details.status !== 'success') {
     return new Text('', 0, 0)
   }
-  const lines: string[] = []
+  const answered = details.answers.some(
+    (answer) => answer.selectedOptionIds.length > 0 || answer.freeformText.length > 0,
+  )
+  const count = details.questions.length
+  const lines = [
+    askStatusLine(
+      {
+        icon: answered ? theme.fg('accent', ASK_ICON) : theme.fg('warning', '⚠'),
+        meta: [`${count} question${count === 1 ? '' : 's'}`],
+      },
+      theme,
+    ),
+  ]
   details.questions.forEach((question, index) => {
-    const answer = answerForQuestion(question.id, details.answers)
-    const selected = answer?.selectedOptionIds ?? []
-    const suffix = question.allowMultiple ? theme.fg('dim', ' (multi-select)') : ''
-    lines.push(`${index + 1}. ${question.prompt}${suffix}`)
-    for (const option of displayOptions(question)) {
-      if (option.kind === 'other') {
-        continue
-      }
-      const checked = selected.includes(option.id)
-      lines.push(
-        `  ${theme.fg(checked ? 'success' : 'dim', checked ? '[x]' : '[ ]')} ${theme.fg(checked ? 'success' : 'dim', option.label)}`,
-      )
-    }
-    if (answer !== undefined && answer.freeformText.length > 0) {
-      lines.push(
-        `  ${theme.fg('success', '[x]')} ${theme.fg('success', `Other: ${answer.freeformText}`)}`,
-      )
-    }
-    if (index < details.questions.length - 1) {
-      lines.push('')
-    }
+    if (index > 0) lines.push('')
+    lines.push(questionLabel(question, theme), theme.fg('accent', question.prompt))
+    lines.push(
+      ...renderAnswerLines(question, answerForQuestion(question.id, details.answers), theme),
+    )
   })
   return new Text(lines.join('\n'), 0, 0)
 }
@@ -134,11 +214,23 @@ function renderDetails(details: AskQuestionDetails, theme: Theme): Text {
     case 'success':
       return renderSuccess(details, theme)
     case 'rejected':
-      return new Text(theme.fg('warning', details.reason), 0, 0)
+      return new Text(
+        `${askStatusLine({ icon: theme.fg('warning', '⚠'), meta: ['rejected'] }, theme)}\n  ${theme.fg('warning', details.reason)}`,
+        0,
+        0,
+      )
     case 'error':
-      return new Text(theme.fg('error', `Error: ${details.errorMessage}`), 0, 0)
+      return new Text(
+        `${askStatusLine({ icon: theme.fg('error', '✘') }, theme)}\n  ${theme.fg('error', details.errorMessage)}`,
+        0,
+        0,
+      )
     case 'async':
-      return new Text(theme.fg('warning', 'Awaiting async responses'), 0, 0)
+      return new Text(
+        askStatusLine({ icon: theme.fg('muted', '⏳'), meta: ['awaiting async responses'] }, theme),
+        0,
+        0,
+      )
   }
 }
 
@@ -147,7 +239,7 @@ export default function ask(pi: ExtensionAPI): void {
   const asyncResults = new Map<string, AskQuestionDetails>()
   const asyncInvalidators = new Map<string, () => void>()
 
-  pi.registerTool({
+  pi.registerTool<typeof AskQuestionSchema, AskQuestionDetails, AskRenderState>({
     name: 'AskQuestion',
     label: 'Ask question',
     description,
@@ -210,15 +302,15 @@ export default function ask(pi: ExtensionAPI): void {
         details,
       }
     },
-    renderCall(args, theme) {
-      const title = normalizedTitle(args.title)
-      return new Text(
-        `${theme.fg('toolTitle', theme.bold('AskQuestion'))} ${theme.fg('muted', `${title} (${args.questions.length})`)}`,
-        0,
-        0,
-      )
+    renderCall(args, theme, context) {
+      const lines =
+        context.state.hasResult === true
+          ? [renderCallLines(args, theme)[0] ?? '']
+          : renderCallLines(args, theme)
+      return new Text(lines.join('\n'), 0, 0)
     },
     renderResult(result, _options, theme, context) {
+      context.state.hasResult = true
       const details = decodeAskQuestionDetails(result.details)
       if (details?.status === 'async') {
         const completed = asyncResults.get(context.toolCallId)
@@ -232,7 +324,7 @@ export default function ask(pi: ExtensionAPI): void {
       }
       const text = result.content.find((item) => item.type === 'text')
       return new Text(
-        theme.fg('error', text?.type === 'text' ? text.text : 'Unknown AskQuestion error'),
+        `${askStatusLine({ icon: theme.fg('error', '✘') }, theme)}\n  ${theme.fg('error', text?.type === 'text' ? text.text : 'Unknown AskQuestion error')}`,
         0,
         0,
       )
