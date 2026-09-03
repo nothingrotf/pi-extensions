@@ -175,9 +175,8 @@ export function renderCallLines(
       theme,
     ),
   ]
-  args.questions.forEach((question, index) => {
-    if (index > 0) lines.push('')
-    lines.push(...renderQuestionLines(question, theme))
+  args.questions.forEach((question) => {
+    lines.push('', ...renderQuestionLines(question, theme))
   })
   return lines
 }
@@ -199,9 +198,8 @@ function renderSuccess(details: AskQuestionDetails, theme: Theme): Text {
       theme,
     ),
   ]
-  details.questions.forEach((question, index) => {
-    if (index > 0) lines.push('')
-    lines.push(questionLabel(question, theme), theme.fg('accent', question.prompt))
+  details.questions.forEach((question) => {
+    lines.push('', questionLabel(question, theme), theme.fg('accent', question.prompt))
     lines.push(
       ...renderAnswerLines(question, answerForQuestion(question.id, details.answers), theme),
     )

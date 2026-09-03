@@ -33,7 +33,7 @@ Other extensions set the loader text through the `hud:working-message` event. Em
 
 Retry, compaction, and branch summary indicators still use the built-in status row.
 
-The extension also removes the spacer line that Pi inserts above the widgets, so one blank line separates the transcript from the first widget. Every widget in the dock ends with one blank line.
+Every widget in the dock ends with one blank line.
 
 ## Sounds
 

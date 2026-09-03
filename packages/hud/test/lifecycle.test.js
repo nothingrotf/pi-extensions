@@ -145,24 +145,3 @@ describe('HUD lifecycle', () => {
     expect(instance.widgetKeys()).toEqual([])
   })
 })
-
-describe('widget spacer trimming', () => {
-  test('removes the leading spacer from the widget container it lives in', async () => {
-    const { Container, Spacer } = await import('@earendil-works/pi-tui')
-    const { trimWidgetSpacer } = await import('../src/working.ts')
-    const self = { render: () => [], invalidate() {} }
-    const container = new Container()
-    container.addChild(new Spacer(1))
-    container.addChild(self)
-    let renders = 0
-    const tui = { children: [new Container(), container], requestRender: () => (renders += 1) }
-    trimWidgetSpacer(tui, self)
-    expect(container.children).toHaveLength(2)
-    await Promise.resolve()
-    expect(container.children).toEqual([self])
-    expect(renders).toBe(1)
-    trimWidgetSpacer(tui, self)
-    await Promise.resolve()
-    expect(renders).toBe(1)
-  })
-})

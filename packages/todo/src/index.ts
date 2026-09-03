@@ -190,6 +190,7 @@ export function renderTodoLines(
 ): string[] {
   const lines = [renderHeader(todos, theme)]
   if (todos.length === 0) return lines
+  lines.push('')
   const selection = options.expanded
     ? { items: [...todos], summary: '' }
     : selectCollapsedTodos([...todos], toolResultCap)

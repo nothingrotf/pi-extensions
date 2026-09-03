@@ -121,6 +121,7 @@ describe('AskQuestion lifecycle', () => {
     expect(result.content[0].text).toContain('language: ts (TypeScript)')
     expect(instance.renderResult(result)).toEqual([
       '? Ask 1 question',
+      '',
       '[language] options:2',
       'Which language?',
       ' ◉ TypeScript',
@@ -167,6 +168,7 @@ describe('AskQuestion lifecycle', () => {
     const instance = harness()
     expect(instance.renderCall(params)).toEqual([
       '⏳ Ask Language · 1 question',
+      '',
       '[language] options:2',
       'Which language?',
       ' ○ TypeScript',

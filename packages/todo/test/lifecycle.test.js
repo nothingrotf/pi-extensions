@@ -502,11 +502,12 @@ describe('todo reminders', () => {
     expect(unblocked.details.todos[0].blocker).toBeUndefined()
     expect(instance.renderResult('todo_write', unblocked)).toEqual([
       '☑ Todo 2 tasks',
+      '',
       '├─ ☐ Ask user',
       '└─ ☐ Work',
     ])
     expect(instance.renderResult('todo_write', result)[0]).toBe('☑ Todo 2 tasks')
-    expect(instance.renderResult('todo_write', result)[1]).toBe(
+    expect(instance.renderResult('todo_write', result)[2]).toBe(
       '├─ ☐ Ask user (blocked: user decision)',
     )
   })
