@@ -48,14 +48,31 @@ Consecutive calls of the same tool fold into one row with a `×N` multiplier.
 
 Rules:
 
-1. A row is groupable only when it is done, has no subtree, and has no images.
-2. Two rows merge only when the tool name matches.
+1. A row is groupable only when it has no children and is not a pseudo row.
+2. Two rows merge only when the done label matches.
 3. The minimum run length is 2. A single row stays ungrouped.
 4. There is no maximum run length.
-5. An error does NOT break a run.
+5. An error DOES break a run.
 
-Rule 5 matters. A failed call inside a run stays in the run, and the parent row
-shows the error state when any child failed.
+Rule 5 is a deliberate divergence from the original. The original keeps a failed
+call inside the run, so the failure and any denial become invisible at the parent
+row. This implementation puts a failed call on its own row instead.
+
+At most five groups render. Older groups collapse into one `N completed` row at
+the top of the tree.
+
+## Pseudo rows
+
+A thought row and a narration row are not tool calls. They render with:
+
+- A blank status cell, never a check or a cross.
+- The thought icon or the chat icon.
+- A dim body.
+
+They never join a run, and they break the run around them.
+
+A pending thought row renders as the last row of the tree when the turn streams,
+every tool call finished, the answer has not started, and no reasoning is active.
 
 ## Labels
 
@@ -105,6 +122,22 @@ Spacing differs between a group and a single row:
 | single  | trailing space after the glyphs                       |
 
 Getting this backwards emits a double space. Cover it with a test.
+
+## Text zones
+
+Assistant text splits into three zones, in `rail-segments.ts`:
+
+| zone      | rule                                                 | placement       |
+| --------- | ---------------------------------------------------- | --------------- |
+| opening   | text before the first tool call                      | above the tree  |
+| narration | text between tool calls                              | inside the tree |
+| answer    | text after the last tool call, once the turn settles | below the tree  |
+
+Adjacent text blocks merge into one. A tools or reasoning block keeps them apart.
+
+While a turn is partial and not live, trailing text stays narration. It becomes
+the answer only when the turn settles. This is the only retroactive change in the
+tree.
 
 ## Header
 
