@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/timestamp.ts'
+import { registerTimestamps, timestampEntryType } from '../src/timestamp.ts'
 
 function harness() {
   const handlers = new Map()
@@ -34,9 +34,6 @@ function harness() {
     turnStart() {
       handlers.get('turn_start')({}, ctx)
     },
-    start(message) {
-      handlers.get('message_start')({ message }, ctx)
-    },
     end(message) {
       handlers.get('message_end')({ message }, ctx)
     },
@@ -58,29 +55,21 @@ function harness() {
 const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
 
 describe('transcript lifecycle', () => {
-  test('records role headers and assistant usage rows', () => {
+  test('records assistant usage rows only', () => {
     const instance = harness()
     instance.turnStart()
-    instance.start({ role: 'user', timestamp: 100 })
     instance.end({ role: 'user', timestamp: 100 })
-    instance.start({ role: 'assistant', timestamp: 200 })
     instance.end({ role: 'assistant', timestamp: 200, usage })
-    instance.start({ role: 'toolResult', timestamp: 300 })
     instance.end({ role: 'toolResult', timestamp: 300 })
-    expect(instance.entries.map((entry) => entry.customType)).toEqual([
-      roleEntryType,
-      roleEntryType,
-      timestampEntryType,
-    ])
-    expect(instance.entries[0].data.role).toBe('user')
-    expect(instance.entries[1].data.role).toBe('assistant')
-    expect(instance.entries[2].data).toMatchObject({
+    expect(instance.entries.map((entry) => entry.customType)).toEqual([timestampEntryType])
+    expect(instance.entries[0].data).toMatchObject({
       cacheRead: 0,
+      cost: 0,
       input: 1,
       output: 2,
       timestamp: 200,
     })
-    expect(instance.entries[2].data.durationMs).toBeGreaterThanOrEqual(0)
+    expect(instance.entries[0].data.durationMs).toBeGreaterThanOrEqual(0)
   })
 
   test('toggles transcript recording and rendering', async () => {
@@ -94,9 +83,7 @@ describe('transcript lifecycle', () => {
       timestamp: Date.now(),
     }
     expect(instance.render(data)).toBeDefined()
-    expect(instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)).toBeDefined()
     await instance.toggle()
-    instance.start({ role: 'user', timestamp: 1 })
     instance.end({ role: 'assistant', timestamp: 1, usage })
     expect(instance.entries).toEqual([])
     expect(instance.render(data)).toBeUndefined()

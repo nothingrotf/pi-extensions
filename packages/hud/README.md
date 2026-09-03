@@ -13,30 +13,17 @@ The left side shows:
 The right side shows provider quota windows and context use.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 
-The transcript labels each message with a role header and closes each assistant turn with a usage row:
+The transcript closes each assistant turn with a usage row:
 
 ```text
-◆ You · 10:11 PM
-
-this harness can use a todo list tool?
-
-● GLM 5.3 · 10:12 PM
-
-Yes. The harness registers todo_write and todo_read.
-
-▪ 14s · $0.036 · 70.5k in · 229 out · ⛁ 99% cached · ⚡16.4/s
+▪ 5s · $0.299 · 576.6k in · 278 out · ⛁ 100% cached · ⚡58.6/s
 ```
 
-The header, the message body, and the usage row share the column that the `outputPad` setting controls.
+The row shows the turn duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. Each part appears only when the message reports it. A turn that reports no tokens shows no row.
 
-The header shows the role glyph, the role, and the local time. A user message reads `You`. An assistant message reads the active model.
-
-The usage row shows the turn duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. Each part appears only when the message reports it. A turn that reports no tokens shows no row.
-
-Pi draws a background panel behind each user message. To read the transcript as plain text, set `userMessageBg` to the theme background in your theme file.
-
+The row shares the column that the `outputPad` setting controls.
 The throughput divides the output tokens by the time from the turn start to the end of the message.
-Role headers and usage rows are active by default and never enter the model context.
+Usage rows are active by default and never enter the model context.
 Use `/hud-timestamp` to disable or enable them.
 
 ## Working loader
