@@ -62,10 +62,12 @@
       "version": "0.1.0",
       "devDependencies": {
         "@earendil-works/pi-coding-agent": "catalog:",
+        "@earendil-works/pi-tui": "catalog:",
         "typebox": "catalog:",
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
         "typebox": "*",
       },
     },
