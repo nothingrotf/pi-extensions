@@ -9,7 +9,7 @@ import type {
   ExtensionContext,
   Theme,
 } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
+import { type Component, Text, truncateToWidth } from '@earendil-works/pi-tui'
 import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
@@ -149,6 +149,18 @@ const todoReadDescription =
   'Read the structured task list for the current coding session. Filter by status, ID, or both. Empty filters return the complete list.'
 
 const TODO_ICON = '☑'
+
+interface TodoRenderState {
+  hasResult?: boolean
+}
+
+function pendingLine(state: TodoRenderState, line: string): Component {
+  return {
+    invalidate: () => undefined,
+    render: (width: number): string[] =>
+      state.hasResult === true ? [] : [truncateToWidth(line, width, '…')],
+  }
+}
 
 export function todoStatusLine(
   options: { icon: string; meta?: readonly string[]; title?: string },
@@ -473,7 +485,7 @@ export default function todo(pi: ExtensionAPI): void {
     overlay.hideCompletedFromPreviousRun()
   })
 
-  pi.registerTool({
+  pi.registerTool<typeof TodoWriteSchema, TodoWriteDetails, TodoRenderState>({
     name: 'todo_write',
     label: 'Todo write',
     description: todoWriteDescription,
@@ -518,19 +530,19 @@ export default function todo(pi: ExtensionAPI): void {
         details,
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const op = !args.merge && args.todos.length === 0 ? 'clear' : args.merge ? 'merge' : 'init'
       const count =
         args.todos.length === 0
           ? ''
           : `${args.todos.length} item${args.todos.length === 1 ? '' : 's'}`
-      return new Text(
+      return pendingLine(
+        context.state,
         todoStatusLine({ icon: theme.fg('muted', '⏳'), meta: [`${op} ${count}`.trim()] }, theme),
-        0,
-        0,
       )
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
+      context.state.hasResult = true
       const details = decodeTodoWriteDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
@@ -552,7 +564,7 @@ export default function todo(pi: ExtensionAPI): void {
     },
   })
 
-  pi.registerTool({
+  pi.registerTool<typeof TodoReadSchema, TodoReadDetails, TodoRenderState>({
     name: 'todo_read',
     label: 'Todo read',
     description: todoReadDescription,
@@ -566,17 +578,17 @@ export default function todo(pi: ExtensionAPI): void {
         details,
       }
     },
-    renderCall(args, theme) {
-      return new Text(
+    renderCall(args, theme, context) {
+      return pendingLine(
+        context.state,
         todoStatusLine(
           { icon: theme.fg('muted', '⏳'), meta: [`view${readFilterSuffix(args)}`] },
           theme,
         ),
-        0,
-        0,
       )
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
+      context.state.hasResult = true
       const details = decodeTodoReadDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')

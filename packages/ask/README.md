@@ -72,3 +72,17 @@ A successful answer contains one item for each question.
 A freeform answer uses `freeformText`. The sentinel option ID never appears in `selectedOptionIds`.
 
 Print mode and JSON mode reject questions because no interactive form exists.
+
+## TUI
+
+The call frame shows a pending status line and one labelled section per question with marker bullets. The result frame shows the ask glyph and the chosen markers:
+
+```text
+? Ask 1 question
+[lang] options:2
+Which language?
+ ◉ TypeScript
+ ○ Python
+```
+
+Multi-select questions use `☑` and `☐`. A custom answer shows a `✔` line. A cancelled question shows a `⚠ Cancelled` line.

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
+import { type Component, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 
 import {
@@ -49,6 +49,17 @@ interface LoopNextDetails {
 
 interface LoopStopDetails {
   stopped: boolean
+}
+
+interface LoopRenderState {
+  hasResult?: boolean
+}
+
+function pendingLine(state: LoopRenderState, line: string): Component {
+  return {
+    invalidate: () => undefined,
+    render: (): string[] => (state.hasResult === true ? [] : [line]),
+  }
 }
 
 const LoopNextSchema = Type.Object({
@@ -587,24 +598,24 @@ export default function loop(pi: ExtensionAPI): void {
     dispatchPending(ctx)
   })
 
-  pi.registerTool<typeof LoopNextSchema, LoopNextDetails>({
+  pi.registerTool<typeof LoopNextSchema, LoopNextDetails, LoopRenderState>({
     name: 'loop_next',
     label: 'Loop next',
     description: 'Set the next wake for an active dynamic loop. An optional watcher wakes earlier.',
     promptSnippet: 'Schedule the next wake for an active dynamic loop',
     parameters: LoopNextSchema,
     executionMode: 'sequential',
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const meta = [`in ${formatDuration(args.delaySeconds * 1_000)}`]
       if (args.watch !== undefined) meta.push(`watch ${trimmedText(args.watch.command) ?? ''}`)
       if (args.prompt !== undefined) meta.push('new prompt')
-      return new Text(
+      return pendingLine(
+        context.state,
         loopStatusLine({ icon: theme.fg('muted', '⏳'), meta, title: 'Loop next' }, theme),
-        0,
-        0,
       )
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, _options, theme, context) {
+      context.state.hasResult = true
       const text = result.content.find((item) => item.type === 'text')
       const message = text?.type === 'text' ? text.text : ''
       const scheduled = result.details?.scheduled === true
@@ -677,7 +688,7 @@ export default function loop(pi: ExtensionAPI): void {
     },
   })
 
-  pi.registerTool<typeof LoopStopSchema, LoopStopDetails>({
+  pi.registerTool<typeof LoopStopSchema, LoopStopDetails, LoopRenderState>({
     name: 'loop_stop',
     label: 'Loop stop',
     description: 'Stop the active loop and cancel its timer and watcher.',

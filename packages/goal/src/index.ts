@@ -7,7 +7,7 @@ import type {
   Theme,
   ThemeColor,
 } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
+import { type Component, Text } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
@@ -163,6 +163,17 @@ function truncate(text: string, width: number): string {
 }
 
 const GOAL_ICON = '◎'
+
+interface GoalRenderState {
+  hasResult?: boolean
+}
+
+function pendingLine(state: GoalRenderState, line: string): Component {
+  return {
+    invalidate: () => undefined,
+    render: (): string[] => (state.hasResult === true ? [] : [line]),
+  }
+}
 
 function goalStatusLine(
   options: { badge?: string; description?: string; icon: string; meta?: readonly string[] },
@@ -815,7 +826,7 @@ export default function goal(pi: ExtensionAPI): void {
     },
   })
 
-  pi.registerTool({
+  pi.registerTool<typeof goalToolParameters, GoalToolDetails, GoalRenderState>({
     name: toolName,
     label: 'Goal',
     description: goalToolDescription,
@@ -868,7 +879,7 @@ export default function goal(pi: ExtensionAPI): void {
         details,
       }
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const meta: string[] = []
       const objective = args.objective?.trim()
       if (args.op === 'create' && objective !== undefined && objective.length > 0) {
@@ -877,16 +888,16 @@ export default function goal(pi: ExtensionAPI): void {
       if (args.op === 'create' && args.token_budget !== undefined) {
         meta.push(`budget ${formatTokens(args.token_budget)}`)
       }
-      return new Text(
+      return pendingLine(
+        context.state,
         goalStatusLine(
           { description: describeOp(args.op), icon: theme.fg('muted', '⏳'), meta },
           theme,
         ),
-        0,
-        0,
       )
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, _options, theme, context) {
+      context.state.hasResult = true
       const details = decodeGoalToolDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')

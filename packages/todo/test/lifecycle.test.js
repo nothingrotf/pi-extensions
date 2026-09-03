@@ -117,7 +117,7 @@ function harness(branch = []) {
         throw new Error(`Missing ${name} call renderer`)
       }
       return tool
-        .renderCall(params, theme)
+        .renderCall(params, theme, { state: {} })
         .render(120)
         .map((line) => line.trimEnd())
     },
@@ -127,7 +127,7 @@ function harness(branch = []) {
         throw new Error(`Missing ${name} result renderer`)
       }
       return tool
-        .renderResult(result, { expanded: false }, theme)
+        .renderResult(result, { expanded: false }, theme, { state: {} })
         .render(120)
         .map((line) => line.trimEnd())
     },

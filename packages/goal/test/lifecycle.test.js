@@ -111,12 +111,12 @@ function harness(branch = []) {
       return tools.get('goal').parameters
     },
     renderCall(args) {
-      return tools.get('goal').renderCall(args, theme, {}).text
+      return tools.get('goal').renderCall(args, theme, { state: {} }).render(200)[0]
     },
     renderResult(result) {
       return tools
         .get('goal')
-        .renderResult(result, { expanded: false, isPartial: false }, theme, {}).text
+        .renderResult(result, { expanded: false, isPartial: false }, theme, { state: {} }).text
     },
     entries,
     messages,

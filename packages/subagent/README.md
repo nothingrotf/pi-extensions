@@ -537,6 +537,29 @@ The side turn does not guarantee the parent hooks, cache identity, transport, re
 
 ## TUI
 
+The transcript frames follow the oh-my-pi task renderer inside the Pi tool frame.
+
+A `Task` call shows the dispatch glyph, the agent type, the brief as muted markdown, and one row per agent:
+
+```text
+⇶ Task: shell
+Run bash: sleep 25 && echo ok.
+
+• Probe registry: Run bash: sleep 25 && echo ok. ⟦shell⟧
+```
+
+The result replaces the agent rows with live rows. A running row shows the tool count, the context gauge, the cost, and the current activity. A settled row shows the status badge, the duration, and an output preview:
+
+```text
+• Probe registry ⟦shell⟧ · 1 🛠 · 1.9%/272K · $0.03
+  └ Bash sleep 25 && echo ok
+• Probe registry ⟦shell⟧ ⟦done⟧ · 1 🛠 · $0.03 · 28.3s
+  Output
+    ok
+```
+
+`TaskControl` results use the same rows for `status` and `list`, receipt lines for `steer`, `cancel`, and `join`, and the job tree for `wait` and `jobs`. Intercom messages between a child and the parent render as IRC cards with quoted bodies.
+
 The `Subagents` widget above the editor lists the running children with the same layout as the oh-my-pi HUD:
 
 ```text
