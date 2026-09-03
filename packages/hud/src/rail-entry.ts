@@ -3,8 +3,9 @@ import { type Component, truncateToWidth } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { railPaletteFromAnsi } from './colors.ts'
+import { railPaletteFromAnsi, tint } from './colors.ts'
 import { railLines, type RailStore, type RailTheme } from './rail.ts'
+import { shimmerText, type ShimmerTheme } from './shimmer.ts'
 
 export const railEntryType = 'hud-rail'
 
@@ -17,7 +18,12 @@ export function decodeRailEntry<Input>(data: Input): number | undefined {
 const railIndent = ' '
 const railGutter = 2
 
-export type RailThemeSource = Pick<Theme, 'fg'>
+export type RailThemeSource = Pick<Theme, 'fg'> & Partial<Pick<Theme, 'getFgAnsi'>>
+
+export type RailUsage = {
+  row: string | undefined
+  shimmer: boolean
+}
 
 export function railTheme(theme: RailThemeSource): RailTheme {
   return {
@@ -34,8 +40,20 @@ export class RailComponent implements Component {
     theme: RailThemeSource,
     private readonly expanded: boolean,
     private readonly pending: () => boolean = () => false,
+    private readonly usage: () => RailUsage = () => ({ row: undefined, shimmer: false }),
+    private readonly source?: RailThemeSource,
   ) {
     this.theme = railTheme(theme)
+    this.source = source ?? theme
+  }
+
+  private usageLine(): string | undefined {
+    const { row, shimmer } = this.usage()
+    if (row === undefined || row.length === 0) return undefined
+    const getFgAnsi = this.source?.getFgAnsi
+    if (!shimmer || getFgAnsi === undefined) return tint(this.theme.palette, 'dim', row)
+    const shimmerTheme: ShimmerTheme = { getFgAnsi: (color) => getFgAnsi(color) }
+    return shimmerText(row, shimmerTheme)
   }
 
   invalidate(): void {}
@@ -47,7 +65,8 @@ export class RailComponent implements Component {
     return railLines(store.groups(), this.theme, {
       expanded: this.expanded,
       pending: this.pending(),
+      usage: this.usageLine() ?? '',
       width: inner,
-    }).map((line) => `${railIndent}${truncateToWidth(line, inner, '')}`)
+    }).map((line) => (line.length === 0 ? '' : `${railIndent}${truncateToWidth(line, inner, '')}`))
   }
 }

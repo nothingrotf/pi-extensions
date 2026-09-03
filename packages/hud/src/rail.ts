@@ -353,7 +353,7 @@ export function labelColumn(groups: readonly RailGroup[]): number {
 export function railLines(
   groups: readonly RailGroup[],
   theme: RailTheme,
-  options: { expanded: boolean; pending?: boolean; width?: number },
+  options: { expanded: boolean; pending?: boolean; usage?: string; width?: number },
 ): string[] {
   if (groups.length === 0) return []
   const width = options.width ?? 120
@@ -444,6 +444,10 @@ export function railLines(
     const branch = tint(theme.palette, 'branch', treeLast)
     const glyph = tint(theme.palette, 'agent', icon('thought'))
     lines.push(`${branch}   ${glyph} ${tint(theme.palette, 'dim', 'Thinking')}`)
+  }
+  const usage = options.usage
+  if (usage !== undefined && usage.length > 0) {
+    lines.push('', usage)
   }
   return lines
 }

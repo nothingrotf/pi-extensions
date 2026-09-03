@@ -163,9 +163,13 @@ The usage row reports the current turn:
 ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
 ```
 
-It is visible WHILE the turn runs, not only at the end. The live row sits at the
-bottom of the dock, under the block being generated, and it shimmers. When the
-turn ends the row becomes a static transcript entry.
+It is visible WHILE the turn runs, not only at the end. The row is the LAST line
+of the rail, separated from the tree by one blank line, so it always sits under
+the block being generated.
+
+While the turn runs the row shimmers. When the turn settles the shimmer stops
+and the row renders in the dim tone. The final figures also settle into a static
+transcript entry.
 
 The cost uses three decimals below `$0.10` and two at or above it.
 

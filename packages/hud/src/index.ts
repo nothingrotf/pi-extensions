@@ -78,7 +78,6 @@ export default function hud(pi: ExtensionAPI): void {
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
   const dock = new WorkingDock()
-  dock.setUsageSource(() => liveUsage.row())
   let rail = new RailStore()
   let railTurn = 0
   let railTurnPending = false
@@ -327,6 +326,10 @@ export default function hud(pi: ExtensionAPI): void {
       theme,
       options.expanded,
       () => turn === railTurn && agentWorking && railPendingNarration,
+      () => {
+        const live = turn === railTurn && agentWorking
+        return { row: live ? liveUsage.row() : undefined, shimmer: live }
+      },
     )
   })
 

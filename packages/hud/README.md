@@ -88,17 +88,18 @@ The extension hides the built-in working loader and renders its own loader as th
 
 The loader shows a braille spinner and shimmers the message with the elapsed time of the current run, for example ` ⠋ waiting for the model · 9s`.
 
-Below it, the live usage row reports the turn as it runs:
+The rail ends with a live usage row that reports the turn as it runs:
 
 ```
  ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
 ```
 
-The row stays visible under the block being generated, not only at the end. When
-the turn finishes the same figures settle into a static transcript entry.
+The row is the last line of the rail, one blank line under the tree, so it stays
+visible below the block being generated. It shimmers while the turn runs and
+settles to a dim tone when the turn ends.
 
-Both lines shimmer. The shimmer is a narrow highlight that sweeps back and forth
-with a continuous colour blend. Read `docs/rail-spec.md` for the exact wave.
+The shimmer is a narrow highlight that sweeps back and forth with a continuous
+colour blend. Read `docs/rail-spec.md` for the exact wave.
 
 Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `waiting for the model`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
 

@@ -218,6 +218,50 @@ describe('RailStore.reportChild', () => {
   })
 })
 
+describe('usage row', () => {
+  const done = read({ detail: 'a.ts', toolCallId: 'a' })
+  const usage = '\u25AA 26s \u00B7 $0.26 \u00B7 85.7k in'
+
+  test('omits the row when there is no usage', () => {
+    const lines = railLines(groupActions([done]), theme, { expanded: false, width: 60 })
+    expect(lines.at(-1)).not.toContain('26s')
+  })
+
+  test('appends the row as the last line', () => {
+    const lines = railLines(groupActions([done]), theme, { expanded: false, usage, width: 60 })
+    expect(lines.at(-1)).toContain('26s')
+  })
+
+  test('separates the row from the tree with a blank line', () => {
+    const lines = railLines(groupActions([done]), theme, { expanded: false, usage, width: 60 })
+    expect(lines.at(-2)).toBe('')
+  })
+
+  test('keeps the row below the pending narration row', () => {
+    const lines = railLines(groupActions([done]), theme, {
+      expanded: false,
+      pending: true,
+      usage,
+      width: 60,
+    })
+    const thinking = lines.findIndex((line) => line.includes('Thinking'))
+    const bar = lines.findIndex((line) => line.includes('26s'))
+    expect(thinking).toBeGreaterThan(0)
+    expect(bar).toBeGreaterThan(thinking)
+  })
+
+  test('does not disturb the tree above it', () => {
+    const without = railLines(groupActions([done]), theme, { expanded: false, width: 60 })
+    const withBar = railLines(groupActions([done]), theme, { expanded: false, usage, width: 60 })
+    expect(withBar.slice(0, without.length)).toEqual(without)
+  })
+
+  test('ignores an empty usage string', () => {
+    const lines = railLines(groupActions([done]), theme, { expanded: false, usage: '', width: 60 })
+    expect(lines.at(-1)).not.toBe('')
+  })
+})
+
 describe('pending narration row', () => {
   const done = read({ detail: 'a.ts', toolCallId: 'a' })
 

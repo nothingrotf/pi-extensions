@@ -106,3 +106,100 @@ describe('RailComponent pending row', () => {
     }
   })
 })
+
+describe('RailComponent usage row', () => {
+  const themeWithAnsi: RailThemeSource = {
+    fg: (_color, text) => text,
+    getFgAnsi: (color) => (color === 'accent' ? '\x1b[38;2;170;164;192m' : '\x1b[38;2;66;62;84m'),
+  }
+
+  function store(): RailStore {
+    const created = new RailStore()
+    created.report('a', { detail: 'a.ts', doneLabel: 'Read', status: 'ok' })
+    return created
+  }
+
+  const bar = '\u25AA 26s \u00B7 $0.26 \u00B7 85.7k in'
+
+  test('omits the row when nothing is reported', () => {
+    const component = new RailComponent(store, themeWithAnsi, false)
+    expect(plain(component.render(60)).some((line) => line.includes('26s'))).toBe(false)
+  })
+
+  test('renders the row as the last line', () => {
+    const component = new RailComponent(
+      store,
+      themeWithAnsi,
+      false,
+      () => false,
+      () => ({
+        row: bar,
+        shimmer: false,
+      }),
+    )
+    expect(plain(component.render(60)).at(-1)).toContain('26s')
+  })
+
+  test('leaves a blank line above the row', () => {
+    const component = new RailComponent(
+      store,
+      themeWithAnsi,
+      false,
+      () => false,
+      () => ({
+        row: bar,
+        shimmer: false,
+      }),
+    )
+    const lines = plain(component.render(60))
+    expect(lines.at(-2)).toBe('')
+  })
+
+  test('shimmers the row while the turn runs', () => {
+    const component = new RailComponent(
+      store,
+      themeWithAnsi,
+      false,
+      () => false,
+      () => ({
+        row: bar,
+        shimmer: true,
+      }),
+    )
+    const raw = component.render(60).at(-1) ?? ''
+    expect(raw.split('\x1b[38;2;').length).toBeGreaterThan(3)
+  })
+
+  test('stops shimmering once the turn settles', () => {
+    const component = new RailComponent(
+      store,
+      themeWithAnsi,
+      false,
+      () => false,
+      () => ({
+        row: bar,
+        shimmer: false,
+      }),
+    )
+    const raw = component.render(60).at(-1) ?? ''
+    expect(raw.split('\x1b[38;2;').length).toBeLessThanOrEqual(2)
+  })
+
+  test('keeps the row below the pending narration row', () => {
+    const component = new RailComponent(
+      store,
+      themeWithAnsi,
+      false,
+      () => true,
+      () => ({
+        row: bar,
+        shimmer: true,
+      }),
+    )
+    const lines = plain(component.render(60))
+    const thinking = lines.findIndex((line) => line.includes('Thinking'))
+    const usage = lines.findIndex((line) => line.includes('26s'))
+    expect(thinking).toBeGreaterThan(0)
+    expect(usage).toBeGreaterThan(thinking)
+  })
+})
