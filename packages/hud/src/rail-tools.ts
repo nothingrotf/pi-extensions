@@ -21,6 +21,7 @@ import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
 import { defaultRailIcon, defaultRailLabel } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
+import { narrationPatch, thoughtPatch } from './rail-pseudo.ts'
 import { RailStore, type RailCategory, type RailPatch, type RailStatus } from './rail.ts'
 
 type RailState = { store?: RailStore }
@@ -144,7 +145,28 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       continue
     }
     if (message.role !== 'assistant') continue
+    let pseudoIndex = 0
     for (const block of message.content) {
+      if (block.type === 'thinking') {
+        const text = block.thinking
+        if (text.trim().length === 0) continue
+        pseudoIndex += 1
+        store.report(
+          `thought:${String(message.timestamp)}:${String(pseudoIndex)}`,
+          thoughtPatch(text),
+        )
+        continue
+      }
+      if (block.type === 'text') {
+        const text = block.text
+        if (text.trim().length === 0) continue
+        pseudoIndex += 1
+        store.report(
+          `narration:${String(message.timestamp)}:${String(pseudoIndex)}`,
+          narrationPatch(text),
+        )
+        continue
+      }
       if (block.type !== 'toolCall') continue
       byToolCallId.set(block.id, store)
       startedAt.set(block.id, message.timestamp)

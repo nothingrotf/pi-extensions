@@ -46,8 +46,10 @@ beforeAll(() => {
 function read(overrides: Partial<RailAction> = {}): RailAction {
   return {
     category: 'read',
+    children: undefined,
     detail: '',
     doneLabel: 'Read',
+    kind: undefined,
     durationMs: undefined,
     iconKey: 'read',
     output: '',
@@ -824,6 +826,87 @@ describe('mapSessionRails', () => {
       },
     },
     type: 'message',
+  })
+
+  const pseudoEntry = (): SessionEntry => ({
+    ...base,
+    message: {
+      api: 'anthropic-messages',
+      content: [
+        { thinking: '# Plan\nweigh it', type: 'thinking' },
+        { text: 'found it\nsecond line', type: 'text' },
+        { arguments: {}, id: 'k', name: 'bash', type: 'toolCall' },
+      ],
+      model: 'test',
+      provider: 'anthropic',
+      role: 'assistant',
+      stopReason: 'toolUse',
+      timestamp: 0,
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    },
+    type: 'message',
+  })
+
+  const blankThinkingEntry = (): SessionEntry => ({
+    ...base,
+    message: {
+      api: 'anthropic-messages',
+      content: [
+        { thinking: '   \n\n', type: 'thinking' },
+        { arguments: {}, id: 'k', name: 'bash', type: 'toolCall' },
+      ],
+      model: 'test',
+      provider: 'anthropic',
+      role: 'assistant',
+      stopReason: 'toolUse',
+      timestamp: 0,
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    },
+    type: 'message',
+  })
+
+  test('backfills a thought row from a thinking block', () => {
+    const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
+    const groups = store?.groups() ?? []
+    expect(groups[0]?.actions[0]?.kind).toBe('thought')
+    expect(groups[0]?.actions[0]?.detail).toBe('Plan')
+  })
+
+  test('backfills a narration row from a text block', () => {
+    const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
+    const groups = store?.groups() ?? []
+    expect(groups[1]?.actions[0]?.kind).toBe('narration')
+    expect(groups[1]?.actions[0]?.detail).toBe('found it')
+    expect(groups[1]?.actions[0]?.summary).toBe('2 lines')
+  })
+
+  test('keeps the tool row after the pseudo rows', () => {
+    const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
+    const groups = store?.groups() ?? []
+    expect(groups).toHaveLength(3)
+    expect(groups[2]?.actions[0]?.kind).toBeUndefined()
+  })
+
+  test('skips a blank thinking block', () => {
+    const entry = blankThinkingEntry()
+    const store = mapSessionRails([userEntry, entry]).byToolCallId.get('k')
+    const groups = store?.groups() ?? []
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.actions[0]?.kind).toBeUndefined()
   })
 
   test('gives every turn its own store', () => {

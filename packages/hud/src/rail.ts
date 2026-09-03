@@ -19,12 +19,12 @@ export function isPseudo(kind: RailKind | undefined): boolean {
 
 export type RailAction = {
   category: RailCategory
-  children?: readonly RailAction[]
+  children: readonly RailAction[] | undefined
   detail: string
   doneLabel: string
   durationMs: number | undefined
   iconKey: IconKey
-  kind?: RailKind
+  kind: RailKind | undefined
   output: string
   runningLabel: string
   startedAt: number | undefined
@@ -464,10 +464,12 @@ export function summarizeOutput(text: string, status: RailStatus = 'ok'): string
 
 export type RailPatch = {
   category?: RailCategory
+  children?: readonly RailAction[]
   detail?: string
   doneLabel?: string
   durationMs?: number
   iconKey?: IconKey
+  kind?: RailKind
   output?: string
   runningLabel?: string
   status?: RailStatus
@@ -492,10 +494,12 @@ export class RailStore {
       this.index.set(toolCallId, this.actions.length)
       this.actions.push({
         category: patch.category ?? 'other',
+        children: patch.children,
         detail: patch.detail ?? '',
         doneLabel: patch.doneLabel ?? 'Tool',
         durationMs: patch.durationMs,
         iconKey: patch.iconKey ?? 'tool',
+        kind: patch.kind,
         output: patch.output ?? '',
         runningLabel: patch.runningLabel ?? patch.doneLabel ?? 'Tool',
         startedAt: this.now(),
@@ -518,10 +522,12 @@ export class RailStore {
     const durationMs = patch.durationMs ?? measured
     this.actions[position] = {
       category: patch.category ?? current.category,
+      children: patch.children ?? current.children,
       detail: patch.detail ?? current.detail,
       doneLabel: patch.doneLabel ?? current.doneLabel,
       durationMs,
       iconKey: patch.iconKey ?? current.iconKey,
+      kind: patch.kind ?? current.kind,
       output: patch.output ?? current.output,
       runningLabel: patch.runningLabel ?? current.runningLabel,
       startedAt: current.startedAt,
