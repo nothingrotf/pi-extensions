@@ -165,6 +165,47 @@ describe('groupActions', () => {
   })
 })
 
+describe('clipping', () => {
+  test('clips a row to the width without an ellipsis', () => {
+    const line = railLines(
+      groupActions([read({ detail: 'packages/hud/src/rail.ts and a much longer tail here' })]),
+      theme,
+      { expanded: false, width: 30 },
+    )[1]
+    expect(line).toBeDefined()
+    expect(visibleWidth(line ?? '')).toBeLessThanOrEqual(30)
+    expect(line ?? '').not.toContain('\u2026')
+  })
+
+  test('never wraps a row onto a second line', () => {
+    const lines = railLines(groupActions([read({ detail: 'x'.repeat(400) })]), theme, {
+      expanded: false,
+      width: 40,
+    })
+    expect(lines).toHaveLength(2)
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(40)
+  })
+
+  test('keeps the duration visible when the body has to clip', () => {
+    const line =
+      railLines(groupActions([read({ detail: 'y'.repeat(200), durationMs: 900 })]), theme, {
+        expanded: false,
+        width: 34,
+      })[1] ?? ''
+    expect(line).toContain('0.9s')
+    expect(visibleWidth(line)).toBeLessThanOrEqual(34)
+  })
+
+  test('clips by visible width, not by code unit count', () => {
+    const line =
+      railLines(groupActions([read({ detail: '\u4f60\u597d'.repeat(30) })]), theme, {
+        expanded: false,
+        width: 32,
+      })[1] ?? ''
+    expect(visibleWidth(line)).toBeLessThanOrEqual(32)
+  })
+})
+
 describe('label column', () => {
   test('pads a short label to the fixed width', () => {
     expect(padLabel('Read')).toBe('Read        ')
@@ -553,7 +594,7 @@ describe('mapSessionRails', () => {
     const store = rails.byToolCallId.get('a')
     expect(store?.size()).toBe(1)
     const group = store?.groups()[0]
-    expect(group === undefined ? '' : groupLabel(group)).toBe('Shell')
+    expect(group === undefined ? '' : groupLabel(group)).toBe('Ran')
     expect(group === undefined ? '' : groupDetail(group)).toBe('· 2 lines')
   })
 
@@ -602,7 +643,7 @@ describe('mapSessionRails', () => {
     }
     const rails = mapSessionRails([userEntry, entry], '/repo')
     const group = rails.byToolCallId.get('r')?.groups()[0]
-    expect(group === undefined ? '' : groupLabel(group)).toBe('Read')
+    expect(group === undefined ? '' : groupLabel(group)).toBe('Reading')
     expect(group === undefined ? '' : groupDetail(group)).toBe('src/a.ts')
   })
 

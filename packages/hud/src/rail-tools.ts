@@ -50,13 +50,16 @@ type BuiltInMeta = {
 }
 
 const builtInMeta = new Map<string, BuiltInMeta>([
-  ['read', { category: 'read', doneLabel: 'Read', iconKey: 'read', runningLabel: 'Read' }],
-  ['write', { category: 'edit', doneLabel: 'Write', iconKey: 'edit', runningLabel: 'Write' }],
-  ['edit', { category: 'edit', doneLabel: 'Edit', iconKey: 'edit', runningLabel: 'Edit' }],
-  ['bash', { category: 'other', doneLabel: 'Shell', iconKey: 'shell', runningLabel: 'Shell' }],
-  ['grep', { category: 'search', doneLabel: 'Search', iconKey: 'search', runningLabel: 'Search' }],
-  ['find', { category: 'search', doneLabel: 'Find', iconKey: 'find', runningLabel: 'Find' }],
-  ['ls', { category: 'search', doneLabel: 'List', iconKey: 'find', runningLabel: 'List' }],
+  ['read', { category: 'read', doneLabel: 'Read', iconKey: 'read', runningLabel: 'Reading' }],
+  ['write', { category: 'edit', doneLabel: 'Wrote', iconKey: 'edit', runningLabel: 'Writing' }],
+  ['edit', { category: 'edit', doneLabel: 'Edited', iconKey: 'edit', runningLabel: 'Editing' }],
+  ['bash', { category: 'other', doneLabel: 'Ran', iconKey: 'shell', runningLabel: 'Running' }],
+  [
+    'grep',
+    { category: 'search', doneLabel: 'Searched', iconKey: 'search', runningLabel: 'Searching' },
+  ],
+  ['find', { category: 'search', doneLabel: 'Found', iconKey: 'find', runningLabel: 'Finding' }],
+  ['ls', { category: 'search', doneLabel: 'Listed', iconKey: 'find', runningLabel: 'Listing' }],
 ])
 
 export type RailCallInput = {
