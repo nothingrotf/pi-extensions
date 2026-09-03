@@ -157,7 +157,7 @@ export function registerTimestamps(pi: ExtensionAPI): void {
     if (!enabled || entry.data === undefined || !hasUsage(entry.data)) {
       return undefined
     }
-    return new Text(theme.fg('dim', formatUsageRow(entry.data)), 3, 0)
+    return new Text(theme.fg('dim', formatUsageRow(entry.data)), 1, 0)
   })
 
   pi.registerCommand('hud-timestamp', {

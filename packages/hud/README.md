@@ -17,13 +17,17 @@ The transcript labels each message with a role header and closes each assistant 
 
 ```text
 ◆ You · 10:11 PM (now)
-  this harness can use a todo list tool?
+
+this harness can use a todo list tool?
 
 ● Agent · 10:11 PM (now)
-  Yes. The harness registers todo_write and todo_read.
 
-   ▪ 8s · 43.4k · 165 out · ⛁ 93% cached · ⚡23.9/s
+Yes. The harness registers todo_write and todo_read.
+
+▪ 8s · 43.4k · 165 out · ⛁ 93% cached · ⚡23.9/s
 ```
+
+The header, the message body, and the usage row share the column that the `outputPad` setting controls.
 
 The header shows the role glyph, the role, the local time, and the age of the message. The age updates when the transcript redraws.
 
