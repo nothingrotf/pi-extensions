@@ -148,20 +148,25 @@ Clear:
 const todoReadDescription =
   'Read the structured task list for the current coding session. Filter by status, ID, or both. Empty filters return the complete list.'
 
+const TODO_ICON = '☑'
+
+export function todoStatusLine(
+  options: { icon: string; meta?: readonly string[]; title?: string },
+  theme: Theme,
+): string {
+  const meta = (options.meta ?? []).filter((part) => part.length > 0)
+  const suffix = meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''
+  return `${options.icon} ${theme.fg('accent', options.title ?? 'Todo')}${suffix}`
+}
+
 export function renderHeader(todos: readonly Todo[], theme: Theme): string {
-  if (todos.length === 0) {
-    return theme.fg('dim', 'No to-dos found')
-  }
-  const active = activeTodoCount(todos)
+  const icon = theme.fg('accent', TODO_ICON)
+  if (todos.length === 0) return todoStatusLine({ icon, meta: ['no todos'] }, theme)
+  const meta = [`${todos.length} task${todos.length === 1 ? '' : 's'}`]
   const completed = completedTodoCount(todos)
-  if (active === 0) {
-    return theme.fg('success', theme.bold('All done'))
-  }
-  const title = `Working on ${active} to-do${active === 1 ? '' : 's'}`
-  if (completed === 0) {
-    return theme.fg('toolTitle', theme.bold(title))
-  }
-  return `${theme.fg('toolTitle', theme.bold(title))}${theme.fg('dim', ` • ${completed} done`)}`
+  if (completed > 0) meta.push(`${completed} done`)
+  if (activeTodoCount(todos) === 0) meta.push(theme.fg('success', 'all done'))
+  return todoStatusLine({ icon, meta }, theme)
 }
 
 const toolResultCap = 8
@@ -514,19 +519,34 @@ export default function todo(pi: ExtensionAPI): void {
       }
     },
     renderCall(args, theme) {
-      const action =
-        !args.merge && args.todos.length === 0 ? 'Clearing' : args.merge ? 'Updating' : 'Creating'
-      return new Text(theme.fg('warning', `${action} to-dos...`), 0, 0)
+      const op = !args.merge && args.todos.length === 0 ? 'clear' : args.merge ? 'merge' : 'init'
+      const count =
+        args.todos.length === 0
+          ? ''
+          : `${args.todos.length} item${args.todos.length === 1 ? '' : 's'}`
+      return new Text(
+        todoStatusLine({ icon: theme.fg('muted', '⏳'), meta: [`${op} ${count}`.trim()] }, theme),
+        0,
+        0,
+      )
     },
     renderResult(result, options, theme) {
       const details = decodeTodoWriteDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Unknown error'
-        return new Text(theme.fg('error', `Error updating to-dos: ${message}`), 0, 0)
+        return new Text(
+          `${todoStatusLine({ icon: theme.fg('error', '✘') }, theme)}\n  ${theme.fg('error', message)}`,
+          0,
+          0,
+        )
       }
       if (!details.wasMerge && details.todos.length === 0) {
-        return new Text(theme.fg('success', 'Cleared to-dos'), 0, 0)
+        return new Text(
+          todoStatusLine({ icon: theme.fg('accent', TODO_ICON), meta: ['cleared'] }, theme),
+          0,
+          0,
+        )
       }
       return renderTodoList(details.todos, theme, options.expanded)
     },
@@ -547,14 +567,25 @@ export default function todo(pi: ExtensionAPI): void {
       }
     },
     renderCall(args, theme) {
-      return new Text(theme.fg('warning', `Reading to-dos...${readFilterSuffix(args)}`), 0, 0)
+      return new Text(
+        todoStatusLine(
+          { icon: theme.fg('muted', '⏳'), meta: [`view${readFilterSuffix(args)}`] },
+          theme,
+        ),
+        0,
+        0,
+      )
     },
     renderResult(result, options, theme) {
       const details = decodeTodoReadDetails(result.details)
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Unknown error'
-        return new Text(theme.fg('error', `Error reading to-dos: ${message}`), 0, 0)
+        return new Text(
+          `${todoStatusLine({ icon: theme.fg('error', '✘') }, theme)}\n  ${theme.fg('error', message)}`,
+          0,
+          0,
+        )
       }
       return renderTodoList(details.todos, theme, options.expanded)
     },
@@ -562,20 +593,27 @@ export default function todo(pi: ExtensionAPI): void {
   pi.registerMessageRenderer('todo-reminder', (message, _options, theme) => {
     const details = decodeReminderDetails(message.details)
     if (details === null) {
-      return new Text(theme.fg('warning', 'Todo reminder'), 0, 0)
+      return new Text(
+        todoStatusLine({ icon: theme.fg('warning', '⚠'), title: 'Todo reminder' }, theme),
+        0,
+        0,
+      )
     }
     const lines = [
-      theme.fg(
-        'warning',
-        theme.bold(
-          `Todo reminder ${details.attempt}/${details.maxAttempts}: ${details.todos.length} incomplete`,
-        ),
+      todoStatusLine(
+        {
+          icon: theme.fg('warning', '⚠'),
+          meta: [`${details.attempt}/${details.maxAttempts}`, `${details.todos.length} incomplete`],
+          title: 'Todo reminder',
+        },
+        theme,
       ),
-      ...details.todos.map((todo) =>
-        theme.fg('warning', `  ☐ ${sanitizeTerminalText(todo.content)}`),
+      ...details.todos.map(
+        (todo, index) =>
+          `${theme.fg('dim', index === details.todos.length - 1 ? '└─' : '├─')} ${theme.fg('warning', `☐ ${sanitizeTerminalText(todo.content)}`)}`,
       ),
     ]
-    return new Text(lines.join('\n'), 0, 0)
+    return new Text(lines.join('\n'), 1, 0)
   })
 
   const commitUserEdit = (

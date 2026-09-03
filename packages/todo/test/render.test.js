@@ -27,16 +27,18 @@ function item(id, status) {
 
 describe('todo rendering', () => {
   test('renders exact header states', () => {
-    expect(renderHeader([], theme)).toBe('No to-dos found')
-    expect(renderHeader([item('cancelled', 'cancelled')], theme)).toBe('All done')
-    expect(renderHeader([item('done', 'completed')], theme)).toBe('All done')
-    expect(renderHeader([item('active', 'in_progress')], theme)).toBe('Working on 1 to-do')
+    expect(renderHeader([], theme)).toBe('☑ Todo no todos')
+    expect(renderHeader([item('cancelled', 'cancelled')], theme)).toBe('☑ Todo 1 task · all done')
+    expect(renderHeader([item('done', 'completed')], theme)).toBe(
+      '☑ Todo 1 task · 1 done · all done',
+    )
+    expect(renderHeader([item('active', 'in_progress')], theme)).toBe('☑ Todo 1 task')
     expect(
       renderHeader(
         [item('done', 'completed'), item('active', 'in_progress'), item('next', 'pending')],
         theme,
       ),
-    ).toBe('Working on 2 to-dos • 1 done')
+    ).toBe('☑ Todo 3 tasks · 1 done')
   })
 
   test('renders checkbox tree rows below the header', () => {
@@ -46,7 +48,7 @@ describe('todo rendering', () => {
         theme,
         { expanded: false },
       ),
-    ).toEqual(['Working on 2 to-dos • 1 done', '├─ ☑ ~done~', '├─ ☐ active', '└─ ☐ next'])
+    ).toEqual(['☑ Todo 3 tasks · 1 done', '├─ ☑ ~done~', '├─ ☐ active', '└─ ☐ next'])
   })
 
   test('collapses long lists and expands on request', () => {

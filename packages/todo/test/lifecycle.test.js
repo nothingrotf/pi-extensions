@@ -342,7 +342,7 @@ describe('todo lifecycle', () => {
       todos: [{ id: '1', content: 'Inspect', status: 'in_progress' }],
     })
     const params = { merge: false, todos: [] }
-    expect(instance.renderCall('todo_write', params)).toEqual(['Clearing to-dos...'])
+    expect(instance.renderCall('todo_write', params)).toEqual(['⏳ Todo clear'])
     const result = await instance.tool('todo_write', params)
     expect(result.details).toMatchObject({
       todos: [],
@@ -351,7 +351,7 @@ describe('todo lifecycle', () => {
       success: true,
       finalTodos: [],
     })
-    expect(instance.renderResult('todo_write', result)).toEqual(['Cleared to-dos'])
+    expect(instance.renderResult('todo_write', result)).toEqual(['☑ Todo cleared'])
     expect(instance.statuses.get('todos')).toBeUndefined()
   })
 })
@@ -501,11 +501,11 @@ describe('todo reminders', () => {
     })
     expect(unblocked.details.todos[0].blocker).toBeUndefined()
     expect(instance.renderResult('todo_write', unblocked)).toEqual([
-      'Working on 2 to-dos',
+      '☑ Todo 2 tasks',
       '├─ ☐ Ask user',
       '└─ ☐ Work',
     ])
-    expect(instance.renderResult('todo_write', result)[0]).toBe('Working on 2 to-dos')
+    expect(instance.renderResult('todo_write', result)[0]).toBe('☑ Todo 2 tasks')
     expect(instance.renderResult('todo_write', result)[1]).toBe(
       '├─ ☐ Ask user (blocked: user decision)',
     )
@@ -675,10 +675,10 @@ describe('/todo command', () => {
     await instance.emit('before_agent_start', { prompt: 'go', systemPrompt: '' })
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
     expect(instance.renderMessage(instance.messages.at(-1).message)).toBe(
-      'Todo reminder 1/3: 1 incomplete\n  ☐ Inspect',
+      '⚠ Todo reminder 1/3 · 1 incomplete\n└─ ☐ Inspect',
     )
     expect(instance.renderMessage({ customType: 'todo-reminder', content: 'x' })).toBe(
-      'Todo reminder',
+      '⚠ Todo reminder',
     )
   })
 })
