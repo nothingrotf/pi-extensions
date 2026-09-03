@@ -149,6 +149,19 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
   return groups
 }
 
+export type PendingNarrationInput = {
+  actions: readonly RailAction[]
+  hasFinalText: boolean
+  reasoningActive: boolean
+  streaming: boolean
+}
+
+export function showsPendingNarration(input: PendingNarrationInput): boolean {
+  if (!input.streaming || input.hasFinalText || input.reasoningActive) return false
+  if (input.actions.length === 0) return false
+  return input.actions.every((action) => action.status !== 'pending')
+}
+
 export function groupLabel(group: RailGroup): string {
   const only = group.actions[0]
   if (group.count === 1 && only !== undefined) return actionLabel(only)
@@ -340,7 +353,7 @@ export function labelColumn(groups: readonly RailGroup[]): number {
 export function railLines(
   groups: readonly RailGroup[],
   theme: RailTheme,
-  options: { expanded: boolean; width?: number },
+  options: { expanded: boolean; pending?: boolean; width?: number },
 ): string[] {
   if (groups.length === 0) return []
   const width = options.width ?? 120
@@ -355,8 +368,9 @@ export function railLines(
       `${tint(theme.palette, 'branch', treeBranch)} ${mark}   ${tint(theme.palette, 'dim', `${completed} completed`)}`,
     )
   }
+  const pending = options.pending === true
   shownGroups.forEach((group, index) => {
-    const last = index === shownGroups.length - 1
+    const last = index === shownGroups.length - 1 && !pending
     const parentCell = countCell(groupLabel(group), group.count)
     const caret = group.count > 1 ? ` ${tint(theme.palette, 'caret', '▾')}` : ''
     const parent = parentParts(group)
@@ -426,6 +440,11 @@ export function railLines(
       lines.push(`${stem}${branch} ${tint(theme.palette, 'dim', `+${hidden} completed`)}`)
     }
   })
+  if (pending) {
+    const branch = tint(theme.palette, 'branch', treeLast)
+    const glyph = tint(theme.palette, 'agent', icon('thought'))
+    lines.push(`${branch}   ${glyph} ${tint(theme.palette, 'dim', 'Thinking')}`)
+  }
   return lines
 }
 

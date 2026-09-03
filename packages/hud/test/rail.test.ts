@@ -24,6 +24,7 @@ import {
   railLines,
   RailStore,
   separator,
+  showsPendingNarration,
   summarizeOutput,
   treeBranch,
   treeLast,
@@ -164,6 +165,95 @@ describe('groupActions', () => {
   test('uses the running label while the call is pending', () => {
     const group = groupActions([read({ status: 'pending' })])[0]
     expect(group === undefined ? '' : groupLabel(group)).toBe('Reading')
+  })
+})
+
+describe('pending narration row', () => {
+  const done = read({ detail: 'a.ts', toolCallId: 'a' })
+
+  test('shows the row in the gap between the last tool and the answer', () => {
+    expect(
+      showsPendingNarration({
+        actions: [done],
+        hasFinalText: false,
+        reasoningActive: false,
+        streaming: true,
+      }),
+    ).toBe(true)
+  })
+
+  test('hides the row once the turn ends', () => {
+    expect(
+      showsPendingNarration({
+        actions: [done],
+        hasFinalText: false,
+        reasoningActive: false,
+        streaming: false,
+      }),
+    ).toBe(false)
+  })
+
+  test('hides the row while a tool is still running', () => {
+    expect(
+      showsPendingNarration({
+        actions: [read({ status: 'pending' })],
+        hasFinalText: false,
+        reasoningActive: false,
+        streaming: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('hides the row once the answer starts', () => {
+    expect(
+      showsPendingNarration({
+        actions: [done],
+        hasFinalText: true,
+        reasoningActive: false,
+        streaming: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('hides the row while the model reasons', () => {
+    expect(
+      showsPendingNarration({
+        actions: [done],
+        hasFinalText: false,
+        reasoningActive: true,
+        streaming: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('hides the row when no tool ran at all', () => {
+    expect(
+      showsPendingNarration({
+        actions: [],
+        hasFinalText: false,
+        reasoningActive: false,
+        streaming: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('renders as the last row of the tree', () => {
+    const lines = railLines(groupActions([done]), theme, {
+      expanded: false,
+      pending: true,
+      width: 60,
+    })
+    expect(lines.at(-1)).toContain('Thinking')
+    expect(lines.at(-1)?.startsWith(treeLast)).toBe(true)
+    expect(lines[1]?.startsWith(treeBranch)).toBe(true)
+  })
+
+  test('the pending row carries no status glyph', () => {
+    const last =
+      railLines(groupActions([done]), theme, { expanded: false, pending: true, width: 60 }).at(
+        -1,
+      ) ?? ''
+    expect(last).not.toContain('\u2713')
   })
 })
 
