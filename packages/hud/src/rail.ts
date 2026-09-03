@@ -487,6 +487,55 @@ export class RailStore {
     this.index.clear()
   }
 
+  reportChild(parentToolCallId: string, toolCallId: string, patch: RailPatch): void {
+    const position = this.index.get(parentToolCallId)
+    if (position === undefined) {
+      this.report(toolCallId, patch)
+      return
+    }
+    const parent = this.actions[position]
+    if (parent === undefined) return
+    const children = [...(parent.children ?? [])]
+    const existing = children.findIndex((child) => child.toolCallId === toolCallId)
+    const base: RailAction = {
+      category: patch.category ?? 'other',
+      children: undefined,
+      detail: patch.detail ?? '',
+      doneLabel: patch.doneLabel ?? 'Tool',
+      durationMs: patch.durationMs,
+      iconKey: patch.iconKey ?? 'tool',
+      kind: patch.kind,
+      output: patch.output ?? '',
+      runningLabel: patch.runningLabel ?? patch.doneLabel ?? 'Tool',
+      startedAt: this.now(),
+      status: patch.status ?? 'pending',
+      summary:
+        patch.summary ??
+        (patch.output === undefined
+          ? ''
+          : summarizeOutput(patch.output, patch.status ?? 'pending')),
+      toolCallId,
+    }
+    if (existing < 0) children.push(base)
+    else {
+      const current = children[existing]
+      if (current === undefined) return
+      const status = patch.status ?? current.status
+      children[existing] = {
+        ...current,
+        detail: patch.detail ?? current.detail,
+        doneLabel: patch.doneLabel ?? current.doneLabel,
+        durationMs: patch.durationMs ?? current.durationMs,
+        output: patch.output ?? current.output,
+        status,
+        summary:
+          patch.summary ??
+          (patch.output === undefined ? current.summary : summarizeOutput(patch.output, status)),
+      }
+    }
+    this.actions[position] = { ...parent, children }
+  }
+
   report(toolCallId: string, patch: RailPatch): void {
     const position = this.index.get(toolCallId)
     if (position === undefined) {

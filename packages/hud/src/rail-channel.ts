@@ -41,6 +41,7 @@ const RailActionSchema = Type.Object({
     ]),
   ),
   output: Type.Optional(Type.String()),
+  parentToolCallId: Type.Optional(Type.String({ minLength: 1 })),
   runningLabel: Type.Optional(Type.String({ minLength: 1 })),
   status: Type.Union([Type.Literal('error'), Type.Literal('ok'), Type.Literal('pending')]),
   summary: Type.Optional(Type.String()),
@@ -57,6 +58,7 @@ export type RailActionReport = {
   doneLabel?: string
   iconKey?: IconKey
   output?: string
+  parentToolCallId?: string
   runningLabel?: string
   status: RailStatus
   summary?: string

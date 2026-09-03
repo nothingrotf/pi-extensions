@@ -1,6 +1,38 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { headings, narrationPatch, thinkingHeading, thoughtPatch } from '../src/rail-pseudo.ts'
+import {
+  headings,
+  narrationPatch,
+  pseudoRows,
+  thinkingHeading,
+  thoughtPatch,
+} from '../src/rail-pseudo.ts'
+
+describe('pseudoRows', () => {
+  test('builds one row per non blank block', () => {
+    const rows = pseudoRows([{ thinking: '# Plan' }, { text: 'note' }], 'm1')
+    expect(rows.map((row) => row.patch.kind)).toEqual(['thought', 'narration'])
+  })
+
+  test('skips a blank block', () => {
+    expect(pseudoRows([{ thinking: '  \n' }, { text: 'note' }], 'm1')).toHaveLength(1)
+  })
+
+  test('gives every row a stable unique id', () => {
+    const rows = pseudoRows([{ thinking: 'a' }, { text: 'b' }], 'm1')
+    expect(rows.map((row) => row.id)).toEqual(['thought:m1:1', 'narration:m1:2'])
+  })
+
+  test('two messages never collide', () => {
+    const first = pseudoRows([{ thinking: 'a' }], 'm1')
+    const second = pseudoRows([{ thinking: 'a' }], 'm2')
+    expect(first[0]?.id).not.toBe(second[0]?.id)
+  })
+
+  test('returns nothing for an empty list', () => {
+    expect(pseudoRows([], 'm1')).toEqual([])
+  })
+})
 
 describe('headings', () => {
   test('finds an atx heading', () => {

@@ -61,6 +61,28 @@ export function thoughtPatch(text: string, streaming = false): RailPatch {
   }
 }
 
+export type PseudoBlock =
+  | { text: string; thinking?: undefined }
+  | { text?: undefined; thinking: string }
+
+export type PseudoRow = { id: string; patch: RailPatch }
+
+export function pseudoRows(blocks: readonly PseudoBlock[], messageKey: string): PseudoRow[] {
+  const rows: PseudoRow[] = []
+  for (const block of blocks) {
+    const isThought = block.thinking !== undefined
+    const text = block.thinking ?? block.text ?? ''
+    if (text.trim().length === 0) continue
+    const index = rows.length + 1
+    const prefix = isThought ? 'thought' : 'narration'
+    rows.push({
+      id: `${prefix}:${messageKey}:${String(index)}`,
+      patch: isThought ? thoughtPatch(text) : narrationPatch(text),
+    })
+  }
+  return rows
+}
+
 export function narrationPatch(text: string): RailPatch {
   const first = sanitizeScalar(nonEmptyLines(text)[0] ?? '')
   return {

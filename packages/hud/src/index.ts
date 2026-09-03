@@ -14,6 +14,7 @@ import {
   railToolsChannel,
 } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType, RailComponent } from './rail-entry.ts'
+import { pseudoRows, type PseudoBlock } from './rail-pseudo.ts'
 import { applyRailTools, mapSessionRails } from './rail-tools.ts'
 import { RailStore } from './rail.ts'
 import { renderHud, type HudState } from './render.ts'
@@ -338,21 +339,22 @@ export default function hud(pi: ExtensionAPI): void {
   pi.events.on(railActionChannel, (data) => {
     const report = decodeRailAction(data)
     if (report === undefined || !railEnabled) return
-    const { toolCallId, toolName, ...patch } = report
+    const { parentToolCallId, toolCallId, toolName, ...patch } = report
     const fallback = toolName === undefined ? undefined : defaultRailLabel(toolName)
-    railFor(toolCallId).report(toolCallId, {
+    const resolved = {
       ...patch,
       doneLabel: patch.doneLabel ?? fallback ?? 'Tool',
       iconKey: patch.iconKey ?? (toolName === undefined ? 'tool' : defaultRailIcon(toolName)),
       runningLabel: patch.runningLabel ?? patch.doneLabel ?? fallback ?? 'Tool',
-    })
+    }
+    if (parentToolCallId === undefined) railFor(toolCallId).report(toolCallId, resolved)
+    else railFor(parentToolCallId).reportChild(parentToolCallId, toolCallId, resolved)
     if (toolName !== undefined) railTools.add(toolName)
   })
 
   pi.on('tool_execution_start', (event, ctx) => {
-    if (railEnabled && railTurnPending && railTools.has(event.toolName)) {
-      railTurnPending = false
-      pi.appendEntry(railEntryType, { turn: railTurn })
+    if (railTools.has(event.toolName)) {
+      openRailEntry()
     }
     if (isAskTool(event.toolName)) {
       play(ctx, sound.awaitingInputSound)
@@ -377,7 +379,25 @@ export default function hud(pi: ExtensionAPI): void {
     if (event.message.role === 'assistant') spacerFix?.markDirty()
   })
 
-  pi.on('message_end', (_event, ctx) => {
+  const openRailEntry = () => {
+    if (!railEnabled || !railTurnPending) return
+    railTurnPending = false
+    pi.appendEntry(railEntryType, { turn: railTurn })
+  }
+
+  pi.on('message_end', (event, ctx) => {
+    if (railEnabled && event.message.role === 'assistant') {
+      const blocks: PseudoBlock[] = []
+      for (const block of event.message.content) {
+        if (block.type === 'thinking') blocks.push({ thinking: block.thinking })
+        else if (block.type === 'text') blocks.push({ text: block.text })
+      }
+      const rows = pseudoRows(blocks, String(event.message.timestamp))
+      if (rows.length > 0) {
+        openRailEntry()
+        for (const row of rows) rail.report(row.id, row.patch)
+      }
+    }
     if (active) {
       sync(ctx)
     }
@@ -414,12 +434,15 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('hud-thinking', {
-    description: 'Toggle the repeated hidden thinking marker',
+    description: 'Show the full thinking text inline as well as in the rail',
     handler: async (_args, ctx) => {
       quietThinking = !quietThinking
       spacerFix?.markDirty()
       applyThinkingLabel(ctx)
-      ctx.ui.notify(`hud: thinking marker ${quietThinking ? 'hidden' : 'shown'}`, 'info')
+      ctx.ui.notify(
+        `hud: thinking ${quietThinking ? 'shown in the rail only' : 'shown inline and in the rail'}`,
+        'info',
+      )
     },
   })
 

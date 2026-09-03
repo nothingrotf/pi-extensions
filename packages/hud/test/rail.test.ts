@@ -170,6 +170,54 @@ describe('groupActions', () => {
   })
 })
 
+describe('RailStore.reportChild', () => {
+  test('nests a child under its parent', () => {
+    const store = new RailStore()
+    store.report('p', { doneLabel: 'Dispatched', status: 'pending' })
+    store.reportChild('p', 'c', { detail: 'a.ts', doneLabel: 'Read', status: 'ok' })
+    const parent = store.groups()[0]?.actions[0]
+    expect(parent?.children).toHaveLength(1)
+    expect(parent?.children?.[0]?.detail).toBe('a.ts')
+  })
+
+  test('updates an existing child in place', () => {
+    const store = new RailStore()
+    store.report('p', { doneLabel: 'Dispatched', status: 'pending' })
+    store.reportChild('p', 'c', { doneLabel: 'Read', status: 'pending' })
+    store.reportChild('p', 'c', { output: 'one\ntwo', status: 'ok' })
+    const child = store.groups()[0]?.actions[0]?.children?.[0]
+    expect(child?.status).toBe('ok')
+    expect(child?.summary).toBe('2 lines')
+    expect(store.groups()[0]?.actions[0]?.children).toHaveLength(1)
+  })
+
+  test('keeps several children in report order', () => {
+    const store = new RailStore()
+    store.report('p', { doneLabel: 'Dispatched', status: 'pending' })
+    store.reportChild('p', 'c1', { detail: 'a.ts', status: 'ok' })
+    store.reportChild('p', 'c2', { detail: 'b.ts', status: 'ok' })
+    expect(store.groups()[0]?.actions[0]?.children?.map((child) => child.detail)).toEqual([
+      'a.ts',
+      'b.ts',
+    ])
+  })
+
+  test('falls back to a top level row when the parent is unknown', () => {
+    const store = new RailStore()
+    store.reportChild('missing', 'c', { detail: 'a.ts', doneLabel: 'Read', status: 'ok' })
+    expect(store.size()).toBe(1)
+    expect(store.groups()[0]?.actions[0]?.detail).toBe('a.ts')
+  })
+
+  test('a nested parent never joins a run', () => {
+    const store = new RailStore()
+    store.report('p1', { doneLabel: 'Dispatched', status: 'ok' })
+    store.reportChild('p1', 'c', { detail: 'a.ts', status: 'ok' })
+    store.report('p2', { doneLabel: 'Dispatched', status: 'ok' })
+    expect(store.groups()).toHaveLength(2)
+  })
+})
+
 describe('pending narration row', () => {
   const done = read({ detail: 'a.ts', toolCallId: 'a' })
 
