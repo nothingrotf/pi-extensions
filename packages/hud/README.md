@@ -36,6 +36,32 @@ The throughput divides the total output tokens by the time from the first turn t
 Headers and usage rows are active by default and never enter the model context.
 Use `/hud-timestamp` to disable or enable them.
 
+## Action rail
+
+The rail draws a tree of the tool calls in the current turn.
+
+```
+7 actions ▾
+├─ ✓ ⧬ Sequenced   ×3 ▸
+├─ ✓ ▦ Read        ×2 TS 8 files · 4 files ▾
+│  ├─ ✓ ▦ Read        TS 8 files · 402 lines
+│  ╰─ ✓ ▦ Read        TS 4 files · 165 lines
+╰─ ✓ ⧬ Synthesized ×2 ▾
+   ├─ ✓ ⧬ Synthesized  · 6 lines
+   ╰─ ✓ ⧬ Synthesized  · 2 lines
+```
+
+Consecutive calls of the same tool fold into one row with a `×N` multiplier.
+The last row at each level uses the rounded corner `╰─`. Rows that are not last
+carry a trunk `│` under their children.
+
+A row updates in place. While a call runs it shows a present tense label in the
+brand color. When the call finishes the label switches to past tense and takes
+the tool color.
+
+Read `docs/rail-spec.md` for the full contract, including width rules and
+grouping semantics.
+
 ## Working loader
 
 The extension hides the built-in working loader and renders its own loader as the last widget above the editor. This keeps the loader below the `TODO` and `Subagents` widgets, in the same order as the oh-my-pi dock.
