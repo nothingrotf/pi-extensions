@@ -14,6 +14,7 @@ import { mapSessionRails } from '../src/rail-tools.ts'
 import {
   formatDuration,
   groupActions,
+  groupCap,
   groupDetail,
   groupLabel,
   labelColumn,
@@ -162,6 +163,53 @@ describe('groupActions', () => {
   test('uses the running label while the call is pending', () => {
     const group = groupActions([read({ status: 'pending' })])[0]
     expect(group === undefined ? '' : groupLabel(group)).toBe('Reading')
+  })
+})
+
+describe('group budget', () => {
+  function manyGroups(count: number): RailAction[] {
+    return Array.from({ length: count }, (_value, index) =>
+      read({
+        detail: `f${String(index)}.ts`,
+        doneLabel: `Tool${String(index)}`,
+        toolCallId: `t${String(index)}`,
+      }),
+    )
+  }
+
+  test('shows every group while the count fits the budget', () => {
+    const lines = railLines(groupActions(manyGroups(groupCap)), theme, {
+      expanded: false,
+      width: 80,
+    })
+    expect(lines).toHaveLength(groupCap + 1)
+    expect(lines.some((line) => line.includes('completed'))).toBe(false)
+  })
+
+  test('collapses the oldest groups past the budget into one row', () => {
+    const lines = railLines(groupActions(manyGroups(groupCap + 4)), theme, {
+      expanded: false,
+      width: 80,
+    })
+    expect(lines).toHaveLength(groupCap + 2)
+    expect(lines[1]).toContain('4 completed')
+  })
+
+  test('keeps the newest groups visible', () => {
+    const lines = railLines(groupActions(manyGroups(groupCap + 3)), theme, {
+      expanded: false,
+      width: 80,
+    })
+    expect(lines.at(-1)).toContain(`Tool${String(groupCap + 2)}`)
+    expect(lines.some((line) => line.includes('Tool0'))).toBe(false)
+  })
+
+  test('the collapse row is the first child of the tree', () => {
+    const lines = railLines(groupActions(manyGroups(groupCap + 1)), theme, {
+      expanded: false,
+      width: 80,
+    })
+    expect(lines[1]?.startsWith(treeBranch)).toBe(true)
   })
 })
 

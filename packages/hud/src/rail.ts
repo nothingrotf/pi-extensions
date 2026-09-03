@@ -46,6 +46,8 @@ const outputLineCap = 6
 const outputWidthCap = 120
 const childCap = 8
 
+export const groupCap = 5
+
 export function tintFor(key: IconKey): RailTint {
   switch (key) {
     case 'agent':
@@ -319,8 +321,17 @@ export function railLines(
   const width = options.width ?? 120
   const column = labelColumn(groups)
   const lines = [railHeader(groups, theme)]
-  groups.forEach((group, index) => {
-    const last = index === groups.length - 1
+  const dropped = Math.max(0, groups.length - groupCap)
+  const shownGroups = dropped > 0 ? groups.slice(dropped) : groups
+  if (dropped > 0) {
+    const completed = groups.slice(0, dropped).reduce((total, group) => total + group.count, 0)
+    const mark = tint(theme.palette, 'dim', icon('ok'))
+    lines.push(
+      `${tint(theme.palette, 'branch', treeBranch)} ${mark}   ${tint(theme.palette, 'dim', `${completed} completed`)}`,
+    )
+  }
+  shownGroups.forEach((group, index) => {
+    const last = index === shownGroups.length - 1
     const parentCell = countCell(groupLabel(group), group.count)
     const caret = group.count > 1 ? ` ${tint(theme.palette, 'caret', '▾')}` : ''
     const parent = parentParts(group)
