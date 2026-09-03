@@ -9,12 +9,21 @@ export type RailStatus = 'error' | 'ok' | 'pending'
 
 export type RailCategory = 'edit' | 'meta' | 'other' | 'read' | 'search'
 
+export type RailKind = 'narration' | 'thought' | 'tool'
+
+const pseudoKinds = new Set<RailKind>(['narration', 'thought'])
+
+export function isPseudo(kind: RailKind | undefined): boolean {
+  return kind !== undefined && pseudoKinds.has(kind)
+}
+
 export type RailAction = {
   category: RailCategory
   detail: string
   doneLabel: string
   durationMs: number | undefined
   iconKey: IconKey
+  kind?: RailKind
   output: string
   runningLabel: string
   startedAt: number | undefined
@@ -89,6 +98,19 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
   const groups: RailGroup[] = []
   let open: RailGroup | undefined
   for (const action of actions) {
+    if (isPseudo(action.kind)) {
+      open = undefined
+      groups.push({
+        actions: [action],
+        category: action.category,
+        count: 1,
+        iconKey: action.iconKey,
+        key: action.toolCallId,
+        label: action.doneLabel,
+        status: action.status,
+      })
+      continue
+    }
     if (action.category === 'meta') {
       if (mergeMeta(groups, action)) continue
       groups.push({
@@ -214,7 +236,7 @@ export function padLabel(label: string): string {
 }
 
 function countCell(label: string, count: number): string {
-  return count > 1 ? `${padLabel(label)}×${count}` : padLabel(label)
+  return count > 1 ? `${padLabel(label)}×${count} ` : padLabel(label)
 }
 
 type RowParts = {
@@ -223,6 +245,7 @@ type RowParts = {
   count: number
   duration: number | undefined
   iconKey: IconKey
+  kind: RailKind | undefined
   label: string
   padding: string
   status: RailStatus
@@ -251,7 +274,8 @@ function row(parts: RowParts, theme: RailTheme, caret: string, width: number): s
   const gap = padLabel(parts.label).slice(parts.label.length)
   const label = `${tint(theme.palette, kind, parts.label)}${gap}`
   const count = parts.count > 1 ? tint(theme.palette, 'dim', `×${parts.count}`) : ''
-  const head = `${tint(theme.palette, 'branch', parts.branch)} ${statusGlyph(parts.status, theme)} ${glyph} ${label}${count}`
+  const mark = isPseudo(parts.kind) ? ' ' : statusGlyph(parts.status, theme)
+  const head = `${tint(theme.palette, 'branch', parts.branch)} ${mark} ${glyph} ${label}${count}`
   const pieces: string[] = []
   if (parts.arg.length > 0) pieces.push(tint(theme.palette, 'arg', parts.arg))
   if (parts.summary.length > 0) {
@@ -343,6 +367,7 @@ export function railLines(
           count: group.count,
           duration: groupDuration(group),
           iconKey: group.iconKey,
+          kind: group.actions[0]?.kind,
           label: groupLabel(group),
           padding: ' '.repeat(
             Math.max(0, column - visibleWidth(parentCell)) + (group.count > 1 ? 1 : 0),
@@ -373,6 +398,7 @@ export function railLines(
             count: 1,
             duration: action.durationMs,
             iconKey: action.iconKey,
+            kind: action.kind,
             label,
             padding: '',
             status: action.status,

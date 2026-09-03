@@ -166,6 +166,70 @@ describe('groupActions', () => {
   })
 })
 
+describe('pseudo rows', () => {
+  function thought(overrides: Partial<RailAction> = {}): RailAction {
+    return read({
+      category: 'meta',
+      detail: 'weighing the options',
+      doneLabel: 'Thought',
+      iconKey: 'thought',
+      kind: 'thought',
+      runningLabel: 'Thinking',
+      ...overrides,
+    })
+  }
+
+  test('renders a thought row without a status glyph', () => {
+    const line =
+      railLines(groupActions([thought()]), theme, { expanded: false, width: 80 })[1] ?? ''
+    expect(line).not.toContain('✓')
+    expect(line).toContain('Thought')
+    expect(line).toContain('weighing the options')
+  })
+
+  test('keeps the body aligned with a tool row', () => {
+    const pseudo =
+      railLines(groupActions([thought()]), theme, { expanded: false, width: 80 })[1] ?? ''
+    const tool =
+      railLines(groupActions([read({ detail: 'a.ts' })]), theme, {
+        expanded: false,
+        width: 80,
+      })[1] ?? ''
+    expect(visibleWidth(pseudo.slice(0, pseudo.indexOf('Thought')))).toBe(
+      visibleWidth(tool.slice(0, tool.indexOf('Read'))),
+    )
+  })
+
+  test('never groups two thought rows', () => {
+    const groups = groupActions([thought({ toolCallId: 'a' }), thought({ toolCallId: 'b' })])
+    expect(groups).toHaveLength(2)
+  })
+
+  test('never groups a narration row', () => {
+    const say = (id: string): RailAction =>
+      thought({ doneLabel: 'Note', iconKey: 'chat', kind: 'narration', toolCallId: id })
+    expect(groupActions([say('a'), say('b')])).toHaveLength(2)
+  })
+
+  test('a pending thought row uses the running label', () => {
+    const line =
+      railLines(groupActions([thought({ status: 'pending' })]), theme, {
+        expanded: false,
+        width: 80,
+      })[1] ?? ''
+    expect(line).toContain('Thinking')
+  })
+
+  test('still groups tool rows around a thought row', () => {
+    const groups = groupActions([
+      read({ toolCallId: 'a' }),
+      read({ toolCallId: 'b' }),
+      thought({ toolCallId: 't' }),
+    ])
+    expect(groups.map((group) => group.count)).toEqual([2, 1])
+  })
+})
+
 describe('group budget', () => {
   function manyGroups(count: number): RailAction[] {
     return Array.from({ length: count }, (_value, index) =>
