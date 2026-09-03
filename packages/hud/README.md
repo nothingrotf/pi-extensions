@@ -13,17 +13,25 @@ The left side shows:
 The right side shows provider quota windows and context use.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 
-The transcript shows a usage row below each assistant message:
+The transcript labels each message with a role header and closes each assistant turn with a usage row:
 
 ```text
-11:43:23 (2m ago) · ⤵ 2.4K · ⤴ 30 · 💾 254K · ⚡ 1.4/s
+◆ You · 10:11 PM (now)
+  this harness can use a todo list tool?
+
+● Agent · 10:11 PM (now)
+  Yes. The harness registers todo_write and todo_read.
+
+   ▪ 8s · 43.4k · 165 out · ⛁ 93% cached · ⚡23.9/s
 ```
 
-The row shows the local time with its age, input tokens, output tokens, cache reads, and output tokens per second.
+The header shows the role glyph, the role, the local time, and the age of the message. The age updates when the transcript redraws.
+
+The usage row shows the turn duration, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. Each part appears only when the message reports it. A turn that reports no tokens shows no row.
+
 The throughput divides the output tokens by the time from the turn start to the end of the message.
-The cache and throughput parts appear only when the message reports them.
-Usage rows are active by default and never enter the model context.
-Use `/hud-timestamp` to disable or enable usage rows.
+Role headers and usage rows are active by default and never enter the model context.
+Use `/hud-timestamp` to disable or enable them.
 
 ## Working loader
 

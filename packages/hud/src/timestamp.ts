@@ -1,9 +1,17 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
+export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
 
 const minimumDurationMs = 100
+
+export type MessageRole = 'assistant' | 'user'
+
+export type RoleEntryData = {
+  role: MessageRole
+  timestamp: number
+}
 
 export type UsageEntryData = {
   cacheRead: number
@@ -31,20 +39,26 @@ function trim1(value: number): string {
   return text.endsWith('.0') ? text.slice(0, -2) : text
 }
 
-export function formatNumber(value: number): string {
+export function formatTokens(value: number): string {
   if (value < 1_000) return String(value)
-  if (value < 10_000) return `${trim1(value / 1_000)}K`
-  if (value < 1_000_000) return `${Math.round(value / 1_000)}K`
-  if (value < 10_000_000) return `${trim1(value / 1_000_000)}M`
-  if (value < 1_000_000_000) return `${Math.round(value / 1_000_000)}M`
-  if (value < 10_000_000_000) return `${trim1(value / 1_000_000_000)}B`
-  return `${Math.round(value / 1_000_000_000)}B`
+  if (value < 1_000_000) return `${trim1(value / 1_000)}k`
+  return `${trim1(value / 1_000_000)}m`
+}
+
+export function formatSpan(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${milliseconds}ms`
+  if (milliseconds < 60_000) return `${Math.round(milliseconds / 1_000)}s`
+  const minutes = Math.floor(milliseconds / 60_000)
+  const seconds = Math.round((milliseconds % 60_000) / 1_000)
+  return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
 }
 
 export function formatClock(timestamp: number): string {
   const date = new Date(timestamp)
-  const pad = (value: number): string => String(value).padStart(2, '0')
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  const hours = date.getHours()
+  const suffix = hours < 12 ? 'AM' : 'PM'
+  const hour = hours % 12 === 0 ? 12 : hours % 12
+  return `${hour}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`
 }
 
 export function formatRelative(timestamp: number, now: number): string {
@@ -55,19 +69,30 @@ export function formatRelative(timestamp: number, now: number): string {
   return `${Math.floor(seconds / 3_600)}h ago`
 }
 
-export function formatUsageRow(data: UsageEntryData, now: number): string {
-  const parts = [
-    `${formatClock(data.timestamp)} (${formatRelative(data.timestamp, now)})`,
-    `⤵ ${formatNumber(data.input)}`,
-    `⤴ ${formatNumber(data.output)}`,
-  ]
-  if (data.cacheRead > 0) {
-    parts.push(`💾 ${formatNumber(data.cacheRead)}`)
+export function roleLabel(role: MessageRole): string {
+  return role === 'user' ? 'You' : 'Agent'
+}
+
+export function roleGlyph(role: MessageRole): string {
+  return role === 'user' ? '◆' : '●'
+}
+
+export function hasUsage(data: UsageEntryData): boolean {
+  return data.input > 0 || data.output > 0
+}
+
+export function formatUsageRow(data: UsageEntryData): string {
+  const parts: string[] = []
+  if (data.durationMs !== undefined && data.durationMs > 0) parts.push(formatSpan(data.durationMs))
+  parts.push(formatTokens(data.input))
+  parts.push(`${formatTokens(data.output)} out`)
+  if (data.input > 0 && data.cacheRead > 0) {
+    parts.push(`⛁ ${Math.round((data.cacheRead / data.input) * 100)}% cached`)
   }
   if (data.durationMs !== undefined && data.durationMs > minimumDurationMs && data.output > 0) {
-    parts.push(`⚡ ${((data.output / data.durationMs) * 1000).toFixed(1)}/s`)
+    parts.push(`⚡${((data.output / data.durationMs) * 1000).toFixed(1)}/s`)
   }
-  return parts.join(' · ')
+  return `▪ ${parts.join(' · ')}`
 }
 
 export function toUsageEntry(
@@ -76,10 +101,11 @@ export function toUsageEntry(
   now: number,
 ): UsageEntryData {
   const usage = message.usage ?? {}
+  const cacheRead = usage.cacheRead ?? 0
   return {
-    cacheRead: usage.cacheRead ?? 0,
+    cacheRead,
     durationMs: startedAt === undefined ? undefined : Math.max(0, now - startedAt),
-    input: (usage.input ?? 0) + (usage.cacheWrite ?? 0),
+    input: (usage.input ?? 0) + (usage.cacheWrite ?? 0) + cacheRead,
     output: usage.output ?? 0,
     timestamp: message.timestamp ?? now,
   }
@@ -91,6 +117,14 @@ export function registerTimestamps(pi: ExtensionAPI): void {
 
   pi.on('turn_start', () => {
     startedAt = Date.now()
+  })
+
+  pi.on('message_start', (event) => {
+    const role = event.message.role
+    if (!enabled || (role !== 'assistant' && role !== 'user')) {
+      return
+    }
+    pi.appendEntry<RoleEntryData>(roleEntryType, { role, timestamp: Date.now() })
   })
 
   pi.on('message_end', (event) => {
@@ -106,15 +140,28 @@ export function registerTimestamps(pi: ExtensionAPI): void {
     pi.appendEntry<UsageEntryData>(timestampEntryType, toUsageEntry(message, start, Date.now()))
   })
 
-  pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {
+  pi.registerEntryRenderer<RoleEntryData>(roleEntryType, (entry, _options, theme) => {
     if (!enabled || entry.data === undefined) {
       return undefined
     }
-    return new Text(`\n${theme.fg('dim', formatUsageRow(entry.data, Date.now()))}`, 1, 0)
+    const { role, timestamp } = entry.data
+    const stamp = `${formatClock(timestamp)} (${formatRelative(timestamp, Date.now())})`
+    return new Text(
+      `${theme.fg('accent', roleGlyph(role))} ${theme.bold(theme.fg('accent', roleLabel(role)))} ${theme.fg('dim', `· ${stamp}`)}`,
+      1,
+      0,
+    )
+  })
+
+  pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {
+    if (!enabled || entry.data === undefined || !hasUsage(entry.data)) {
+      return undefined
+    }
+    return new Text(theme.fg('dim', formatUsageRow(entry.data)), 3, 0)
   })
 
   pi.registerCommand('hud-timestamp', {
-    description: 'Toggle per-turn usage rows',
+    description: 'Toggle transcript role headers and usage rows',
     handler: async (_args, ctx) => {
       enabled = !enabled
       ctx.ui.notify(`hud: timestamps ${enabled ? 'enabled' : 'disabled'}`, 'info')
