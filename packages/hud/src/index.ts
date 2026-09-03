@@ -238,6 +238,10 @@ export default function hud(pi: ExtensionAPI): void {
     )
   })
 
+  pi.on('agent_start', () => {
+    dock.reset()
+  })
+
   pi.on('turn_start', (_event, ctx) => {
     if (active && ctx.hasUI && ctx.mode === 'tui') dock.start(ctx.ui)
   })

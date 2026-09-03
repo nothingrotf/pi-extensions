@@ -34,6 +34,12 @@ function harness() {
     turnStart() {
       handlers.get('turn_start')({}, ctx)
     },
+    agentStart() {
+      handlers.get('agent_start')({}, ctx)
+    },
+    agentEnd() {
+      handlers.get('agent_end')({}, ctx)
+    },
     end(message) {
       handlers.get('message_end')({ message }, ctx)
     },
@@ -55,21 +61,22 @@ function harness() {
 const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
 
 describe('transcript lifecycle', () => {
-  test('records assistant usage rows only', () => {
+  test('records one usage row per agent run', () => {
     const instance = harness()
+    instance.agentStart()
     instance.turnStart()
     instance.end({ role: 'user', timestamp: 100 })
     instance.end({ role: 'assistant', timestamp: 200, usage })
     instance.end({ role: 'toolResult', timestamp: 300 })
+    instance.turnStart()
+    instance.end({ role: 'assistant', timestamp: 400, usage })
+    expect(instance.entries).toEqual([])
+    instance.agentEnd()
     expect(instance.entries.map((entry) => entry.customType)).toEqual([timestampEntryType])
-    expect(instance.entries[0].data).toMatchObject({
-      cacheRead: 0,
-      cost: 0,
-      input: 1,
-      output: 2,
-      timestamp: 200,
-    })
+    expect(instance.entries[0].data).toMatchObject({ cacheRead: 0, cost: 0, input: 2, output: 4 })
     expect(instance.entries[0].data.durationMs).toBeGreaterThanOrEqual(0)
+    instance.agentEnd()
+    expect(instance.entries).toHaveLength(1)
   })
 
   test('toggles transcript recording and rendering', async () => {
@@ -84,12 +91,18 @@ describe('transcript lifecycle', () => {
     }
     expect(instance.render(data)).toBeDefined()
     await instance.toggle()
+    instance.agentStart()
+    instance.turnStart()
     instance.end({ role: 'assistant', timestamp: 1, usage })
+    instance.agentEnd()
     expect(instance.entries).toEqual([])
     expect(instance.render(data)).toBeUndefined()
     expect(instance.notifications).toEqual([{ message: 'hud: timestamps disabled', level: 'info' }])
     await instance.toggle()
+    instance.agentStart()
+    instance.turnStart()
     instance.end({ role: 'assistant', timestamp: 1, usage })
+    instance.agentEnd()
     expect(instance.entries).toHaveLength(1)
     expect(instance.render(data)).toBeDefined()
   })

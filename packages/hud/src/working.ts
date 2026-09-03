@@ -41,8 +41,11 @@ export class WorkingDock {
     this.tui?.requestRender()
   }
 
-  start(ui: ExtensionUIContext): void {
+  reset(): void {
     this.startedAt = Date.now()
+  }
+
+  start(ui: ExtensionUIContext): void {
     this.active = true
     if (!this.registered) {
       this.registered = true

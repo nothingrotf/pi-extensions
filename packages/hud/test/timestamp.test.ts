@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vite-plus/test'
 
 import {
+  addMessageUsage,
+  emptyRunTotals,
   formatSpan,
   formatTokens,
   formatCost,
@@ -47,19 +49,28 @@ describe('transcript rows', () => {
     ).toBe(true)
   })
 
-  test('maps assistant messages to usage entries', () => {
-    expect(
-      toUsageEntry(
-        {
-          role: 'assistant',
-          timestamp: 500,
-          usage: { cacheRead: 7, cacheWrite: 3, cost: { total: 0.5 }, input: 2, output: 4 },
-        },
-        100,
-        1_100,
-      ),
-    ).toEqual({ cacheRead: 7, cost: 0.5, durationMs: 1_000, input: 12, output: 4, timestamp: 500 })
-    expect(toUsageEntry({ role: 'assistant' }, undefined, 9)).toEqual({
+  test('accumulates a run and maps it to a usage entry', () => {
+    const first = addMessageUsage(
+      { ...emptyRunTotals(), startedAt: 100 },
+      {
+        role: 'assistant',
+        usage: { cacheRead: 7, cacheWrite: 3, cost: { total: 0.5 }, input: 2, output: 4 },
+      },
+    )
+    const second = addMessageUsage(first, {
+      role: 'assistant',
+      usage: { cacheRead: 1, cacheWrite: 0, cost: { total: 0.25 }, input: 1, output: 6 },
+    })
+    expect(second).toEqual({ cacheRead: 8, cost: 0.75, input: 14, output: 10, startedAt: 100 })
+    expect(toUsageEntry(second, 1_100)).toEqual({
+      cacheRead: 8,
+      cost: 0.75,
+      durationMs: 1_000,
+      input: 14,
+      output: 10,
+      timestamp: 1_100,
+    })
+    expect(toUsageEntry(emptyRunTotals(), 9)).toEqual({
       cacheRead: 0,
       cost: 0,
       durationMs: undefined,

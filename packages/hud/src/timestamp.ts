@@ -71,42 +71,68 @@ export function formatUsageRow(data: UsageEntryData): string {
   return `▪ ${parts.join(' · ')}`
 }
 
-export function toUsageEntry(
-  message: AssistantCandidate,
-  startedAt: number | undefined,
-  now: number,
-): UsageEntryData {
+export interface RunTotals {
+  cacheRead: number
+  cost: number
+  input: number
+  output: number
+  startedAt: number | undefined
+}
+
+export function emptyRunTotals(): RunTotals {
+  return { cacheRead: 0, cost: 0, input: 0, output: 0, startedAt: undefined }
+}
+
+export function addMessageUsage(totals: RunTotals, message: AssistantCandidate): RunTotals {
   const usage = message.usage ?? {}
   const cacheRead = usage.cacheRead ?? 0
   return {
-    cacheRead,
-    cost: usage.cost?.total ?? 0,
-    durationMs: startedAt === undefined ? undefined : Math.max(0, now - startedAt),
-    input: (usage.input ?? 0) + (usage.cacheWrite ?? 0) + cacheRead,
-    output: usage.output ?? 0,
-    timestamp: message.timestamp ?? now,
+    cacheRead: totals.cacheRead + cacheRead,
+    cost: totals.cost + (usage.cost?.total ?? 0),
+    input: totals.input + (usage.input ?? 0) + (usage.cacheWrite ?? 0) + cacheRead,
+    output: totals.output + (usage.output ?? 0),
+    startedAt: totals.startedAt,
+  }
+}
+
+export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
+  return {
+    cacheRead: totals.cacheRead,
+    cost: totals.cost,
+    durationMs: totals.startedAt === undefined ? undefined : Math.max(0, now - totals.startedAt),
+    input: totals.input,
+    output: totals.output,
+    timestamp: now,
   }
 }
 
 export function registerTimestamps(pi: ExtensionAPI): void {
   let enabled = true
-  let startedAt: number | undefined
+  let totals = emptyRunTotals()
+
+  pi.on('agent_start', () => {
+    totals = emptyRunTotals()
+  })
 
   pi.on('turn_start', () => {
-    startedAt = Date.now()
+    if (totals.startedAt === undefined) {
+      totals = { ...totals, startedAt: Date.now() }
+    }
   })
 
   pi.on('message_end', (event) => {
-    const message = event.message
-    if (message.role !== 'assistant') {
-      return
+    if (event.message.role === 'assistant') {
+      totals = addMessageUsage(totals, event.message)
     }
-    const start = startedAt
-    startedAt = undefined
-    if (!enabled) {
-      return
+  })
+
+  pi.on('agent_end', () => {
+    const run = totals
+    totals = emptyRunTotals()
+    const entry = toUsageEntry(run, Date.now())
+    if (enabled && hasUsage(entry)) {
+      pi.appendEntry<UsageEntryData>(timestampEntryType, entry)
     }
-    pi.appendEntry<UsageEntryData>(timestampEntryType, toUsageEntry(message, start, Date.now()))
   })
 
   pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {

@@ -13,16 +13,16 @@ The left side shows:
 The right side shows provider quota windows and context use.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 
-The transcript closes each assistant turn with a usage row:
+The transcript closes each agent run with one usage row:
 
 ```text
 ▪ 5s · $0.299 · 576.6k in · 278 out · ⛁ 100% cached · ⚡58.6/s
 ```
 
-The row shows the turn duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. Each part appears only when the message reports it. A turn that reports no tokens shows no row.
+The row totals every assistant message in the run. It shows the run duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. A run that reports no tokens shows no row.
 
 The row shares the column that the `outputPad` setting controls.
-The throughput divides the output tokens by the time from the turn start to the end of the message.
+The throughput divides the total output tokens by the time from the first turn to the end of the run.
 Usage rows are active by default and never enter the model context.
 Use `/hud-timestamp` to disable or enable them.
 
@@ -30,7 +30,7 @@ Use `/hud-timestamp` to disable or enable them.
 
 The extension hides the built-in working loader and renders its own loader as the last widget above the editor. This keeps the loader below the `TODO` and `Subagents` widgets, in the same order as the oh-my-pi dock.
 
-The loader appends the elapsed time of the current turn, for example ` ⎋ Working… · 9s`.
+The loader appends the elapsed time of the current run, for example ` ⎋ Working… · 9s`. The final usage row reports the same span.
 
 Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `Working...`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
 
