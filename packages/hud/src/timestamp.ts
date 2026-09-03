@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
+import { prettyModel } from './format.ts'
+
 export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
 
@@ -9,12 +11,14 @@ const minimumDurationMs = 100
 export type MessageRole = 'assistant' | 'user'
 
 export type RoleEntryData = {
+  label?: string
   role: MessageRole
   timestamp: number
 }
 
 export type UsageEntryData = {
   cacheRead: number
+  cost: number
   durationMs: number | undefined
   input: number
   output: number
@@ -24,6 +28,7 @@ export type UsageEntryData = {
 type UsageCandidate = {
   cacheRead?: number
   cacheWrite?: number
+  cost?: { total?: number }
   input?: number
   output?: number
 }
@@ -61,16 +66,15 @@ export function formatClock(timestamp: number): string {
   return `${hour}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`
 }
 
-export function formatRelative(timestamp: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000))
-  if (seconds < 5) return 'now'
-  if (seconds < 60) return `${seconds}s ago`
-  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ago`
-  return `${Math.floor(seconds / 3_600)}h ago`
+export function roleLabel(role: MessageRole, label: string | undefined): string {
+  if (role === 'user') return 'You'
+  const trimmed = label?.trim()
+  return trimmed === undefined || trimmed.length === 0 ? 'Agent' : trimmed
 }
 
-export function roleLabel(role: MessageRole): string {
-  return role === 'user' ? 'You' : 'Agent'
+export function formatCost(value: number): string {
+  if (value < 0.001) return '$<0.001'
+  return `$${value < 1 ? value.toFixed(3) : value.toFixed(2)}`
 }
 
 export function roleGlyph(role: MessageRole): string {
@@ -84,7 +88,8 @@ export function hasUsage(data: UsageEntryData): boolean {
 export function formatUsageRow(data: UsageEntryData): string {
   const parts: string[] = []
   if (data.durationMs !== undefined && data.durationMs > 0) parts.push(formatSpan(data.durationMs))
-  parts.push(formatTokens(data.input))
+  if (data.cost > 0) parts.push(formatCost(data.cost))
+  parts.push(`${formatTokens(data.input)} in`)
   parts.push(`${formatTokens(data.output)} out`)
   if (data.input > 0 && data.cacheRead > 0) {
     parts.push(`⛁ ${Math.round((data.cacheRead / data.input) * 100)}% cached`)
@@ -104,6 +109,7 @@ export function toUsageEntry(
   const cacheRead = usage.cacheRead ?? 0
   return {
     cacheRead,
+    cost: usage.cost?.total ?? 0,
     durationMs: startedAt === undefined ? undefined : Math.max(0, now - startedAt),
     input: (usage.input ?? 0) + (usage.cacheWrite ?? 0) + cacheRead,
     output: usage.output ?? 0,
@@ -119,12 +125,14 @@ export function registerTimestamps(pi: ExtensionAPI): void {
     startedAt = Date.now()
   })
 
-  pi.on('message_start', (event) => {
+  pi.on('message_start', (event, ctx) => {
     const role = event.message.role
     if (!enabled || (role !== 'assistant' && role !== 'user')) {
       return
     }
-    pi.appendEntry<RoleEntryData>(roleEntryType, { role, timestamp: Date.now() })
+    const data: RoleEntryData = { role, timestamp: Date.now() }
+    if (role === 'assistant') data.label = prettyModel(ctx.model?.id)
+    pi.appendEntry<RoleEntryData>(roleEntryType, data)
   })
 
   pi.on('message_end', (event) => {
@@ -144,10 +152,9 @@ export function registerTimestamps(pi: ExtensionAPI): void {
     if (!enabled || entry.data === undefined) {
       return undefined
     }
-    const { role, timestamp } = entry.data
-    const stamp = `${formatClock(timestamp)} (${formatRelative(timestamp, Date.now())})`
+    const { label, role, timestamp } = entry.data
     return new Text(
-      `${theme.fg('accent', roleGlyph(role))} ${theme.bold(theme.fg('accent', roleLabel(role)))} ${theme.fg('dim', `· ${stamp}`)}`,
+      `${theme.fg('accent', roleGlyph(role))} ${theme.bold(theme.fg('accent', roleLabel(role, label)))} ${theme.fg('dim', `· ${formatClock(timestamp)}`)}`,
       1,
       0,
     )

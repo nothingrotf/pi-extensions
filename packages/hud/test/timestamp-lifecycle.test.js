@@ -55,7 +55,7 @@ function harness() {
   }
 }
 
-const usage = { cacheRead: 0, cacheWrite: 0, input: 1, output: 2 }
+const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
 
 describe('transcript lifecycle', () => {
   test('records role headers and assistant usage rows', () => {
@@ -85,7 +85,14 @@ describe('transcript lifecycle', () => {
 
   test('toggles transcript recording and rendering', async () => {
     const instance = harness()
-    const data = { cacheRead: 0, durationMs: 1_000, input: 1, output: 2, timestamp: Date.now() }
+    const data = {
+      cacheRead: 0,
+      cost: 0,
+      durationMs: 1_000,
+      input: 1,
+      output: 2,
+      timestamp: Date.now(),
+    }
     expect(instance.render(data)).toBeDefined()
     expect(instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)).toBeDefined()
     await instance.toggle()
