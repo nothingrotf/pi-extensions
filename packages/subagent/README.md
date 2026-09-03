@@ -552,7 +552,7 @@ The result replaces the agent rows with live rows. A running row shows the tool 
 
 ```text
 • Probe registry ⟦shell⟧ · 1 🛠 · 1.9%/272K · $0.03
-  └ Bash sleep 25 && echo ok
+  ╰ Bash sleep 25 && echo ok
 • Probe registry ⟦shell⟧ ⟦done⟧ · 1 🛠 · $0.03 · 28.3s
   Output
     ok
@@ -565,7 +565,7 @@ The `Subagents` widget above the editor lists the running children with the same
 ```text
  Subagents
   ├─ • Ampere lane ⟦explore⟧ Read runtime.ts
-  └─ • Ada lane ⟦shell⟧ Bash bun run test
+  ╰─ • Ada lane ⟦shell⟧ Bash bun run test
 ```
 
 Each row shows the bold description, the agent type badge, and the last activity in muted text.
@@ -577,7 +577,7 @@ A foreground or batch Task call streams a job tree into its tool result while th
 ⓘ waiting on 2 of 3 jobs 1 done
 ├─ ⣾ ⟦task⟧ Ampere lane 8m8s
 ├─ ⣾ ⟦task⟧ Ada lane 8m8s
-└─ • ⟦task⟧ Blackwell lane 2m1s
+╰─ • ⟦task⟧ Blackwell lane 2m1s
 ```
 
 Running rows show a braille spinner and a shimmer sweep across the label.

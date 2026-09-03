@@ -49,7 +49,13 @@ import {
   type TodoStatus,
 } from './domain.ts'
 import { markdownToTodos, todosToMarkdown } from './markdown.ts'
-import { formatTodoLine, selectCollapsedTodos, TodoOverlay } from './overlay.ts'
+import {
+  formatTodoLine,
+  selectCollapsedTodos,
+  TodoOverlay,
+  treeBranch,
+  treeLast,
+} from './overlay.ts'
 import { emptyRailComponent, RailBridge, type RailStatus } from './rail.ts'
 import {
   createReminderCycle,
@@ -206,10 +212,10 @@ export function renderTodoLines(
     : selectCollapsedTodos([...todos], toolResultCap)
   selection.items.forEach((todo, index) => {
     const last = selection.summary === '' && index === selection.items.length - 1
-    lines.push(`${theme.fg('dim', last ? '└─' : '├─')} ${formatTodoLine(todo, theme)}`)
+    lines.push(`${theme.fg('dim', last ? treeLast : treeBranch)} ${formatTodoLine(todo, theme)}`)
   })
   if (selection.summary !== '') {
-    lines.push(`${theme.fg('dim', '└─')} ${theme.fg('muted', selection.summary)}`)
+    lines.push(`${theme.fg('dim', treeLast)} ${theme.fg('muted', selection.summary)}`)
   }
   return lines
 }
@@ -692,7 +698,7 @@ export default function todo(pi: ExtensionAPI): void {
       ),
       ...details.todos.map(
         (todo, index) =>
-          `${theme.fg('dim', index === details.todos.length - 1 ? '└─' : '├─')} ${theme.fg('warning', `☐ ${sanitizeTerminalText(todo.content)}`)}`,
+          `${theme.fg('dim', index === details.todos.length - 1 ? treeLast : treeBranch)} ${theme.fg('warning', `☐ ${sanitizeTerminalText(todo.content)}`)}`,
       ),
     ]
     return new Text(lines.join('\n'), 1, 0)

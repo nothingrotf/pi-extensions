@@ -2,7 +2,7 @@ import { getMarkdownTheme } from '@earendil-works/pi-coding-agent'
 import { type Component, Markdown, Text, truncateToWidth } from '@earendil-works/pi-tui'
 
 import type { BatchItemResult } from './coordinator.ts'
-import { oneLineLabel, type SubagentTheme } from './format.ts'
+import { oneLineLabel, type SubagentTheme, TREE_TAIL } from './format.ts'
 import {
   type BadgeColor,
   formatBadge,
@@ -205,7 +205,7 @@ export function renderAgentRow(
   const lines = [line, ...taskLines(row.task, options.expanded, theme)]
   if (row.status === 'running' && row.activity !== undefined) {
     lines.push(
-      `  ${theme.fg('dim', '└')} ${theme.fg('muted', oneLineLabel(row.activity, LINE_WIDTH))}`,
+      `  ${theme.fg('dim', TREE_TAIL)} ${theme.fg('muted', oneLineLabel(row.activity, LINE_WIDTH))}`,
     )
   }
   if (row.error !== undefined) {

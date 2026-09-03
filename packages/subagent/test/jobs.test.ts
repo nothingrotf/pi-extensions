@@ -108,7 +108,7 @@ describe('job tree', () => {
     const live = renderJobTree(jobs, { expanded: false, isPartial: true, now: 0, width: 80 }, theme)
     expect(live[0]).toBe('ⓘ waiting on 1 of 2 jobs 1 done')
     expect(stripTerminalSequences(live[1] ?? '')).toBe('├─ ⣾ ⟦task⟧ ampere lane 8m8s')
-    expect(live[2]).toBe('└─ • ⟦task⟧ ada lane 2.0s')
+    expect(live[2]).toBe('╰─ • ⟦task⟧ ada lane 2.0s')
     expect(live.every((line) => visibleWidth(line) <= 80)).toBe(true)
 
     const sealed = renderJobTree(
@@ -116,14 +116,14 @@ describe('job tree', () => {
       { expanded: false, isPartial: false, now: 0, width: 80 },
       theme,
     )
-    expect(sealed).toEqual(['✔ 1 job settled 1 done', '└─ • ⟦task⟧ ada lane 2.0s'])
+    expect(sealed).toEqual(['✔ 1 job settled 1 done', '╰─ • ⟦task⟧ ada lane 2.0s'])
   })
 
   it('collapses long lists and truncates to the component width', () => {
     const jobs = Array.from({ length: 10 }, (_value, index) => job(`j${index}`, 'running', index))
     const lines = new JobTree(jobs, { expanded: false, isPartial: true }, theme).render(24)
     expect(lines).toHaveLength(10)
-    expect(lines.at(-1)).toBe('└─ … 2 more jobs')
+    expect(lines.at(-1)).toBe('╰─ … 2 more jobs')
     expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true)
     const expanded = new JobTree(jobs, { expanded: true, isPartial: true }, theme).render(80)
     expect(expanded).toHaveLength(11)

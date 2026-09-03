@@ -208,7 +208,7 @@ describe('task control wait', () => {
       theme,
       state,
     ).render(80)
-    expect(sealed).toEqual(['✔ 1 job settled 1 done', '└─ • ⟦task⟧ b lane 4.0s'])
+    expect(sealed).toEqual(['✔ 1 job settled 1 done', '╰─ • ⟦task⟧ b lane 4.0s'])
     const listing = renderTaskControlResult(
       { action: 'jobs', jobs },
       '',
@@ -219,7 +219,7 @@ describe('task control wait', () => {
     expect(listing).toEqual([
       'ⓘ waiting on 1 of 2 jobs 1 done',
       '├─ ⟳ ⟦task⟧ a lane 4.0s',
-      '└─ • ⟦task⟧ b lane 4.0s',
+      '╰─ • ⟦task⟧ b lane 4.0s',
     ])
   })
 

@@ -78,7 +78,7 @@ describe('subagent TUI', () => {
     ]
     const widget = new SubagentsWidget(() => snapshots, theme)
     const lines = widget.render(72)
-    expect(lines).toEqual([' Subagents', '  └─ • Inspect runtime ⟦explore⟧ read', ''])
+    expect(lines).toEqual([' Subagents', '  ╰─ • Inspect runtime ⟦explore⟧ read', ''])
     expect(lines.every((line) => visibleWidth(line) <= 72)).toBe(true)
     expect(new SubagentsWidget(() => snapshots.slice(1), theme).render(72)).toEqual([])
   })

@@ -54,4 +54,21 @@ describe('RailComponent', () => {
     expect(lines[0]).toBe(' 1 action ▾')
     expect(lines[1]).toBe(' ╰─ ✓ □ Read a.ts')
   })
+
+  test('keeps a right gutter so durations clear the scrollbar', () => {
+    const store = new RailStore()
+    store.report('a', {
+      category: 'read',
+      detail: 'a.ts',
+      doneLabel: 'Read',
+      durationMs: 1500,
+      iconKey: 'read',
+      status: 'ok',
+    })
+    const component = new RailComponent(() => store, theme, false)
+    const width = 40
+    const lines = plain(component.render(width))
+    expect(lines[1]?.endsWith('1.5s')).toBe(true)
+    expect(lines[1]?.length).toBe(width - 2)
+  })
 })

@@ -72,7 +72,7 @@ describe('persistent todo tree', () => {
       ' TODO · 1/3',
       '  ├─ ☑ ~done~',
       '  ├─ ☐ active',
-      '  └─ ☐ pending',
+      '  ╰─ ☐ pending',
       '',
     ])
   })
@@ -82,7 +82,7 @@ describe('persistent todo tree', () => {
     instance.overlay.update()
     expect(instance.render()).toContain('  ├─ ☑ ~done~')
     instance.overlay.hideCompletedFromPreviousRun()
-    expect(instance.render()).toEqual([' TODO · 0/1', '  └─ ☐ next', ''])
+    expect(instance.render()).toEqual([' TODO · 0/1', '  ╰─ ☐ next', ''])
   })
 
   test('keeps active rows within the row budget', () => {
@@ -91,7 +91,7 @@ describe('persistent todo tree', () => {
     )
     instance.overlay.update()
     const lines = instance.render()
-    expect(lines).toContain('  └─ … 9 more todos')
+    expect(lines).toContain('  ╰─ … 9 more todos')
     expect(lines.filter((line) => line.includes('☐')).length).toBe(5)
   })
 
@@ -103,7 +103,7 @@ describe('persistent todo tree', () => {
       todo('d', 'in_progress'),
     ])
     instance.overlay.update()
-    expect(instance.render()).toEqual([' TODO · 3/4', '  ├─ ☐ ~c~', '  └─ ☐ d', ''])
+    expect(instance.render()).toEqual([' TODO · 3/4', '  ├─ ☐ ~c~', '  ╰─ ☐ d', ''])
   })
 
   test('keeps the widget registered and renders nothing when empty', () => {
@@ -118,6 +118,6 @@ describe('persistent todo tree', () => {
   test('sanitizes terminal control sequences', () => {
     const instance = harness([todo('\u001b[31munsafe', 'pending')])
     instance.overlay.update()
-    expect(instance.render()).toContain('  └─ ☐ unsafe')
+    expect(instance.render()).toContain('  ╰─ ☐ unsafe')
   })
 })

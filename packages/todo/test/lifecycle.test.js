@@ -505,7 +505,7 @@ describe('todo reminders', () => {
       '☑ Todo 2 tasks',
       '',
       '├─ ☐ Ask user',
-      '└─ ☐ Work',
+      '╰─ ☐ Work',
     ])
     expect(instance.renderResult('todo_write', result)[0]).toBe('☑ Todo 2 tasks')
     expect(instance.renderResult('todo_write', result)[2]).toBe(
@@ -677,7 +677,7 @@ describe('/todo command', () => {
     await instance.emit('before_agent_start', { prompt: 'go', systemPrompt: '' })
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
     expect(instance.renderMessage(instance.messages.at(-1).message)).toBe(
-      '⚠ Todo reminder 1/3 · 1 incomplete\n└─ ☐ Inspect',
+      '⚠ Todo reminder 1/3 · 1 incomplete\n╰─ ☐ Inspect',
     )
     expect(instance.renderMessage({ customType: 'todo-reminder', content: 'x' })).toBe(
       '⚠ Todo reminder',

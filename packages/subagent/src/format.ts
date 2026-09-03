@@ -6,6 +6,10 @@ import type { RunStatus, RunUsage } from './schema.ts'
 
 export type SubagentTheme = Pick<Theme, 'bg' | 'bold' | 'fg' | 'getFgAnsi'>
 
+export const TREE_BRANCH = '├─'
+export const TREE_LAST = '╰─'
+export const TREE_TAIL = '╰'
+
 export function oneLineLabel(text: string, maxLength = 160): string {
   const visible = Array.from(stripTerminalSequences(text))
     .map((character) => {
@@ -132,7 +136,7 @@ export function renderSubagentHudLines(
   const hidden = running.length - visible.length
   const rows = visible.map(
     (snapshot, index) =>
-      `${theme.fg('dim', index === visible.length - 1 ? '└─' : '├─')} ${widgetRow(snapshot, theme)}`,
+      `${theme.fg('dim', index === visible.length - 1 ? TREE_LAST : TREE_BRANCH)} ${widgetRow(snapshot, theme)}`,
   )
   if (hidden > 0) rows.push(theme.fg('dim', `… ${hidden} more running`))
   return [

@@ -15,6 +15,7 @@ export function decodeRailEntry<Input>(data: Input): number | undefined {
 }
 
 const railIndent = ' '
+const railGutter = 2
 
 export type RailThemeSource = Pick<Theme, 'fg'>
 
@@ -41,7 +42,7 @@ export class RailComponent implements Component {
   render(width: number): string[] {
     const store = this.resolve()
     if (store === undefined) return []
-    const inner = Math.max(1, width - railIndent.length)
+    const inner = Math.max(1, width - railIndent.length - railGutter)
     return railLines(store.groups(), this.theme, {
       expanded: this.expanded,
       width: inner,

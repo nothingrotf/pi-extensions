@@ -126,7 +126,7 @@ The tree uses a flat version of the oh-my-pi HUD layout above the editor:
  TODO · 1/3
   ├─ ☑ Inspect code
   ├─ ☐ Implement change
-  └─ ☐ Verify behavior
+  ╰─ ☐ Verify behavior
 ```
 
 The tree connectors form a progress path. The accent part of the path grows with the closed task count.

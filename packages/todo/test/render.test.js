@@ -48,14 +48,14 @@ describe('todo rendering', () => {
         theme,
         { expanded: false },
       ),
-    ).toEqual(['☑ Todo 3 tasks · 1 done', '', '├─ ☑ ~done~', '├─ ☐ active', '└─ ☐ next'])
+    ).toEqual(['☑ Todo 3 tasks · 1 done', '', '├─ ☑ ~done~', '├─ ☐ active', '╰─ ☐ next'])
   })
 
   test('collapses long lists and expands on request', () => {
     const todos = Array.from({ length: 12 }, (_, index) => item(String(index), 'pending'))
     const collapsed = renderTodoLines(todos, theme, { expanded: false })
     expect(collapsed).toHaveLength(11)
-    expect(collapsed.at(-1)).toBe('└─ … 4 more todos')
+    expect(collapsed.at(-1)).toBe('╰─ … 4 more todos')
     expect(renderTodoLines(todos, theme, { expanded: true })).toHaveLength(14)
   })
 })

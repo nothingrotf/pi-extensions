@@ -1,6 +1,6 @@
 import { type Component, truncateToWidth } from '@earendil-works/pi-tui'
 
-import { oneLineLabel, type SubagentTheme } from './format.ts'
+import { oneLineLabel, type SubagentTheme, TREE_BRANCH, TREE_LAST } from './format.ts'
 import type { SubagentSnapshot } from './runtime.ts'
 import type { RunStatus } from './schema.ts'
 import { shimmerText } from './shimmer.ts'
@@ -35,8 +35,6 @@ const COLLAPSED_LIMIT = 8
 const LABEL_MAX_WIDTH = 60
 const BRACKET_LEFT = '⟦'
 const BRACKET_RIGHT = '⟧'
-const TREE_BRANCH = '├─'
-const TREE_LAST = '└─'
 const DOT = ' · '
 
 export function toJobSnapshot(snapshot: SubagentSnapshot, now: number): JobSnapshot {

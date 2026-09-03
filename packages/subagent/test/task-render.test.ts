@@ -95,7 +95,7 @@ describe('task rendering', () => {
       '✘ Blackwell ⟦shell⟧ ⟦failed⟧ · 1m5s',
       '  ✘ boom',
       '• Ampere ⟦shell⟧ · 3 🛠 · 5.1%/272K · $0.12',
-      '  └ Bash bun test',
+      '  ╰ Bash bun test',
     ])
     expect(stripTerminalSequences(summaryLine(rows, 65_000, theme))).toBe(
       '⟦1 succeeded · 1 failed · 1m5s⟧',

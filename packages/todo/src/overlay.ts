@@ -7,8 +7,8 @@ import { sanitizeTerminalText, type Todo } from './domain.ts'
 const widgetKey = 'todos'
 const activeTaskCap = 5
 const collapsedClosedContext = 1
-const treeBranch = '├─'
-const treeLast = '└─'
+export const treeBranch = '├─'
+export const treeLast = '╰─'
 const checkboxChecked = '☑'
 const checkboxUnchecked = '☐'
 
