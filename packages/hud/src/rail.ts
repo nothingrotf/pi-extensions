@@ -19,6 +19,7 @@ export function isPseudo(kind: RailKind | undefined): boolean {
 
 export type RailAction = {
   category: RailCategory
+  children?: readonly RailAction[]
   detail: string
   doneLabel: string
   durationMs: number | undefined
@@ -98,7 +99,7 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
   const groups: RailGroup[] = []
   let open: RailGroup | undefined
   for (const action of actions) {
-    if (isPseudo(action.kind)) {
+    if (isPseudo(action.kind) || (action.children?.length ?? 0) > 0) {
       open = undefined
       groups.push({
         actions: [action],
@@ -382,6 +383,16 @@ export function railLines(
     )
     const stem = last ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `
     if (group.count === 1) {
+      const only = group.actions[0]
+      const nested = only?.children ?? []
+      if (nested.length > 0) {
+        const inner = railLines(groupActions(nested), theme, {
+          expanded: options.expanded,
+          width: Math.max(1, width - visibleWidth(stem)),
+        })
+        for (const line of inner.slice(1)) lines.push(`${stem}${line}`)
+        return
+      }
       if (options.expanded) lines.push(...outputLines(group, theme, `${stem}   `))
       return
     }

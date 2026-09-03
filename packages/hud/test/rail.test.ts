@@ -27,6 +27,7 @@ import {
   summarizeOutput,
   treeBranch,
   treeLast,
+  treeSpine,
   type RailAction,
   type RailTheme,
 } from '../src/rail.ts'
@@ -163,6 +164,64 @@ describe('groupActions', () => {
   test('uses the running label while the call is pending', () => {
     const group = groupActions([read({ status: 'pending' })])[0]
     expect(group === undefined ? '' : groupLabel(group)).toBe('Reading')
+  })
+})
+
+describe('subtrees', () => {
+  function parent(children: RailAction[]): RailAction {
+    return read({ children, detail: 'explore the tree', doneLabel: 'Dispatched', iconKey: 'agent' })
+  }
+
+  test('renders a child under its parent', () => {
+    const lines = railLines(
+      groupActions([parent([read({ detail: 'a.ts', toolCallId: 'c1' })])]),
+      theme,
+      { expanded: false, width: 80 },
+    )
+    expect(lines).toHaveLength(3)
+    expect(lines[2]).toContain('a.ts')
+  })
+
+  test('the last child of a last parent drops the trunk', () => {
+    const lines = railLines(
+      groupActions([parent([read({ detail: 'a.ts', toolCallId: 'c1' })])]),
+      theme,
+      { expanded: false, width: 80 },
+    )
+    expect(lines[2]?.startsWith('   ')).toBe(true)
+    expect(lines[2]).toContain(treeLast)
+  })
+
+  test('a parent that is not last keeps the trunk under its children', () => {
+    const lines = railLines(
+      groupActions([
+        parent([read({ detail: 'a.ts', toolCallId: 'c1' })]),
+        read({ detail: 'z.ts', toolCallId: 'z' }),
+      ]),
+      theme,
+      { expanded: false, width: 80 },
+    )
+    expect(lines[2]?.startsWith(treeSpine)).toBe(true)
+  })
+
+  test('a parent with children is never grouped', () => {
+    const groups = groupActions([
+      parent([read({ detail: 'a.ts', toolCallId: 'c1' })]),
+      parent([read({ detail: 'b.ts', toolCallId: 'c2' })]),
+    ])
+    expect(groups).toHaveLength(2)
+  })
+
+  test('nests a child of a child', () => {
+    const inner = read({ detail: 'deep.ts', toolCallId: 'd' })
+    const middle = read({ children: [inner], detail: 'mid', toolCallId: 'm' })
+    const lines = railLines(groupActions([parent([middle])]), theme, {
+      expanded: false,
+      width: 80,
+    })
+    expect(lines).toHaveLength(4)
+    expect(lines[3]).toContain('deep.ts')
+    expect(visibleWidth(lines[3]?.slice(0, lines[3].indexOf(treeLast)) ?? '')).toBe(6)
   })
 })
 
