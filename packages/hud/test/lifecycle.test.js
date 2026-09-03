@@ -1,3 +1,4 @@
+import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
@@ -56,7 +57,10 @@ function harness() {
         }
         widgets.set(
           key,
-          factory({ children: [], requestRender() {} }, { fg: (_color, text) => text }),
+          factory(
+            { children: [], requestRender() {} },
+            { fg: (_color, text) => text, getFgAnsi: () => '' },
+          ),
         )
       },
     },
@@ -130,11 +134,11 @@ describe('HUD lifecycle', () => {
     await instance.emit('turn_start')
     expect(instance.widgetKeys()).toEqual(['hud-working'])
     const widget = instance.widget('hud-working')
-    expect(widget.render(80)[0]).toContain('Working...')
+    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Working…')
     instance.emitEvent('hud:working-message', 'Waiting on 2 jobs')
-    expect(widget.render(80)[0]).toContain('Waiting on 2 jobs')
+    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Waiting on 2 jobs')
     instance.emitEvent('hud:working-message', null)
-    expect(widget.render(80)[0]).toContain('Working...')
+    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Working…')
     await instance.emit('agent_end')
     expect(widget.render(80)).toEqual([])
     await instance.emit('session_shutdown')

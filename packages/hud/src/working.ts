@@ -1,7 +1,15 @@
 import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
-import { type Component, Container, Loader, Spacer, type TUI } from '@earendil-works/pi-tui'
+import {
+  type Component,
+  Container,
+  Spacer,
+  truncateToWidth,
+  type TUI,
+} from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
+
+import { shimmerText } from './shimmer.ts'
 
 export const workingMessageChannel = 'hud:working-message'
 const widgetKey = 'hud-working'
@@ -12,7 +20,9 @@ export function decodeWorkingMessage<Input>(data: Input): string | null | undefi
   return Value.Check(WorkingMessageSchema, data) ? data : undefined
 }
 
-export const defaultWorkingMessage = 'Working...'
+export const defaultWorkingMessage = 'Working…'
+const FRAME_MS = 33
+const ESC_ICON = '⎋'
 
 export function trimWidgetSpacer(
   tui: Pick<TUI, 'children' | 'requestRender'>,
@@ -35,12 +45,11 @@ export class WorkingDock {
   private message: string | undefined
   private active = false
   private registered = false
-  private loader: Loader | undefined
   private tui: TUI | undefined
+  private timer: ReturnType<typeof setInterval> | undefined
 
   setMessage(message: string | undefined): void {
     this.message = message
-    this.loader?.setMessage(this.text())
     this.tui?.requestRender()
   }
 
@@ -52,13 +61,13 @@ export class WorkingDock {
         placement: 'aboveEditor',
       })
     }
-    this.loader?.start()
+    this.startTicking()
     this.tui?.requestRender()
   }
 
   stop(): void {
     this.active = false
-    this.loader?.stop()
+    this.stopTicking()
     this.tui?.requestRender()
   }
 
@@ -66,7 +75,6 @@ export class WorkingDock {
     this.stop()
     if (this.registered) ui?.setWidget(widgetKey, undefined)
     this.registered = false
-    this.loader = undefined
     this.tui = undefined
   }
 
@@ -74,22 +82,27 @@ export class WorkingDock {
     return this.message ?? defaultWorkingMessage
   }
 
+  private startTicking(): void {
+    if (this.timer !== undefined || this.tui === undefined) return
+    this.timer = setInterval(() => this.tui?.requestRender(), FRAME_MS)
+  }
+
+  private stopTicking(): void {
+    if (this.timer !== undefined) clearInterval(this.timer)
+    this.timer = undefined
+  }
+
   private mount(tui: TUI, theme: Theme) {
     this.tui = tui
-    const loader = new Loader(
-      tui,
-      (spinner) => theme.fg('accent', spinner),
-      (text) => theme.fg('muted', text),
-      this.text(),
-    )
-    this.loader = loader
-    if (this.active) loader.start()
+    if (this.active) this.startTicking()
     const widget = {
-      dispose: () => loader.stop(),
-      invalidate: () => loader.invalidate(),
+      dispose: () => this.stopTicking(),
+      invalidate: () => undefined,
       render: (width: number): string[] => {
         trimWidgetSpacer(tui, widget)
-        return this.active ? [...loader.render(width).slice(1), ''] : []
+        if (!this.active) return []
+        const line = ` ${theme.fg('muted', ESC_ICON)} ${shimmerText(this.text(), theme)}`
+        return [truncateToWidth(line, width, '…'), '']
       },
     }
     return widget
