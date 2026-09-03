@@ -86,7 +86,19 @@ grouping semantics.
 
 The extension hides the built-in working loader and renders its own loader as the last widget above the editor. This keeps the loader below the `TODO` and `Subagents` widgets, in the same order as the oh-my-pi dock.
 
-The loader shows a braille spinner and shimmers the message with the elapsed time of the current run, for example ` ⠋ waiting for the model · 9s`. The final usage row reports the same span.
+The loader shows a braille spinner and shimmers the message with the elapsed time of the current run, for example ` ⠋ waiting for the model · 9s`.
+
+Below it, the live usage row reports the turn as it runs:
+
+```
+ ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
+```
+
+The row stays visible under the block being generated, not only at the end. When
+the turn finishes the same figures settle into a static transcript entry.
+
+Both lines shimmer. The shimmer is a narrow highlight that sweeps back and forth
+with a continuous colour blend. Read `docs/rail-spec.md` for the exact wave.
 
 Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `waiting for the model`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
 

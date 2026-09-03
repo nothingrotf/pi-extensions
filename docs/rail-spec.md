@@ -155,6 +155,47 @@ While a turn is partial and not live, trailing text stays narration. It becomes
 the answer only when the turn settles. This is the only retroactive change in the
 tree.
 
+## Usage row
+
+The usage row reports the current turn:
+
+```
+▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
+```
+
+It is visible WHILE the turn runs, not only at the end. The live row sits at the
+bottom of the dock, under the block being generated, and it shimmers. When the
+turn ends the row becomes a static transcript entry.
+
+The cost uses three decimals below `$0.10` and two at or above it.
+
+## Shimmer
+
+The shimmer is a narrow highlight that sweeps back and forth. It is not a
+wrapping scan and not a whole line pulse.
+
+| constant        | value                 |
+| --------------- | --------------------- |
+| tick            | 70 ms                 |
+| wave speed      | 0.12 radians per tick |
+| band half width | 2.5 cells             |
+| blend floor     | 0.22                  |
+| blend range     | 0.62                  |
+
+For tick `t` and a string of length `n`:
+
+```
+centre    = (sin(t * 0.12) * 0.5 + 0.5) * (n - 1)
+highlight = max(0, 1 - |index - centre| / 2.5)
+colour    = highlight <= 0 ? base : mix(base, tint, 0.22 + 0.62 * highlight)
+```
+
+The centre moves sinusoidally, so the highlight eases at both ends and reverses
+instead of jumping back. One full sweep takes about 3.7 seconds.
+
+The colour is a continuous blend. Do not quantise it into tiers, and do not bold
+the peak. Both produce visible banding that the original does not have.
+
 ## Header
 
 The tree sits under a one line header:
