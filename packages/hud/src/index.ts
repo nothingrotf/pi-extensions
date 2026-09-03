@@ -16,7 +16,7 @@ import {
 import { decodeRailEntry, railEntryType, RailComponent } from './rail-entry.ts'
 import { pseudoRows, type PseudoBlock } from './rail-pseudo.ts'
 import { applyRailTools, mapSessionRails } from './rail-tools.ts'
-import { RailStore } from './rail.ts'
+import { RailStore, showsPendingNarration } from './rail.ts'
 import { renderHud, type HudState } from './render.ts'
 import {
   choiceValue,
@@ -304,6 +304,7 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_start', () => {
     agentWorking = true
+    railPendingNarration = false
     dimEditorBorder?.()
     requestRender?.()
     dock.reset()
@@ -318,7 +319,12 @@ export default function hud(pi: ExtensionAPI): void {
     if (turn === undefined) {
       return undefined
     }
-    return new RailComponent(() => railsByTurn.get(turn), theme, options.expanded)
+    return new RailComponent(
+      () => railsByTurn.get(turn),
+      theme,
+      options.expanded,
+      () => turn === railTurn && agentWorking && railPendingNarration,
+    )
   })
 
   pi.on('session_tree', (_event, ctx) => {
@@ -353,6 +359,7 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('tool_execution_start', (event, ctx) => {
+    railPendingNarration = false
     if (railTools.has(event.toolName)) {
       openRailEntry()
     }
@@ -379,6 +386,19 @@ export default function hud(pi: ExtensionAPI): void {
     if (event.message.role === 'assistant') spacerFix?.markDirty()
   })
 
+  let railPendingNarration = false
+
+  const refreshPendingNarration = (hasFinalText: boolean) => {
+    const actions = rail.groups().flatMap((group) => group.actions)
+    railPendingNarration = showsPendingNarration({
+      actions,
+      hasFinalText,
+      reasoningActive: false,
+      streaming: agentWorking,
+    })
+    requestRender?.()
+  }
+
   const openRailEntry = () => {
     if (!railEnabled || !railTurnPending) return
     railTurnPending = false
@@ -397,6 +417,7 @@ export default function hud(pi: ExtensionAPI): void {
         openRailEntry()
         for (const row of rows) rail.report(row.id, row.patch)
       }
+      refreshPendingNarration(blocks.some((block) => block.text !== undefined))
     }
     if (active) {
       sync(ctx)
@@ -404,6 +425,7 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('tool_execution_end', (_event, ctx) => {
+    refreshPendingNarration(false)
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
@@ -412,6 +434,7 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_end', (_event, ctx) => {
     agentWorking = false
+    railPendingNarration = false
     requestRender?.()
     dock.stop()
     if (active) {

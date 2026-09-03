@@ -1,3 +1,4 @@
+import { visibleWidth } from '@earendil-works/pi-tui'
 import { beforeAll, describe, expect, test } from 'vite-plus/test'
 
 import { setIconMode } from '../src/icons.ts'
@@ -70,5 +71,38 @@ describe('RailComponent', () => {
     const lines = plain(component.render(width))
     expect(lines[1]?.endsWith('1.5s')).toBe(true)
     expect(lines[1]?.length).toBe(width - 2)
+  })
+})
+
+describe('RailComponent pending row', () => {
+  function storeWithOneDoneCall(): RailStore {
+    const store = new RailStore()
+    store.report('a', { detail: 'a.ts', doneLabel: 'Read', status: 'ok' })
+    return store
+  }
+
+  test('omits the pending row by default', () => {
+    const component = new RailComponent(storeWithOneDoneCall, theme, false)
+    expect(plain(component.render(60)).some((line) => line.includes('Thinking'))).toBe(false)
+  })
+
+  test('appends the pending row when the turn waits', () => {
+    const component = new RailComponent(storeWithOneDoneCall, theme, false, () => true)
+    expect(plain(component.render(60)).at(-1)).toContain('Thinking')
+  })
+
+  test('drops the pending row again once the flag clears', () => {
+    let waiting = true
+    const component = new RailComponent(storeWithOneDoneCall, theme, false, () => waiting)
+    expect(plain(component.render(60)).at(-1)).toContain('Thinking')
+    waiting = false
+    expect(plain(component.render(60)).some((line) => line.includes('Thinking'))).toBe(false)
+  })
+
+  test('keeps every rendered line inside the width', () => {
+    const component = new RailComponent(storeWithOneDoneCall, theme, false, () => true)
+    for (const line of plain(component.render(30))) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(30)
+    }
   })
 })

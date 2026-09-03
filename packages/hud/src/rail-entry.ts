@@ -33,6 +33,7 @@ export class RailComponent implements Component {
     private readonly resolve: () => RailStore | undefined,
     theme: RailThemeSource,
     private readonly expanded: boolean,
+    private readonly pending: () => boolean = () => false,
   ) {
     this.theme = railTheme(theme)
   }
@@ -45,6 +46,7 @@ export class RailComponent implements Component {
     const inner = Math.max(1, width - railIndent.length - railGutter)
     return railLines(store.groups(), this.theme, {
       expanded: this.expanded,
+      pending: this.pending(),
       width: inner,
     }).map((line) => `${railIndent}${truncateToWidth(line, inner, '')}`)
   }
