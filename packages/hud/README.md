@@ -59,6 +59,26 @@ A row updates in place. While a call runs it shows a present tense label in the
 brand color. When the call finishes the label switches to past tense and takes
 the tool color.
 
+The rail also holds the model's own voice:
+
+- A thinking block becomes a `Thought` row. The detail is the first heading of
+  the block, or the first line when it has no heading.
+- Assistant text between tool calls becomes a `Note` row. The detail is the
+  first line, and the full text stays available.
+- While the turn waits between the last tool and the answer, a `Thinking` row
+  sits at the end of the tree.
+
+Both rows carry a blank status cell, so a check or a cross always means a tool
+call.
+
+A tool that spawns children, such as a subagent, nests them under its own row
+with the same trunk rules.
+
+At most five groups render. Older groups collapse into one `N completed` row.
+
+Use `/hud-thinking` to show the full thinking text inline as well as in the rail.
+Use `/hud-rail` to turn the rail off.
+
 Read `docs/rail-spec.md` for the full contract, including width rules and
 grouping semantics.
 

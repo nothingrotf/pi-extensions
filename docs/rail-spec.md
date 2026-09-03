@@ -74,6 +74,22 @@ They never join a run, and they break the run around them.
 A pending thought row renders as the last row of the tree when the turn streams,
 every tool call finished, the answer has not started, and no reasoning is active.
 
+## Sources
+
+Rows enter the rail from three places. All three converge on `RailStore`.
+
+| source            | hook                                            | produces                                                              |
+| ----------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| tool events       | `tool_execution_start` and `tool_execution_end` | tool rows                                                             |
+| assistant message | `message_end`                                   | thought and narration rows                                            |
+| other extensions  | the `hud:rail-action` event                     | tool rows, and nested rows when the report carries `parentToolCallId` |
+
+Reopening a session rebuilds the same rows from the stored entries, so a
+restored turn and a live turn render identically.
+
+The rail entry opens on the first row of any kind. A turn that only thinks still
+shows a tree.
+
 ## Labels
 
 Each tool has two labels. The running label is present continuous. The done
