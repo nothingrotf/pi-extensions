@@ -30,6 +30,8 @@ Use `/hud-timestamp` to disable or enable them.
 
 The extension hides the built-in working loader and renders its own loader as the last widget above the editor. This keeps the loader below the `TODO` and `Subagents` widgets, in the same order as the oh-my-pi dock.
 
+The loader appends the elapsed time of the current turn, for example ` ⎋ Working… · 9s`.
+
 Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `Working...`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
 
 Retry, compaction, and branch summary indicators still use the built-in status row.

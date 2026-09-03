@@ -18,12 +18,23 @@ export const defaultWorkingMessage = 'Working…'
 const FRAME_MS = 33
 const ESC_ICON = '⎋'
 
+export function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes < 60) return rest > 0 ? `${minutes}m${rest}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return minutes % 60 > 0 ? `${hours}h${minutes % 60}m` : `${hours}h`
+}
+
 export class WorkingDock {
   private message: string | undefined
   private active = false
   private registered = false
   private tui: TUI | undefined
   private timer: ReturnType<typeof setInterval> | undefined
+  private startedAt = Date.now()
 
   setMessage(message: string | undefined): void {
     this.message = message
@@ -31,6 +42,7 @@ export class WorkingDock {
   }
 
   start(ui: ExtensionUIContext): void {
+    this.startedAt = Date.now()
     this.active = true
     if (!this.registered) {
       this.registered = true
@@ -77,7 +89,8 @@ export class WorkingDock {
       invalidate: () => undefined,
       render: (width: number): string[] => {
         if (!this.active) return []
-        const line = ` ${theme.fg('muted', ESC_ICON)} ${shimmerText(this.text(), theme)}`
+        const elapsed = theme.fg('dim', ` · ${formatElapsed(Date.now() - this.startedAt)}`)
+        const line = ` ${theme.fg('muted', ESC_ICON)} ${shimmerText(this.text(), theme)}${elapsed}`
         return [truncateToWidth(line, width, '…'), '']
       },
     }
