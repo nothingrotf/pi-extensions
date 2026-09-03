@@ -33,6 +33,8 @@ The row totals every assistant message in the run. It shows the run duration, th
 
 The row shares the column that the `outputPad` setting controls.
 The throughput divides the total output tokens by the time from the first turn to the end of the run.
+While a turn runs, the assistant header animates: the glyph beats like a heart between `·` and `●`, and the name shimmers. It settles to a static glyph and a bold name when the turn ends.
+
 Headers and usage rows are active by default and never enter the model context.
 Use `/hud-timestamp` to disable or enable them.
 
