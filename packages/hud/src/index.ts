@@ -84,6 +84,7 @@ export default function hud(pi: ExtensionAPI): void {
   let railsByTurn = new Map<number, RailStore>()
   const railFor = (toolCallId: string) => railsByToolCallId.get(toolCallId) ?? rail
   let railEnabled = true
+  let railPendingNarration = false
   let railCwd: string | undefined
   const railTools = new Set(builtInRailToolNames)
   let quietThinking = true
@@ -385,8 +386,6 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('message_start', (event) => {
     if (event.message.role === 'assistant') spacerFix?.markDirty()
   })
-
-  let railPendingNarration = false
 
   const refreshPendingNarration = (hasFinalText: boolean) => {
     const actions = rail.groups().flatMap((group) => group.actions)
