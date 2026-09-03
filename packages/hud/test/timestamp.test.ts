@@ -51,6 +51,8 @@ describe('transcript rows', () => {
       formatUsageRow({ cacheRead: 0, cost: 0, durationMs: 50, input: 10, output: 5, timestamp }),
     ).toBe('▪ 50ms · 10 in · 5 out')
     expect(formatCost(0.036)).toBe('$0.036')
+    expect(formatCost(0.26)).toBe('$0.26')
+    expect(formatCost(0.099)).toBe('$0.099')
     expect(formatCost(1.5)).toBe('$1.50')
     expect(formatCost(0.0004)).toBe('$<0.001')
     expect(

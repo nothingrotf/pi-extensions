@@ -1,67 +1,74 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
 
+import { ansiForeground, ansiReset, parseTrueColor, type Rgb } from './colors.ts'
+
 export type ShimmerTheme = Pick<Theme, 'getFgAnsi'>
 
-const SPEED_CELLS_PER_SECOND = 30
-const PADDING = 10
-const BAND_HALF_WIDTH = 6
-const TIER_HIGH = 0.65
-const TIER_MID = 0.22
-const FG_RESET = '\x1b[39m'
-const BOLD_OPEN = '\x1b[1m'
-const BOLD_CLOSE = '\x1b[22m'
+export const shimmerTickMs = 70
 
-type Tier = 'high' | 'low' | 'mid'
+const waveSpeed = 0.12
+const bandHalfWidth = 2.5
+const blendFloor = 0.22
+const blendRange = 0.62
 
-interface TierSequence {
-  close: string
-  open: string
+export const shimmerPeriodMs = ((2 * Math.PI) / waveSpeed) * shimmerTickMs
+
+export function shimmerHighlights(length: number, tick: number): number[] {
+  if (length <= 0) return []
+  const centre = (Math.sin(tick * waveSpeed) * 0.5 + 0.5) * (length - 1)
+  return Array.from({ length }, (_value, index) =>
+    Math.max(0, 1 - Math.abs(index - centre) / bandHalfWidth),
+  )
 }
 
-interface TierSequences {
-  high: TierSequence
-  low: TierSequence
-  mid: TierSequence
-}
-
-function intensity(time: number, index: number, length: number): number {
-  const period = length + PADDING * 2
-  const position = ((time / 1000) * SPEED_CELLS_PER_SECOND) % period
-  const distance = Math.abs(index + PADDING - position)
-  if (distance >= BAND_HALF_WIDTH) return 0
-  return 0.5 * (1 + Math.cos((Math.PI * distance) / BAND_HALF_WIDTH))
-}
-
-function tierFor(value: number): Tier {
-  if (value >= TIER_HIGH) return 'high'
-  if (value >= TIER_MID) return 'mid'
-  return 'low'
+function mix(base: Rgb, tint: Rgb, amount: number): Rgb {
+  const clamped = Math.max(0, Math.min(1, amount))
+  return {
+    b: Math.round(base.b + (tint.b - base.b) * clamped),
+    g: Math.round(base.g + (tint.g - base.g) * clamped),
+    r: Math.round(base.r + (tint.r - base.r) * clamped),
+  }
 }
 
 export function shimmerText(text: string, theme: ShimmerTheme, time = Date.now()): string {
   const characters = Array.from(text)
   if (characters.length === 0) return ''
-  const sequences: TierSequences = {
-    high: { close: `${BOLD_CLOSE}${FG_RESET}`, open: `${BOLD_OPEN}${theme.getFgAnsi('accent')}` },
-    low: { close: FG_RESET, open: theme.getFgAnsi('dim') },
-    mid: { close: FG_RESET, open: theme.getFgAnsi('muted') },
-  }
-  let output = ''
-  let runTier: Tier | undefined
-  let run = ''
-  characters.forEach((character, index) => {
-    const tier = tierFor(intensity(time, index, characters.length))
-    if (tier !== runTier) {
-      if (runTier !== undefined && run.length > 0) {
-        output += `${sequences[runTier].open}${run}${sequences[runTier].close}`
+  const baseAnsi = theme.getFgAnsi('dim')
+  const tintAnsi = theme.getFgAnsi('accent')
+  const base = parseTrueColor(baseAnsi)
+  const tint = parseTrueColor(tintAnsi)
+  const tick = Math.floor(time / shimmerTickMs)
+  const highlights = shimmerHighlights(characters.length, tick)
+
+  if (base === undefined || tint === undefined) {
+    let output = ''
+    let openAnsi: string | undefined
+    characters.forEach((character, index) => {
+      const wanted = (highlights[index] ?? 0) > 0 ? tintAnsi : baseAnsi
+      if (wanted !== openAnsi) {
+        if (openAnsi !== undefined) output += ansiReset
+        output += wanted
+        openAnsi = wanted
       }
-      runTier = tier
-      run = ''
-    }
-    run += character
-  })
-  if (runTier !== undefined && run.length > 0) {
-    output += `${sequences[runTier].open}${run}${sequences[runTier].close}`
+      output += character
+    })
+    return openAnsi === undefined ? output : `${output}${ansiReset}`
   }
-  return output
+
+  let output = ''
+  let openAnsi: string | undefined
+  characters.forEach((character, index) => {
+    const highlight = highlights[index] ?? 0
+    const wanted =
+      highlight <= 0
+        ? baseAnsi
+        : ansiForeground(mix(base, tint, blendFloor + blendRange * highlight))
+    if (wanted !== openAnsi) {
+      if (openAnsi !== undefined) output += ansiReset
+      output += wanted
+      openAnsi = wanted
+    }
+    output += character
+  })
+  return openAnsi === undefined ? output : `${output}${ansiReset}`
 }

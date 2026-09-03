@@ -79,7 +79,7 @@ export function roleLabel(role: MessageRole, label: string | undefined): string 
 
 export function formatCost(value: number): string {
   if (value < 0.001) return '$<0.001'
-  return `$${value < 1 ? value.toFixed(3) : value.toFixed(2)}`
+  return `$${value < 0.1 ? value.toFixed(3) : value.toFixed(2)}`
 }
 
 export function hasUsage(data: UsageEntryData): boolean {
@@ -136,10 +136,20 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
   }
 }
 
-export function registerTimestamps(pi: ExtensionAPI): void {
+export type LiveUsage = { row: () => string | undefined }
+
+export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage): void {
   let enabled = true
   let totals = emptyRunTotals()
   let assistantHeaderPending = true
+
+  if (live !== undefined) {
+    live.row = () => {
+      if (!enabled) return undefined
+      const entry = toUsageEntry(totals, Date.now())
+      return hasUsage(entry) ? formatUsageRow(entry) : undefined
+    }
+  }
 
   pi.on('agent_start', () => {
     totals = emptyRunTotals()

@@ -38,7 +38,7 @@ import {
   stopSoundPlayback,
 } from './sound.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
-import { registerTimestamps } from './timestamp.ts'
+import { registerTimestamps, type LiveUsage } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
 import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
 
@@ -50,7 +50,8 @@ function start(task: Promise<void>): void {
 }
 
 export default function hud(pi: ExtensionAPI): void {
-  registerTimestamps(pi)
+  const liveUsage: LiveUsage = { row: () => undefined }
+  registerTimestamps(pi, liveUsage)
 
   const state: HudState = {
     cwd: process.cwd(),
@@ -77,6 +78,7 @@ export default function hud(pi: ExtensionAPI): void {
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
   const dock = new WorkingDock()
+  dock.setUsageSource(() => liveUsage.row())
   let rail = new RailStore()
   let railTurn = 0
   let railTurnPending = false

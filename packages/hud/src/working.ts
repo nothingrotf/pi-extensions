@@ -40,6 +40,11 @@ export class WorkingDock {
   private tui: TUI | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private startedAt = Date.now()
+  private usage: (() => string | undefined) | undefined
+
+  setUsageSource(source: (() => string | undefined) | undefined): void {
+    this.usage = source
+  }
 
   setMessage(message: string | undefined): void {
     this.message = message
@@ -100,7 +105,13 @@ export class WorkingDock {
         const now = Date.now()
         const text = `${this.text()} · ${formatElapsed(now - this.startedAt)}`
         const line = ` ${theme.fg('accent', spinnerFrame(now))} ${shimmerText(text, theme)}`
-        return [truncateToWidth(line, width, '…'), '']
+        const lines = [truncateToWidth(line, width, '…')]
+        const usage = this.usage?.()
+        if (usage !== undefined && usage.length > 0) {
+          lines.push(truncateToWidth(` ${shimmerText(usage, theme)}`, width, '…'))
+        }
+        lines.push('')
+        return lines
       },
     }
     return widget
