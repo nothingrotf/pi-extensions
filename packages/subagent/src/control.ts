@@ -3,15 +3,17 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { type Component, Text } from '@earendil-works/pi-tui'
+import { type Component, Text, truncateToWidth } from '@earendil-works/pi-tui'
 import { type StaticDecode, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { ARROW_OUT, MAIL_ICON, quotedBody } from './cards.ts'
 import type { SubagentControllerHost } from './controller.ts'
 import { oneLineLabel, type SubagentTheme } from './format.ts'
 import type { IsolationDestination } from './isolation.ts'
 import {
   formatJobDuration,
+  formatMoreItems,
   type JobProgressDetails,
   type JobSnapshot,
   JobTree,
@@ -27,6 +29,7 @@ import type {
   SubagentRuntime,
   SubagentSnapshot,
 } from './runtime.ts'
+import { type AgentRow, TaskResult } from './task-render.ts'
 
 const MAX_LIST_RESULTS = 20
 const DEFAULT_LIST_RESULTS = 10
@@ -122,6 +125,7 @@ interface TaskStatusSummary {
   running: boolean
   started_at: number
   state: SubagentSnapshot['status']
+  subagent_type: SubagentSnapshot['subagentType']
   usage: SubagentSnapshot['usage']
 }
 
@@ -133,7 +137,6 @@ interface TaskStatus extends TaskStatusSummary {
   readonly: boolean
   retry_failure: SubagentSnapshot['retryFailure'] | null
   retry_state: SubagentSnapshot['retryState'] | null
-  subagent_type: SubagentSnapshot['subagentType']
   terminal_result: SubagentResult | null
 }
 
@@ -221,6 +224,7 @@ function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
     running: snapshot.running,
     started_at: snapshot.startedAt,
     state: snapshot.status,
+    subagent_type: snapshot.subagentType,
     usage: snapshot.usage,
   }
 }
@@ -235,7 +239,6 @@ function status(runtime: TaskControlRuntime, snapshot: SubagentSnapshot): TaskSt
     readonly: snapshot.readonly,
     retry_failure: snapshot.retryFailure ?? null,
     retry_state: snapshot.retryState ?? null,
-    subagent_type: snapshot.subagentType,
     terminal_result: runtime.latestResult(snapshot.agentId) ?? null,
   }
 }
@@ -489,42 +492,94 @@ export interface TaskControlRenderState {
 class PendingLine implements Component {
   constructor(
     private readonly state: TaskControlRenderState,
-    private readonly line: string,
+    private readonly lines: readonly string[],
   ) {}
 
   invalidate(): void {}
 
-  render(): string[] {
-    return this.state.hasResult === true ? [] : [this.line]
+  render(width: number): string[] {
+    return this.state.hasResult === true
+      ? []
+      : this.lines.map((line) => truncateToWidth(line, width, '…'))
   }
 }
 
-function pendingTarget(input: TaskControlInput): string | undefined {
-  if (input.action === 'jobs') return 'background jobs'
-  if (input.action !== 'wait') return undefined
-  if (input.agent_ids === undefined) return 'all running jobs'
-  const first = input.agent_ids[0]
-  return input.agent_ids.length === 1 && first !== undefined
-    ? `poll ${first}`
-    : `poll ${input.agent_ids.length} jobs`
+export type LabelResolver = (agentId: string) => string
+
+function pendingTarget(input: TaskControlInput, label: LabelResolver): string {
+  switch (input.action) {
+    case 'jobs':
+      return 'background jobs'
+    case 'wait': {
+      if (input.agent_ids === undefined) return 'all running jobs'
+      const first = input.agent_ids[0]
+      return input.agent_ids.length === 1 && first !== undefined
+        ? `poll ${label(first)}`
+        : `poll ${input.agent_ids.length} jobs`
+    }
+    case 'list':
+      return 'tasks'
+    case 'status':
+      return `status ${label(input.agent_id)}`
+    case 'steer':
+      return `Steer ${ARROW_OUT} ${label(input.agent_id)}`
+    case 'cancel':
+      return `Cancel ${label(input.agent_id)}`
+    case 'join':
+      return `Join ${label(input.agent_id)}`
+  }
 }
 
 export function renderTaskControlCall(
   input: TaskControlInput,
   theme: SubagentTheme,
   state: TaskControlRenderState,
+  label: LabelResolver = (agentId) => agentId,
 ): Component {
-  const pending = pendingTarget(input)
-  if (pending !== undefined) {
-    return new PendingLine(state, `${theme.fg('muted', '⏳')} ${theme.fg('accent', pending)}`)
+  const lines = [`${theme.fg('muted', '⏳')} ${theme.fg('accent', pendingTarget(input, label))}`]
+  if (input.action === 'steer') {
+    lines.push(
+      ...quotedBody(input.message, theme, { collapsedLines: 1, expanded: false, tone: 'dim' }),
+    )
   }
-  const title = theme.fg('toolTitle', theme.bold('TaskControl'))
-  const target = 'agent_id' in input ? input.agent_id : ''
-  return new Text(
-    `${title} ${theme.fg('accent', input.action)}${target === '' ? '' : ` ${theme.fg('muted', target)}`}`,
-    0,
-    0,
+  return new PendingLine(state, lines)
+}
+
+function statusRow(
+  task: TaskStatusSummary,
+  agentType: string,
+  terminal: SubagentResult | null,
+  now: number,
+): AgentRow {
+  const running = task.running
+  return {
+    activity: running ? (task.activity ?? undefined) : undefined,
+    agentType,
+    background: false,
+    context: undefined,
+    cost: task.usage.cost,
+    durationMs: Math.max(0, (task.ended_at ?? now) - task.started_at),
+    error: terminal?.error,
+    label: task.description,
+    output: terminal?.output,
+    status: task.state,
+    task: undefined,
+    toolCalls: task.usage.toolCalls,
+  }
+}
+
+function receiptLine(
+  icon: string,
+  color: 'error' | 'success' | 'warning',
+  title: string,
+  outcome: string,
+  reason: string | null,
+  theme: SubagentTheme,
+): string {
+  const meta = [theme.fg(color, outcome), reason === null ? '' : reason].filter(
+    (part) => part.length > 0,
   )
+  return `${theme.fg(color, icon)} ${theme.fg('accent', title)} ${theme.fg('dim', meta.join(' · '))}`
 }
 
 export function renderTaskControlResult(
@@ -533,25 +588,104 @@ export function renderTaskControlResult(
   options: { expanded: boolean; isPartial: boolean },
   theme: SubagentTheme,
   state: TaskControlRenderState,
+  label: LabelResolver = (agentId) => agentId,
+  args?: TaskControlInput,
 ): Component {
   if (details === undefined) return new Text(text, 0, 0)
+  state.hasResult = true
   if ('status' in details) {
-    state.hasResult = true
     return new JobTree(details.jobs, { expanded: options.expanded, isPartial: true }, theme)
   }
-  if (details.action === 'wait') {
-    state.hasResult = true
-    return new JobTree(details.jobs, { expanded: options.expanded, isPartial: false }, theme)
+  const rowOptions = { expanded: options.expanded, live: false }
+  switch (details.action) {
+    case 'wait':
+      return new JobTree(details.jobs, { expanded: options.expanded, isPartial: false }, theme)
+    case 'jobs':
+      return new JobTree(
+        details.jobs,
+        { expanded: options.expanded, isPartial: false, retainRunning: true },
+        theme,
+      )
+    case 'status': {
+      if (details.outcome === 'not-found') {
+        return new Text(
+          `${theme.fg('warning', '⚠')} ${theme.fg('accent', 'Task')} ${theme.fg('dim', `${details.agent_id} not found`)}`,
+          0,
+          0,
+        )
+      }
+      const task = details.task
+      return new TaskResult(
+        [statusRow(task, task.subagent_type, task.terminal_result, Date.now())],
+        rowOptions,
+        theme,
+      )
+    }
+    case 'list': {
+      if (details.tasks.length === 0) {
+        return new Text(
+          `${theme.fg('accent', 'ⓘ')} ${theme.fg('muted', 'No tasks in this session.')}`,
+          0,
+          0,
+        )
+      }
+      const now = Date.now()
+      const rows = details.tasks.map((task) => statusRow(task, task.subagent_type, null, now))
+      const summary = details.has_more
+        ? theme.fg('dim', formatMoreItems(details.total - details.count, 'task'))
+        : undefined
+      return new TaskResult(rows, rowOptions, theme, summary)
+    }
+    case 'steer': {
+      const title = `Steer ${ARROW_OUT} ${label(details.agent_id)}`
+      const queued = details.outcome === 'queued'
+      const lines = [
+        receiptLine(
+          queued ? MAIL_ICON : '⚠',
+          queued ? 'success' : 'warning',
+          title,
+          details.outcome,
+          details.reason,
+          theme,
+        ),
+      ]
+      if (args?.action === 'steer') {
+        lines.push(...quotedBody(args.message, theme, { expanded: options.expanded, tone: 'dim' }))
+      }
+      return new Text(lines.join('\n'), 0, 0)
+    }
+    case 'cancel': {
+      const requested = details.outcome === 'requested'
+      return new Text(
+        receiptLine(
+          requested ? '⏹' : '⚠',
+          requested ? 'warning' : 'warning',
+          `Cancel ${label(details.agent_id)}`,
+          details.outcome,
+          details.reason,
+          theme,
+        ),
+        0,
+        0,
+      )
+    }
+    case 'join': {
+      const joined = details.outcome === 'joined'
+      const conflict = details.outcome === 'conflict'
+      return new Text(
+        receiptLine(
+          joined ? '✔' : conflict ? '⚠' : '✘',
+          joined ? 'success' : conflict ? 'warning' : 'error',
+          `Join ${label(details.agent_id)}`,
+          details.outcome,
+          details.reason,
+          theme,
+        ),
+        0,
+        0,
+      )
+    }
   }
-  if (details.action === 'jobs') {
-    state.hasResult = true
-    return new JobTree(
-      details.jobs,
-      { expanded: options.expanded, isPartial: false, retainRunning: true },
-      theme,
-    )
-  }
-  return new Text(text, 0, 0)
 }
 
 export const taskControlDescription =
@@ -562,6 +696,8 @@ export function registerTaskControl(
   host: SubagentControllerHost,
   runtime: SubagentRuntime,
 ): void {
+  const labelFor: LabelResolver = (agentId) =>
+    runtime.listSnapshots().find((snapshot) => snapshot.agentId === agentId)?.description ?? agentId
   const scope: TaskControlScope = {
     allows: () => true,
     callerId: (ctx) => ctx.sessionManager.getSessionId(),
@@ -586,7 +722,8 @@ export function registerTaskControl(
     label: 'Task Control',
     name: 'TaskControl',
     parameters: TaskControlInputSchema,
-    renderCall: (args, theme, context) => renderTaskControlCall(args, theme, context.state),
+    renderCall: (args, theme, context) =>
+      renderTaskControlCall(args, theme, context.state, labelFor),
     renderResult: (result, options, theme, context) =>
       renderTaskControlResult(
         result.details,
@@ -594,6 +731,8 @@ export function registerTaskControl(
         options,
         theme,
         context.state,
+        labelFor,
+        context.args,
       ),
   })
 }

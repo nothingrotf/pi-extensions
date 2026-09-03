@@ -2,6 +2,7 @@ import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { Value } from 'typebox/value'
 import { describe, expect, it, vi } from 'vite-plus/test'
 
+import { decodeIntercomDetails, renderIntercomCard } from '../src/cards.ts'
 import {
   renderTaskControlCall,
   renderTaskControlResult,
@@ -183,7 +184,11 @@ describe('task control wait', () => {
     expect(call({ action: 'wait', agent_ids: ['a'] })).toEqual(['⏳ poll a'])
     expect(call({ action: 'wait', agent_ids: ['a', 'b'] })).toEqual(['⏳ poll 2 jobs'])
     expect(call({ action: 'jobs' })).toEqual(['⏳ background jobs'])
-    expect(call({ action: 'status', agent_id: 'a' })).toEqual(['TaskControl status a'])
+    expect(call({ action: 'status', agent_id: 'a' })).toEqual(['⏳ status a'])
+    expect(call({ action: 'steer', agent_id: 'a', message: 'Focus on tests' })).toEqual([
+      '⏳ Steer ➤ a',
+      '  ▏ Focus on tests',
+    ])
     const jobs = [job('a', 'running'), job('b', 'completed')]
     const progress = renderTaskControlResult(
       { jobs, status: 'progress' },
@@ -195,7 +200,7 @@ describe('task control wait', () => {
     expect(progress[0]).toBe('ⓘ waiting on 1 of 2 jobs 1 done')
     expect(progress).toHaveLength(3)
     expect(call({ action: 'wait' })).toEqual([])
-    expect(call({ action: 'status', agent_id: 'a' })).toEqual(['TaskControl status a'])
+    expect(call({ action: 'status', agent_id: 'a' })).toEqual([])
     const sealed = renderTaskControlResult(
       { action: 'wait', jobs, outcome: 'settled', settled: ['b'] },
       '',
@@ -216,5 +221,73 @@ describe('task control wait', () => {
       '├─ ⟳ ⟦task⟧ a lane 4.0s',
       '└─ • ⟦task⟧ b lane 4.0s',
     ])
+  })
+
+  it('renders receipts and intercom cards', () => {
+    const state: TaskControlRenderState = {}
+    const render = (
+      details: Parameters<typeof renderTaskControlResult>[0],
+      args?: Parameters<typeof renderTaskControlResult>[6],
+    ) =>
+      renderTaskControlResult(
+        details,
+        '',
+        { expanded: false, isPartial: false },
+        theme,
+        state,
+        (id) => `${id} lane`,
+        args,
+      )
+        .render(80)
+        .map((line) => stripTerminalSequences(line).trimEnd())
+    expect(
+      render(
+        {
+          action: 'steer',
+          agent_id: 'a',
+          outcome: 'queued',
+          queued_at: 1,
+          reason: null,
+          revision: 1,
+        },
+        { action: 'steer', agent_id: 'a', message: 'Focus on tests' },
+      ),
+    ).toEqual(['✉ Steer ➤ a lane queued', '  ▏ Focus on tests'])
+    expect(
+      render({
+        action: 'cancel',
+        agent_id: 'a',
+        outcome: 'requested',
+        reason: 'stop',
+        revision: 1,
+      }),
+    ).toEqual(['⏹ Cancel a lane requested · stop'])
+    expect(
+      render({
+        action: 'join',
+        agent_id: 'a',
+        outcome: 'conflict',
+        reason: 'conflict',
+        receipt: null,
+        revision: 1,
+      }),
+    ).toEqual(['⚠ Join a lane conflict · conflict'])
+    expect(render({ action: 'status', agent_id: 'a', outcome: 'not-found' })).toEqual([
+      '⚠ Task a not found',
+    ])
+    const card = renderIntercomCard(
+      { agentId: 'a', kind: 'automatic-reply', question: 'Which branch?', reply: 'Use main.' },
+      'a lane',
+      1_000,
+      { expanded: false, now: 61_000 },
+      theme,
+    ).map((line) => stripTerminalSequences(line))
+    expect(card).toEqual([
+      '✉ IRC ⟵ a lane 1m',
+      '  ▏ Which branch?',
+      '  ➤ parent auto',
+      '  ▏ Use main.',
+    ])
+    expect(decodeIntercomDetails({ kind: 'other' })).toBeUndefined()
   })
 })

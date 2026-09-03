@@ -997,6 +997,9 @@ export class SubagentRuntime {
   private scopeBoundTaskControlExtension(): InlineExtension {
     return {
       factory: (pi) => {
+        const labelFor = (agentId: string): string =>
+          this.listSnapshots().find((snapshot) => snapshot.agentId === agentId)?.description ??
+          agentId
         pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
           description: `${taskControlDescription} Access stays within this Task scope.`,
           execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
@@ -1040,7 +1043,8 @@ export class SubagentRuntime {
           label: 'Task Control',
           name: 'TaskControl',
           parameters: TaskControlInputSchema,
-          renderCall: (args, theme, context) => renderTaskControlCall(args, theme, context.state),
+          renderCall: (args, theme, context) =>
+            renderTaskControlCall(args, theme, context.state, labelFor),
           renderResult: (result, options, theme, context) =>
             renderTaskControlResult(
               result.details,
@@ -1048,6 +1052,8 @@ export class SubagentRuntime {
               options,
               theme,
               context.state,
+              labelFor,
+              context.args,
             ),
         })
       },

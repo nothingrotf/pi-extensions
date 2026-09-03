@@ -3,11 +3,13 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { decodeSubagentRegistration } from './agents.ts'
 import { decodeCapabilityProfileRegistration } from './capabilities.ts'
+import { decodeIntercomDetails, renderIntercomCard } from './cards.ts'
 import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
@@ -102,6 +104,25 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     for (const unregister of agentRegistrations.values()) unregister()
     agentRegistrations.clear()
     if (await host.stopSession(ctx)) tui.sessionShutdown(ctx)
+  })
+
+  pi.registerMessageRenderer('subagent-intercom', (message, options, theme) => {
+    const details = decodeIntercomDetails(message.details)
+    if (details === undefined) return undefined
+    const label =
+      runtime.listSnapshots().find((snapshot) => snapshot.agentId === details.agentId)
+        ?.description ?? details.agentId
+    return new Text(
+      renderIntercomCard(
+        details,
+        label,
+        message.timestamp,
+        { expanded: options.expanded, now: Date.now() },
+        theme,
+      ).join('\n'),
+      1,
+      0,
+    )
   })
 
   pi.registerCommand('subagents', {
