@@ -1,9 +1,20 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
+import { prettyModel } from './format.ts'
+
+export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
 
 const minimumDurationMs = 100
+
+export type MessageRole = 'assistant' | 'user'
+
+export type RoleEntryData = {
+  label?: string
+  role: MessageRole
+  timestamp: number
+}
 
 export type UsageEntryData = {
   cacheRead: number
@@ -45,6 +56,24 @@ export function formatSpan(milliseconds: number): string {
   const minutes = Math.floor(milliseconds / 60_000)
   const seconds = Math.round((milliseconds % 60_000) / 1_000)
   return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
+}
+
+export function formatClock(timestamp: number): string {
+  const date = new Date(timestamp)
+  const hours = date.getHours()
+  const suffix = hours < 12 ? 'AM' : 'PM'
+  const hour = hours % 12 === 0 ? 12 : hours % 12
+  return `${hour}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`
+}
+
+export function roleGlyph(role: MessageRole): string {
+  return role === 'user' ? '◆' : '●'
+}
+
+export function roleLabel(role: MessageRole, label: string | undefined): string {
+  if (role === 'user') return 'You'
+  const trimmed = label?.trim()
+  return trimmed === undefined || trimmed.length === 0 ? 'Agent' : trimmed
 }
 
 export function formatCost(value: number): string {
@@ -109,9 +138,27 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
 export function registerTimestamps(pi: ExtensionAPI): void {
   let enabled = true
   let totals = emptyRunTotals()
+  let assistantHeaderPending = true
 
   pi.on('agent_start', () => {
     totals = emptyRunTotals()
+    assistantHeaderPending = true
+  })
+
+  pi.on('message_start', (event, ctx) => {
+    const role = event.message.role
+    if (!enabled || (role !== 'assistant' && role !== 'user')) {
+      return
+    }
+    if (role === 'assistant') {
+      if (!assistantHeaderPending) {
+        return
+      }
+      assistantHeaderPending = false
+    }
+    const data: RoleEntryData = { role, timestamp: Date.now() }
+    if (role === 'assistant') data.label = prettyModel(ctx.model?.id)
+    pi.appendEntry<RoleEntryData>(roleEntryType, data)
   })
 
   pi.on('turn_start', () => {
@@ -135,6 +182,18 @@ export function registerTimestamps(pi: ExtensionAPI): void {
     }
   })
 
+  pi.registerEntryRenderer<RoleEntryData>(roleEntryType, (entry, _options, theme) => {
+    if (!enabled || entry.data === undefined) {
+      return undefined
+    }
+    const { label, role, timestamp } = entry.data
+    return new Text(
+      `${theme.fg('accent', roleGlyph(role))} ${theme.bold(theme.fg('accent', roleLabel(role, label)))} ${theme.fg('dim', `· ${formatClock(timestamp)}`)}`,
+      1,
+      0,
+    )
+  })
+
   pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {
     if (!enabled || entry.data === undefined || !hasUsage(entry.data)) {
       return undefined
@@ -143,7 +202,7 @@ export function registerTimestamps(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('hud-timestamp', {
-    description: 'Toggle the per-turn usage row',
+    description: 'Toggle the transcript role headers and the usage row',
     handler: async (_args, ctx) => {
       enabled = !enabled
       ctx.ui.notify(`hud: timestamps ${enabled ? 'enabled' : 'disabled'}`, 'info')

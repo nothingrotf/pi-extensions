@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { registerTimestamps, timestampEntryType } from '../src/timestamp.ts'
+import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/timestamp.ts'
 
 function harness() {
   const handlers = new Map()
@@ -37,6 +37,9 @@ function harness() {
     agentStart() {
       handlers.get('agent_start')({}, ctx)
     },
+    start(message) {
+      handlers.get('message_start')({ message }, ctx)
+    },
     agentEnd() {
       handlers.get('agent_end')({}, ctx)
     },
@@ -65,18 +68,30 @@ describe('transcript lifecycle', () => {
     const instance = harness()
     instance.agentStart()
     instance.turnStart()
+    instance.start({ role: 'user', timestamp: 100 })
     instance.end({ role: 'user', timestamp: 100 })
+    instance.start({ role: 'assistant', timestamp: 200 })
     instance.end({ role: 'assistant', timestamp: 200, usage })
+    instance.start({ role: 'toolResult', timestamp: 300 })
     instance.end({ role: 'toolResult', timestamp: 300 })
     instance.turnStart()
+    instance.start({ role: 'assistant', timestamp: 400 })
     instance.end({ role: 'assistant', timestamp: 400, usage })
-    expect(instance.entries).toEqual([])
+    expect(instance.entries.map((entry) => entry.customType)).toEqual([
+      roleEntryType,
+      roleEntryType,
+    ])
+    expect(instance.entries.map((entry) => entry.data.role)).toEqual(['user', 'assistant'])
     instance.agentEnd()
-    expect(instance.entries.map((entry) => entry.customType)).toEqual([timestampEntryType])
-    expect(instance.entries[0].data).toMatchObject({ cacheRead: 0, cost: 0, input: 2, output: 4 })
-    expect(instance.entries[0].data.durationMs).toBeGreaterThanOrEqual(0)
+    expect(instance.entries.map((entry) => entry.customType)).toEqual([
+      roleEntryType,
+      roleEntryType,
+      timestampEntryType,
+    ])
+    expect(instance.entries[2].data).toMatchObject({ cacheRead: 0, cost: 0, input: 2, output: 4 })
+    expect(instance.entries[2].data.durationMs).toBeGreaterThanOrEqual(0)
     instance.agentEnd()
-    expect(instance.entries).toHaveLength(1)
+    expect(instance.entries).toHaveLength(3)
   })
 
   test('toggles transcript recording and rendering', async () => {
@@ -90,8 +105,10 @@ describe('transcript lifecycle', () => {
       timestamp: Date.now(),
     }
     expect(instance.render(data)).toBeDefined()
+    expect(instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)).toBeDefined()
     await instance.toggle()
     instance.agentStart()
+    instance.start({ role: 'user', timestamp: 1 })
     instance.turnStart()
     instance.end({ role: 'assistant', timestamp: 1, usage })
     instance.agentEnd()

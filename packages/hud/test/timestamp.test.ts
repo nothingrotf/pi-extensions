@@ -3,15 +3,27 @@ import { describe, expect, test } from 'vite-plus/test'
 import {
   addMessageUsage,
   emptyRunTotals,
+  formatClock,
   formatSpan,
   formatTokens,
   formatCost,
   formatUsageRow,
   hasUsage,
+  roleGlyph,
+  roleLabel,
   toUsageEntry,
 } from '../src/timestamp.ts'
 
 describe('transcript rows', () => {
+  test('formats a twelve hour clock and the role labels', () => {
+    expect(formatClock(new Date(2026, 0, 15, 9, 5, 3).getTime())).toBe('9:05 AM')
+    expect(formatClock(new Date(2026, 0, 15, 22, 11, 0).getTime())).toBe('10:11 PM')
+    expect(formatClock(new Date(2026, 0, 15, 0, 4, 0).getTime())).toBe('12:04 AM')
+    expect(`${roleGlyph('user')} ${roleLabel('user', 'GLM 5.3')}`).toBe('◆ You')
+    expect(`${roleGlyph('assistant')} ${roleLabel('assistant', 'GLM 5.3')}`).toBe('● GLM 5.3')
+    expect(roleLabel('assistant', ' ')).toBe('Agent')
+  })
+
   test('formats compact tokens and spans', () => {
     expect(formatTokens(999)).toBe('999')
     expect(formatTokens(2_400)).toBe('2.4k')

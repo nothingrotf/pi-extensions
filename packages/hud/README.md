@@ -13,17 +13,27 @@ The left side shows:
 The right side shows provider quota windows and context use.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 
-The transcript closes each agent run with one usage row:
+The transcript labels each message author and closes each agent run with one usage row:
 
 ```text
+◆ You · 10:11 PM
+
+can you render a todo list?
+
+● GLM 5.3 · 10:12 PM
+
+Yes. The harness registers todo_write and todo_read.
+
 ▪ 5s · $0.299 · 576.6k in · 278 out · ⛁ 100% cached · ⚡58.6/s
 ```
+
+A user message always carries a `◆ You` header. An assistant header names the active model and appears once per run, before the first assistant message, so turns inside a run stay unlabelled.
 
 The row totals every assistant message in the run. It shows the run duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. A run that reports no tokens shows no row.
 
 The row shares the column that the `outputPad` setting controls.
 The throughput divides the total output tokens by the time from the first turn to the end of the run.
-Usage rows are active by default and never enter the model context.
+Headers and usage rows are active by default and never enter the model context.
 Use `/hud-timestamp` to disable or enable them.
 
 ## Working loader
