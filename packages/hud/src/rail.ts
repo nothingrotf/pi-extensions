@@ -204,8 +204,15 @@ export function railHeader(groups: readonly RailGroup[], theme: RailTheme): stri
   return `${parts.join(tint(theme.palette, 'dim', separator))} ${tint(theme.palette, 'caret', '▾')}`
 }
 
+export const labelWidth = 12
+
+export function padLabel(label: string): string {
+  const width = visibleWidth(label)
+  return width >= labelWidth ? `${label} ` : label + ' '.repeat(labelWidth - width)
+}
+
 function countCell(label: string, count: number): string {
-  return count > 1 ? `${label} ×${count}` : label
+  return count > 1 ? `${padLabel(label)}×${count}` : padLabel(label)
 }
 
 type RowParts = {
@@ -239,18 +246,21 @@ function alignDuration(
 function row(parts: RowParts, theme: RailTheme, caret: string, width: number): string {
   const kind = tintFor(parts.iconKey)
   const glyph = tint(theme.palette, kind, icon(parts.iconKey))
-  const label = tint(theme.palette, kind, parts.label)
-  const count = parts.count > 1 ? ` ${tint(theme.palette, 'dim', `×${parts.count}`)}` : ''
+  const gap = padLabel(parts.label).slice(parts.label.length)
+  const label = `${tint(theme.palette, kind, parts.label)}${gap}`
+  const count = parts.count > 1 ? tint(theme.palette, 'dim', `×${parts.count}`) : ''
   const head = `${tint(theme.palette, 'branch', parts.branch)} ${statusGlyph(parts.status, theme)} ${glyph} ${label}${count}`
   const pieces: string[] = []
   if (parts.arg.length > 0) pieces.push(tint(theme.palette, 'arg', parts.arg))
   if (parts.summary.length > 0) {
     const tone: RailTint = parts.status === 'error' ? 'fail' : 'dim'
-    const lead = tint(theme.palette, 'dim', parts.arg.length > 0 ? separator : '· ')
+    const lead = tint(theme.palette, 'dim', separator)
     pieces.push(`${lead}${tint(theme.palette, tone, parts.summary)}`)
   }
   const body = pieces.join('')
-  const left = body.length > 0 ? `${head}${parts.padding} ${body}${caret}` : `${head}${caret}`
+  const gutter =
+    parts.padding.length > 0 && body.startsWith(' ') ? parts.padding.slice(1) : parts.padding
+  const left = body.length > 0 ? `${head}${gutter}${body}${caret}` : `${head}${caret}`
   return alignDuration(left, parts.duration, theme, width)
 }
 
@@ -294,7 +304,7 @@ export function labelColumn(groups: readonly RailGroup[]): number {
     width = Math.max(width, visibleWidth(countCell(groupLabel(group), group.count)))
     if (group.count === 1) continue
     for (const action of group.actions) {
-      width = Math.max(width, visibleWidth(actionLabel(action)))
+      width = Math.max(width, visibleWidth(padLabel(actionLabel(action))))
     }
   }
   return width
@@ -323,7 +333,9 @@ export function railLines(
           duration: groupDuration(group),
           iconKey: group.iconKey,
           label: groupLabel(group),
-          padding: ' '.repeat(Math.max(0, column - visibleWidth(parentCell))),
+          padding: ' '.repeat(
+            Math.max(0, column - visibleWidth(parentCell)) + (group.count > 1 ? 1 : 0),
+          ),
           status: group.status,
           summary: parent.summary,
         },
@@ -351,7 +363,7 @@ export function railLines(
             duration: action.durationMs,
             iconKey: action.iconKey,
             label,
-            padding: ' '.repeat(Math.max(0, column - visibleWidth(label))),
+            padding: '',
             status: action.status,
             summary: action.summary,
           },

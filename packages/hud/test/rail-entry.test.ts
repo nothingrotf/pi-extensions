@@ -52,7 +52,7 @@ describe('RailComponent', () => {
     stores.set(1, store)
     const lines = plain(component.render(80))
     expect(lines[0]).toBe(' 1 action ▾')
-    expect(lines[1]).toBe(' ╰─ ✓ □ Read a.ts')
+    expect(lines[1]).toBe(' ╰─ ✓ □ Read        a.ts')
   })
 
   test('keeps a right gutter so durations clear the scrollbar', () => {

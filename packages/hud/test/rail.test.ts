@@ -17,6 +17,8 @@ import {
   groupDetail,
   groupLabel,
   labelColumn,
+  labelWidth,
+  padLabel,
   railHeader,
   railLines,
   RailStore,
@@ -163,6 +165,40 @@ describe('groupActions', () => {
   })
 })
 
+describe('label column', () => {
+  test('pads a short label to the fixed width', () => {
+    expect(padLabel('Read')).toBe('Read        ')
+    expect(visibleWidth(padLabel('Read'))).toBe(labelWidth)
+  })
+
+  test('pads every label to the same width so multipliers align', () => {
+    const labels = ['Read', 'Sequenced', 'Synthesized']
+    const widths = labels.map((label) => visibleWidth(padLabel(label)))
+    expect(new Set(widths).size).toBe(1)
+  })
+
+  test('adds a single space when the label already fills the column', () => {
+    expect(padLabel('Impact analysis')).toBe('Impact analysis ')
+  })
+
+  test('aligns the multiplier across rows of different label lengths', () => {
+    const lines = railLines(
+      groupActions([
+        read({ doneLabel: 'Read', toolCallId: 'a' }),
+        read({ doneLabel: 'Read', toolCallId: 'b' }),
+        bash({ doneLabel: 'Ran', toolCallId: 'c' }),
+        bash({ doneLabel: 'Ran', toolCallId: 'd' }),
+      ]),
+      theme,
+      { expanded: false, width: 100 },
+    )
+    const columns = lines
+      .filter((line) => line.includes('\u00D7'))
+      .map((line) => visibleWidth(line.slice(0, line.indexOf('\u00D7'))))
+    expect(new Set(columns).size).toBe(1)
+  })
+})
+
 describe('groupDetail', () => {
   test('joins the argument detail and the summary for a single call', () => {
     const group = groupActions([read({ detail: 'a.ts', summary: '4 lines' })])[0]
@@ -228,8 +264,8 @@ describe('railLines', () => {
     ])
     const lines = railLines(groups, theme, { expanded: false, width: 60 })
     expect(lines[0]).toBe('2 actions ▾')
-    expect(lines[1]).toBe('├─ ✓ □ Read src/index.ts')
-    expect(lines[2]).toBe('╰─ ✓ $ Ran  ls -la')
+    expect(lines[1]).toBe('├─ ✓ □ Read        src/index.ts')
+    expect(lines[2]).toBe('╰─ ✓ $ Ran         ls -la')
   })
 
   test('uses the rounded corner on the last row', () => {
@@ -246,22 +282,24 @@ describe('railLines', () => {
       bash({ detail: 'ls', toolCallId: 'b' }),
       read({ detail: 'c.ts', toolCallId: 'c', doneLabel: 'Searched', iconKey: 'search' }),
     ])
-    expect(labelColumn(groups)).toBe('Searched'.length)
+    expect(labelColumn(groups)).toBe(labelWidth)
     const lines = railLines(groups, theme, { expanded: false, width: 60 })
-    expect(lines[1]).toBe('├─ ✓ □ Read     a.ts')
-    expect(lines[2]).toBe('├─ ✓ $ Ran      ls')
-    expect(lines[3]).toBe('╰─ ✓ ⊙ Searched c.ts')
+    expect(lines[1]).toBe('├─ ✓ □ Read        a.ts')
+    expect(lines[2]).toBe('├─ ✓ $ Ran         ls')
+    expect(lines[3]).toBe('╰─ ✓ ⊙ Searched    c.ts')
   })
 
   test('shows no caret when nothing can expand', () => {
     const groups = groupActions([read({ detail: 'a.ts' })])
-    expect(railLines(groups, theme, { expanded: false, width: 60 })[1]).toBe('╰─ ✓ □ Read a.ts')
+    expect(railLines(groups, theme, { expanded: false, width: 60 })[1]).toBe(
+      '╰─ ✓ □ Read        a.ts',
+    )
   })
 
   test('never puts a caret on a single row', () => {
     const groups = groupActions([read({ detail: 'a.ts', output: 'line', summary: 'line' })])
     expect(railLines(groups, theme, { expanded: false, width: 60 })[1]).toBe(
-      '╰─ ✓ □ Read a.ts · line',
+      '╰─ ✓ □ Read        a.ts · line',
     )
   })
 
@@ -288,7 +326,9 @@ describe('railLines', () => {
 
   test('hides a duration below the reference floor', () => {
     const fast = groupActions([read({ detail: 'a.ts', durationMs: 200 })])
-    expect(railLines(fast, theme, { expanded: false, width: 40 })[1]).toBe('╰─ ✓ □ Read a.ts')
+    expect(railLines(fast, theme, { expanded: false, width: 40 })[1]).toBe(
+      '╰─ ✓ □ Read        a.ts',
+    )
     expect(formatDuration(200)).toBe('')
     expect(formatDuration(500)).toBe('0.5s')
   })
@@ -296,7 +336,7 @@ describe('railLines', () => {
   test('right-aligns the duration of a single call', () => {
     const groups = groupActions([read({ detail: 'a.ts', summary: '1 line', durationMs: 900 })])
     expect(railLines(groups, theme, { expanded: false, width: 40 })[1]).toBe(
-      '╰─ ✓ □ Read a.ts · 1 line           0.9s',
+      '╰─ ✓ □ Read        a.ts · 1 line    0.9s',
     )
   })
 
@@ -306,7 +346,9 @@ describe('railLines', () => {
       bash({ detail: `${long} 1`, toolCallId: 'a' }),
       bash({ detail: `${long} 2`, toolCallId: 'b' }),
     ])
-    expect(railLines(groups, theme, { expanded: false, width: 200 })[1]).toBe('╰─ ✓ $ Ran ×2 ▾')
+    expect(railLines(groups, theme, { expanded: false, width: 200 })[1]).toBe(
+      '╰─ ✓ $ Ran         ×2 ▾',
+    )
   })
 
   test('keeps short batch arguments inline', () => {
@@ -315,7 +357,7 @@ describe('railLines', () => {
       bash({ detail: 'luna', toolCallId: 'b' }),
     ])
     expect(railLines(groups, theme, { expanded: false, width: 80 })[1]).toBe(
-      '╰─ ✓ $ Ran ×2 luna low · luna ▾',
+      '╰─ ✓ $ Ran         ×2 luna low · luna ▾',
     )
   })
 
@@ -326,8 +368,8 @@ describe('railLines', () => {
     ])
     const lines = railLines(groups, theme, { expanded: false, width: 60 })
     expect(lines).toHaveLength(4)
-    expect(lines[2]).toBe('   ├─ ✓ $ Ran    one · 1 line')
-    expect(lines[3]).toBe('   ╰─ ✓ $ Ran    two · 1 line')
+    expect(lines[2]).toBe('   ├─ ✓ $ Ran         one · 1 line')
+    expect(lines[3]).toBe('   ╰─ ✓ $ Ran         two · 1 line')
   })
 
   test('caps the nested children and reports the remainder', () => {
@@ -345,9 +387,9 @@ describe('railLines', () => {
       read({ detail: 'b.ts', summary: '9 lines', toolCallId: 'b', durationMs: 600 }),
     ])
     const lines = railLines(groups, theme, { expanded: true, width: 50 })
-    expect(lines[1]).toBe('╰─ ✓ □ Read ×2 a.ts · b.ts ▾')
-    expect(lines[2]).toBe('   ├─ ✓ □ Read    a.ts · 1 line               0.5s')
-    expect(lines[3]).toBe('   ╰─ ✓ □ Read    b.ts · 9 lines              0.6s')
+    expect(lines[1]).toBe('╰─ ✓ □ Read        ×2 a.ts · b.ts ▾')
+    expect(lines[2]).toBe('   ├─ ✓ □ Read        a.ts · 1 line           0.5s')
+    expect(lines[3]).toBe('   ╰─ ✓ □ Read        b.ts · 9 lines          0.6s')
   })
 
   test('keeps the stem for a batch that is not the last group', () => {
@@ -357,8 +399,8 @@ describe('railLines', () => {
       bash({ detail: 'ls', toolCallId: 'c' }),
     ])
     const lines = railLines(groups, theme, { expanded: true, width: 50 })
-    expect(lines[2]).toBe('│  ├─ ✓ □ Read    a.ts')
-    expect(lines[3]).toBe('│  ╰─ ✓ □ Read    b.ts')
+    expect(lines[2]).toBe('│  ├─ ✓ □ Read        a.ts')
+    expect(lines[3]).toBe('│  ╰─ ✓ □ Read        b.ts')
   })
 
   test('prints the raw output for a single call', () => {
