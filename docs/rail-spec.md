@@ -173,6 +173,37 @@ transcript entry.
 
 The cost uses three decimals below `$0.10` and two at or above it.
 
+## Speaker header
+
+The header names the speaker:
+
+```
+● Agent · 04:31 AM
+```
+
+While the turn runs, the assistant header animates in two ways at once:
+
+1. The glyph beats between `·` and `●`.
+2. The name shimmers in bold.
+
+When the turn ends the header settles to a static glyph and a bold name.
+
+The beat is a double pulse over a period of 2600 ms:
+
+| beat   | phase | time   | weight |
+| ------ | ----- | ------ | ------ |
+| first  | 0.1   | 260 ms | 1.0    |
+| second | 0.3   | 780 ms | 0.55   |
+
+```
+intensity = exp(-(p - 0.1)^2 / 0.0016) + 0.55 * exp(-(p - 0.3)^2 / 0.0024)
+glyph     = intensity > 0.45 ? "●" : "·"
+```
+
+The rest of the period is quiet. The two beats read as a heartbeat, not as a
+blink. The beat period and the shimmer period differ on purpose, so the two
+effects never lock into one rhythm.
+
 ## Shimmer
 
 The shimmer is a narrow highlight that sweeps back and forth. It is not a

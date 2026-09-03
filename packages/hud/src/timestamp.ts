@@ -3,6 +3,8 @@ import { Text } from '@earendil-works/pi-tui'
 
 import { ansiReset, assistantAnsi, userAnsi } from './colors.ts'
 import { prettyModel } from './format.ts'
+import { pulseGlyph } from './pulse.ts'
+import { shimmerText } from './shimmer.ts'
 
 export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
@@ -138,7 +140,12 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
 
 export type LiveUsage = { row: () => string | undefined }
 
-export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage): void {
+export type LiveHeader = {
+  active: (timestamp: number) => boolean
+  onOpen: (timestamp: number) => void
+}
+
+export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage, header?: LiveHeader): void {
   let enabled = true
   let totals = emptyRunTotals()
   let assistantHeaderPending = true
@@ -168,7 +175,10 @@ export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage): void {
       assistantHeaderPending = false
     }
     const data: RoleEntryData = { role, timestamp: Date.now() }
-    if (role === 'assistant') data.label = prettyModel(ctx.model?.id)
+    if (role === 'assistant') {
+      data.label = prettyModel(ctx.model?.id)
+      header?.onOpen(data.timestamp)
+    }
     pi.appendEntry<RoleEntryData>(roleEntryType, data)
   })
 
@@ -199,9 +209,16 @@ export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage): void {
     }
     const { label, role, timestamp } = entry.data
     const accent = role === 'user' ? userAnsi() : assistantAnsi()
+    const clock = theme.fg('dim', `· ${formatClock(timestamp)}`)
+    const text = roleLabel(role, label)
+    if (role === 'assistant' && header?.active(timestamp) === true) {
+      const now = Date.now()
+      const beat = `${accent}${pulseGlyph(now)}${ansiReset}`
+      return new Text(`${beat} ${shimmerText(text, theme, now)} ${clock}`, 1, 0)
+    }
     const glyph = `${accent}${roleGlyph(role)}${ansiReset}`
-    const name = theme.bold(theme.fg('text', roleLabel(role, label)))
-    return new Text(`${glyph} ${name} ${theme.fg('dim', `· ${formatClock(timestamp)}`)}`, 1, 0)
+    const name = theme.bold(theme.fg('text', text))
+    return new Text(`${glyph} ${name} ${clock}`, 1, 0)
   })
 
   pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {

@@ -38,7 +38,7 @@ import {
   stopSoundPlayback,
 } from './sound.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
-import { registerTimestamps, type LiveUsage } from './timestamp.ts'
+import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
 import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
 
@@ -51,7 +51,14 @@ function start(task: Promise<void>): void {
 
 export default function hud(pi: ExtensionAPI): void {
   const liveUsage: LiveUsage = { row: () => undefined }
-  registerTimestamps(pi, liveUsage)
+  let liveHeaderAt: number | undefined
+  const liveHeader: LiveHeader = {
+    active: (timestamp) => agentWorking && timestamp === liveHeaderAt,
+    onOpen: (timestamp) => {
+      liveHeaderAt = timestamp
+    },
+  }
+  registerTimestamps(pi, liveUsage, liveHeader)
 
   const state: HudState = {
     cwd: process.cwd(),
