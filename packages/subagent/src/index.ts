@@ -3,7 +3,6 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
 import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
 
@@ -12,11 +11,21 @@ import { decodeCapabilityProfileRegistration } from './capabilities.ts'
 import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
-import { formatUsage, oneLineLabel, statusIcon } from './format.ts'
-import { type JobProgressDetails, type JobSnapshot, JobTree, toJobSnapshot } from './jobs.ts'
+import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs.ts'
 import { JobProgress } from './progress.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
+import {
+  plainText,
+  rowFromBatchItem,
+  rowFromCompleted,
+  rowFromFailed,
+  rowFromJob,
+  summaryLine,
+  TaskCall,
+  type TaskRenderState,
+  TaskResult,
+} from './task-render.ts'
 import { SubagentTui } from './ui.ts'
 
 export const SUBAGENT_DISCOVERY_EVENT = '@nothingrotf/subagent/discover-agents'
@@ -34,23 +43,6 @@ interface BatchToolDetails {
 }
 
 type TaskToolDetails = RuntimeDetails | BatchToolDetails | JobProgressDetails
-
-function batchJobs(
-  items: readonly BatchItemResult[],
-  snapshots: ReadonlyMap<string, JobSnapshot>,
-): JobSnapshot[] {
-  return items.map((item) => {
-    const known = item.agentId === undefined ? undefined : snapshots.get(item.agentId)
-    if (known !== undefined) return known
-    return {
-      agentId: item.agentId ?? item.taskId,
-      description: item.taskId,
-      durationMs: 0,
-      lastActivity: undefined,
-      status: item.status,
-    }
-  })
-}
 
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
@@ -137,7 +129,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   registerTaskControl(pi, host, runtime)
 
-  pi.registerTool<typeof TaskInputSchema, TaskToolDetails>({
+  pi.registerTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>({
     description:
       'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default unless the selected agent defines background mode.',
     execute: async (_callId, input, signal, onUpdate, ctx) => {
@@ -156,34 +148,23 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     label: 'Task',
     name: 'Task',
     parameters: TaskInputSchema,
-    renderCall(args, theme) {
-      if ('tasks' in args) {
-        return new Text(
-          `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', `${args.tasks.length} tasks`)} ${theme.fg('muted', '[fg]')}`,
-          0,
-          0,
-        )
-      }
-      const mode =
-        args.run_in_background === undefined ? 'auto' : args.run_in_background ? 'bg' : 'fg'
-      const parts = [args.model, args.readonly === true ? 'read-only' : undefined].filter(
-        (part) => part !== undefined,
-      )
-      const metadata = parts.length === 0 ? '' : `\n  ${theme.fg('dim', parts.join(' · '))}`
-      return new Text(
-        `${theme.fg('toolTitle', theme.bold('Task'))} ${theme.fg('accent', args.subagent_type)} ${theme.fg('muted', `[${mode}]`)}${metadata}\n  ${theme.fg('dim', oneLineLabel(args.description))}`,
-        0,
-        0,
-      )
+    renderCall(args, theme, context) {
+      return new TaskCall(args, theme, context.state)
     },
-    renderResult(result, { expanded, isPartial }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details
       if (details === undefined) {
         const text = result.content.find((content) => content.type === 'text')?.text ?? ''
-        return new Text(text, 0, 0)
+        return plainText(theme.fg('dim', text))
       }
+      context.state.hasResult = true
+      const options = { expanded, live: isPartial }
       if (details.status === 'progress') {
-        return new JobTree(details.jobs, { expanded, isPartial }, theme)
+        return new TaskResult(
+          details.jobs.map((job) => rowFromJob(job, false)),
+          options,
+          theme,
+        )
       }
       if (details.status === 'batch') {
         const snapshots = new Map<string, JobSnapshot>()
@@ -191,45 +172,47 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
         for (const snapshot of runtime.listSnapshots()) {
           snapshots.set(snapshot.agentId, toJobSnapshot(snapshot, now))
         }
-        return new JobTree(
-          batchJobs(details.items, snapshots),
-          { expanded, isPartial: false },
-          theme,
-          theme.fg('dim', `run ${details.runId}`),
+        const rows = details.items.map((item) =>
+          rowFromBatchItem(
+            item,
+            item.agentId === undefined ? undefined : snapshots.get(item.agentId),
+            'task',
+          ),
         )
+        const duration = rows.reduce((max, row) => Math.max(max, row.durationMs ?? 0), 0)
+        return new TaskResult(rows, options, theme, summaryLine(rows, duration, theme))
       }
+      const label =
+        'description' in context.args ? context.args.description : (details.agentId ?? '')
+      const agentType = 'subagent_type' in context.args ? context.args.subagent_type : 'task'
       if (details.status === 'background') {
-        return new Text(
-          `• ${theme.fg('accent', 'running')} ${theme.fg('muted', details.agentId)}`,
-          0,
-          0,
-        )
+        const snapshot = runtime.listSnapshots().find((entry) => entry.agentId === details.agentId)
+        const row =
+          snapshot === undefined
+            ? {
+                activity: undefined,
+                agentType,
+                background: true,
+                context: undefined,
+                cost: 0,
+                durationMs: undefined,
+                error: undefined,
+                label,
+                output: undefined,
+                status: 'pending' as const,
+                task: undefined,
+                toolCalls: 0,
+              }
+            : rowFromJob(toJobSnapshot(snapshot, Date.now()), true)
+        return new TaskResult([row], options, theme)
       }
       if (details.status === 'error') {
-        const id = 'agentId' in details ? ` ${theme.fg('muted', details.agentId)}` : ''
-        return new Text(`✗ ${theme.fg('error', details.error)}${id}`, 0, 0)
-      }
-      const usage = formatUsage(details.usage)
-      const intercomUsage = formatUsage(details.intercomUsage)
-      const usageLines = [
-        usage,
-        intercomUsage.length > 0 ? `parent ↔ ${intercomUsage}` : undefined,
-      ].filter((line) => line !== undefined && line.length > 0)
-      const header = `${statusIcon(details.status)} ${theme.fg('accent', details.agentId)}`
-      if (!expanded) {
-        return new Text(
-          usageLines.length === 0 ? header : `${header}\n${theme.fg('dim', usageLines.join('\n'))}`,
-          0,
-          0,
+        const aborted = result.content.some(
+          (content) => content.type === 'text' && content.text.includes('aborted'),
         )
+        return new TaskResult([rowFromFailed(details, label, agentType, aborted)], options, theme)
       }
-      return new Text(
-        [header, theme.fg('dim', details.finalMessage), theme.fg('dim', usageLines.join('\n'))]
-          .filter((line) => line.length > 0)
-          .join('\n'),
-        0,
-        0,
-      )
+      return new TaskResult([rowFromCompleted(details, label, agentType)], options, theme)
     },
   })
 

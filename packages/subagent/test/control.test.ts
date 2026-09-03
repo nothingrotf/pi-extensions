@@ -11,7 +11,7 @@ import {
   type TaskControlScope,
   waitForJobs,
 } from '../src/control.ts'
-import type { JobProgressDetails } from '../src/jobs.ts'
+import type { JobProgressDetails, JobSnapshot } from '../src/jobs.ts'
 import type { SubagentSnapshot } from '../src/runtime.ts'
 
 const theme = {
@@ -52,6 +52,20 @@ function snapshot(agentId: string, running: boolean): SubagentSnapshot {
     status: running ? 'running' : 'completed',
     subagentType: 'shell',
     usage,
+  }
+}
+
+function job(agentId: string, status: JobSnapshot['status']): JobSnapshot {
+  return {
+    agentId,
+    context: undefined,
+    cost: 0,
+    description: `${agentId} lane`,
+    durationMs: 4_000,
+    lastActivity: undefined,
+    status,
+    subagentType: 'task',
+    toolCalls: 0,
   }
 }
 
@@ -170,22 +184,7 @@ describe('task control wait', () => {
     expect(call({ action: 'wait', agent_ids: ['a', 'b'] })).toEqual(['⏳ poll 2 jobs'])
     expect(call({ action: 'jobs' })).toEqual(['⏳ background jobs'])
     expect(call({ action: 'status', agent_id: 'a' })).toEqual(['TaskControl status a'])
-    const jobs = [
-      {
-        agentId: 'a',
-        description: 'a lane',
-        durationMs: 4_000,
-        lastActivity: undefined,
-        status: 'running' as const,
-      },
-      {
-        agentId: 'b',
-        description: 'b lane',
-        durationMs: 4_000,
-        lastActivity: undefined,
-        status: 'completed' as const,
-      },
-    ]
+    const jobs = [job('a', 'running'), job('b', 'completed')]
     const progress = renderTaskControlResult(
       { jobs, status: 'progress' },
       '',

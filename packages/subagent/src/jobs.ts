@@ -7,12 +7,21 @@ import { shimmerText } from './shimmer.ts'
 
 export type JobStatus = RunStatus | 'blocked'
 
+export interface JobContext {
+  percent: number | null
+  window: number
+}
+
 export interface JobSnapshot {
   agentId: string
+  context: JobContext | undefined
+  cost: number
   description: string
   durationMs: number
   lastActivity: string | undefined
   status: JobStatus
+  subagentType: string
+  toolCalls: number
 }
 
 export interface JobProgressDetails {
@@ -34,10 +43,17 @@ export function toJobSnapshot(snapshot: SubagentSnapshot, now: number): JobSnaps
   const end = snapshot.endedAt ?? now
   return {
     agentId: snapshot.agentId,
+    context:
+      snapshot.contextState === undefined
+        ? undefined
+        : { percent: snapshot.contextState.percent, window: snapshot.contextState.contextWindow },
+    cost: snapshot.usage.cost,
     description: snapshot.description,
     durationMs: Math.max(0, end - snapshot.startedAt),
     lastActivity: snapshot.lastActivity,
     status: snapshot.status,
+    subagentType: snapshot.subagentType,
+    toolCalls: snapshot.usage.toolCalls,
   }
 }
 

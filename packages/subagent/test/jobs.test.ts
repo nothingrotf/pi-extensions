@@ -28,7 +28,17 @@ function job(
   durationMs: number,
   lastActivity?: string,
 ): JobSnapshot {
-  return { agentId, description: `${agentId} lane`, durationMs, lastActivity, status }
+  return {
+    agentId,
+    context: undefined,
+    cost: 0,
+    description: `${agentId} lane`,
+    durationMs,
+    lastActivity,
+    status,
+    subagentType: 'task',
+    toolCalls: 0,
+  }
 }
 
 function snapshot(agentId: string, status: SubagentSnapshot['status']): SubagentSnapshot {
@@ -122,10 +132,14 @@ describe('job tree', () => {
   it('maps runtime snapshots to jobs', () => {
     expect(toJobSnapshot(snapshot('a', 'running'), 5_000)).toEqual({
       agentId: 'a',
+      context: undefined,
+      cost: 0,
       description: 'a lane',
       durationMs: 4_000,
       lastActivity: 'Read file',
       status: 'running',
+      subagentType: 'explore',
+      toolCalls: 0,
     })
     expect(toJobSnapshot(snapshot('b', 'completed'), 50_000).durationMs).toBe(8_000)
   })
