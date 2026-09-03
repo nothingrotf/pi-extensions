@@ -4,7 +4,24 @@ import { formatCwd, sanitizeScalar } from './format.ts'
 import type { GitStatus } from './git.ts'
 import type { UsageSnapshot, UsageWindow } from './usage.ts'
 
-export type HudColor = 'accent' | 'dim' | 'error' | 'muted' | 'success' | 'text' | 'warning'
+export type ThinkingColor =
+  | 'thinkingHigh'
+  | 'thinkingLow'
+  | 'thinkingMax'
+  | 'thinkingMedium'
+  | 'thinkingMinimal'
+  | 'thinkingOff'
+  | 'thinkingXhigh'
+
+export type HudColor =
+  | 'accent'
+  | 'dim'
+  | 'error'
+  | 'muted'
+  | 'success'
+  | 'text'
+  | 'warning'
+  | ThinkingColor
 
 export type HudTheme = {
   fg: (color: HudColor, text: string) => string
@@ -16,6 +33,7 @@ export type HudState = {
   providerLabel: string
   modelLabel: string
   effortLabel: string
+  effortLevel: string
   contextLabel: string
   contextPercent: number | null
   usage: UsageSnapshot | null
@@ -29,6 +47,19 @@ function color(theme: HudTheme, token: HudColor, text: string): string {
   } catch {
     return text
   }
+}
+
+const thinkingColors: ReadonlyMap<string, ThinkingColor> = new Map([
+  ['minimal', 'thinkingMinimal'],
+  ['low', 'thinkingLow'],
+  ['medium', 'thinkingMedium'],
+  ['high', 'thinkingHigh'],
+  ['xhigh', 'thinkingXhigh'],
+  ['max', 'thinkingMax'],
+])
+
+export function effortColor(level: string): ThinkingColor {
+  return thinkingColors.get(sanitizeScalar(level).toLowerCase()) ?? 'thinkingOff'
 }
 
 function loadColor(percent: number): HudColor {
@@ -145,7 +176,9 @@ function modelSegment(theme: HudTheme, state: HudState): string {
   }
   const identity = `${color(theme, 'muted', provider)}${color(theme, 'muted', '/')}${color(theme, 'text', model)}`
   const effort = sanitizeScalar(state.effortLabel)
-  return effort ? `${identity} ${color(theme, 'accent', `(${effort})`)}` : identity
+  return effort
+    ? `${identity} ${color(theme, effortColor(state.effortLevel), `(${effort})`)}`
+    : identity
 }
 
 export function renderHud(

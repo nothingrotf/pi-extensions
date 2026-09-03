@@ -22,6 +22,7 @@ function harness(branch = []) {
       emit(name, payload) {
         emitted.push({ name, payload })
       },
+      on: () => () => undefined,
     },
     on(name, handler) {
       handlers.set(name, handler)

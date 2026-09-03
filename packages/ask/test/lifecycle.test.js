@@ -22,6 +22,8 @@ function harness(mode = 'tui') {
   const messages = []
   let promptDone
   const api = {
+    events: { emit() {}, on: () => () => undefined },
+    on() {},
     registerTool(tool) {
       tools.set(tool.name, tool)
     },

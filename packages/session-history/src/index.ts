@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
+import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
 import { SessionHistorySchema } from './schema.ts'
 import { HistoryError, type HistoryResponse, SessionHistoryStore } from './sessions.ts'
 
@@ -34,6 +35,8 @@ function toolResult(value: ErrorResponse | HistoryResponse): ToolOutput {
 
 export default function sessionHistory(pi: ExtensionAPI): void {
   let store: SessionHistoryStore | undefined
+  const rail = new RailBridge(pi, ['session_history'])
+
   pi.registerTool({
     name: 'session_history',
     label: 'Session history',
@@ -62,6 +65,35 @@ export default function sessionHistory(pi: ExtensionAPI): void {
           error: { code: historyError.code, message: historyError.message },
         })
       }
+    },
+    renderShell: 'self',
+    renderCall(args, _theme, context) {
+      if (!rail.active) return emptyRailComponent
+      rail.report({
+        detail: args.action,
+        doneLabel: 'History',
+        runningLabel: 'History',
+        status: 'pending',
+        toolCallId: context.toolCallId,
+        iconKey: 'todo',
+        toolName: 'session_history',
+      })
+      return emptyRailComponent
+    },
+    renderResult(result, options, _theme, context) {
+      if (!rail.active) return emptyRailComponent
+      const status: RailStatus = context.isError ? 'error' : options.isPartial ? 'pending' : 'ok'
+      rail.report({
+        detail: context.args.action,
+        doneLabel: 'History',
+        output: railOutputText(result.content),
+        runningLabel: 'History',
+        status,
+        toolCallId: context.toolCallId,
+        iconKey: 'todo',
+        toolName: 'session_history',
+      })
+      return emptyRailComponent
     },
   })
 }

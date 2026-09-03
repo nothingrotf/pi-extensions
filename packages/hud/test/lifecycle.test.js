@@ -26,6 +26,8 @@ function harness() {
     },
     registerCommand() {},
     registerEntryRenderer() {},
+    registerMarkdownTransformer() {},
+    registerTool() {},
     appendEntry() {},
   }
   const ctx = {
@@ -33,6 +35,9 @@ function harness() {
     mode: 'tui',
     cwd: process.cwd(),
     model: undefined,
+    sessionManager: {
+      getBranch: () => [],
+    },
     getContextUsage() {
       return { tokens: 0, contextWindow: 272_000, percent: 0 }
     },
@@ -50,6 +55,7 @@ function harness() {
         return () => undefined
       },
       setWorkingVisible() {},
+      setHiddenThinkingLabel() {},
       setWidget(key, factory) {
         if (factory === undefined) {
           widgets.delete(key)

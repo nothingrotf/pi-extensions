@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
+import { ansiReset, assistantAnsi, userAnsi } from './colors.ts'
 import { prettyModel } from './format.ts'
 
 export const roleEntryType = 'hud-role'
@@ -187,11 +188,10 @@ export function registerTimestamps(pi: ExtensionAPI): void {
       return undefined
     }
     const { label, role, timestamp } = entry.data
-    return new Text(
-      `${theme.fg('accent', roleGlyph(role))} ${theme.bold(theme.fg('accent', roleLabel(role, label)))} ${theme.fg('dim', `· ${formatClock(timestamp)}`)}`,
-      1,
-      0,
-    )
+    const accent = role === 'user' ? userAnsi() : assistantAnsi()
+    const glyph = `${accent}${roleGlyph(role)}${ansiReset}`
+    const name = theme.bold(theme.fg('text', roleLabel(role, label)))
+    return new Text(`${glyph} ${name} ${theme.fg('dim', `· ${formatClock(timestamp)}`)}`, 1, 0)
   })
 
   pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {

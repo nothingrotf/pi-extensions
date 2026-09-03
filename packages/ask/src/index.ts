@@ -17,6 +17,7 @@ import {
   validateQuestions,
 } from './domain.ts'
 import { AskQuestionPrompt, type AskPromptResult } from './prompt.ts'
+import { emptyRailComponent, RailBridge, type RailStatus } from './rail.ts'
 
 export {
   type AskAnswer,
@@ -232,8 +233,28 @@ function renderDetails(details: AskQuestionDetails, theme: Theme): Text {
   }
 }
 
+export function railDetail(questions: readonly AskQuestionItem[]): string {
+  return questions.map((question) => question.prompt).join(' · ')
+}
+
+export function railSummary(details: AskQuestionDetails): string {
+  if (details.status !== 'success') return ''
+  const parts: string[] = []
+  for (const question of details.questions) {
+    const answer = answerForQuestion(question.id, details.answers)
+    if (answer === undefined) continue
+    const labels = question.options
+      .filter((option) => answer.selectedOptionIds.includes(option.id))
+      .map((option) => option.label)
+    if (answer.freeformText.length > 0) labels.push(answer.freeformText.split('\n')[0] ?? '')
+    if (labels.length > 0) parts.push(labels.join(', '))
+  }
+  return parts.join(' · ')
+}
+
 export default function ask(pi: ExtensionAPI): void {
   const queue = new AsyncQuestionQueue()
+  const rail = new RailBridge(pi, ['AskQuestion'])
   const asyncResults = new Map<string, AskQuestionDetails>()
   const asyncInvalidators = new Map<string, () => void>()
 
@@ -300,16 +321,43 @@ export default function ask(pi: ExtensionAPI): void {
         details,
       }
     },
+    renderShell: 'self',
     renderCall(args, theme, context) {
+      if (rail.active) {
+        rail.report({
+          detail: railDetail(args.questions),
+          doneLabel: 'Ask',
+          runningLabel: 'Ask',
+          status: 'pending',
+          toolCallId: context.toolCallId,
+          iconKey: 'ask',
+          toolName: 'AskQuestion',
+        })
+        return emptyRailComponent
+      }
       const lines =
         context.state.hasResult === true
           ? [renderCallLines(args, theme)[0] ?? '']
           : renderCallLines(args, theme)
       return new Text(lines.join('\n'), 0, 0)
     },
-    renderResult(result, _options, theme, context) {
+    renderResult(result, options, theme, context) {
       context.state.hasResult = true
       const details = decodeAskQuestionDetails(result.details)
+      if (rail.active) {
+        const status: RailStatus = context.isError ? 'error' : options.isPartial ? 'pending' : 'ok'
+        rail.report({
+          detail: railDetail(context.args.questions),
+          doneLabel: 'Ask',
+          runningLabel: 'Ask',
+          summary: details === null ? '' : railSummary(details),
+          status,
+          toolCallId: context.toolCallId,
+          iconKey: 'ask',
+          toolName: 'AskQuestion',
+        })
+        return emptyRailComponent
+      }
       if (details?.status === 'async') {
         const completed = asyncResults.get(context.toolCallId)
         if (completed !== undefined) {

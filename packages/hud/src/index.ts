@@ -1,7 +1,21 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
+import { sweepEditors } from './editor-border.ts'
 import { buildContextLabel, contextPercent, prettyEffort, prettyModel } from './format.ts'
 import { emptyGitStatus, readGitStatus } from './git.ts'
+import {
+  builtInRailToolNames,
+  decodeRailAction,
+  decodeRailTools,
+  defaultRailIcon,
+  defaultRailLabel,
+  railActionChannel,
+  railEnabledChannel,
+  railToolsChannel,
+} from './rail-channel.ts'
+import { decodeRailEntry, railEntryType, RailComponent } from './rail-entry.ts'
+import { applyRailTools, mapSessionRails } from './rail-tools.ts'
+import { RailStore } from './rail.ts'
 import { renderHud, type HudState } from './render.ts'
 import {
   choiceValue,
@@ -22,6 +36,7 @@ import {
   type SoundSettings,
   stopSoundPlayback,
 } from './sound.ts'
+import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
 import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
@@ -42,6 +57,7 @@ export default function hud(pi: ExtensionAPI): void {
     providerLabel: '',
     modelLabel: 'no-model',
     effortLabel: '',
+    effortLevel: '',
     contextLabel: '--',
     contextPercent: null,
     usage: null,
@@ -60,6 +76,42 @@ export default function hud(pi: ExtensionAPI): void {
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
   const dock = new WorkingDock()
+  let rail = new RailStore()
+  let railTurn = 0
+  let railTurnPending = false
+  let railsByToolCallId = new Map<string, RailStore>()
+  let railsByTurn = new Map<number, RailStore>()
+  const railFor = (toolCallId: string) => railsByToolCallId.get(toolCallId) ?? rail
+  let railEnabled = true
+  let railCwd: string | undefined
+  const railTools = new Set(builtInRailToolNames)
+  let quietThinking = true
+
+  const thinkingQuiet = () => quietThinking && railEnabled
+  let spacerFix: ThinkingSpacerFix | undefined
+  let agentWorking = false
+  let dimEditorBorder: (() => void) | undefined
+
+  const applyThinkingLabel = (ctx: ExtensionContext) => {
+    ctx.ui.setHiddenThinkingLabel(thinkingQuiet() ? '' : undefined)
+  }
+
+  pi.registerMarkdownTransformer((markdown, context) => {
+    if (context.messageType !== 'assistant-thinking') return markdown
+    return thinkingQuiet() ? '' : markdown
+  })
+
+  railCwd = process.cwd()
+  applyRailTools(pi, railFor, railCwd, railEnabled)
+
+  const restoreRails = (ctx: ExtensionContext) => {
+    const session = mapSessionRails(ctx.sessionManager.getBranch(), ctx.cwd)
+    railsByToolCallId = session.byToolCallId
+    railsByTurn = session.byEntryTurn
+    railTurn = session.maxTurn
+    rail = new RailStore()
+    requestRender?.()
+  }
 
   pi.events.on(workingMessageChannel, (data) => {
     const message = decodeWorkingMessage(data)
@@ -93,7 +145,8 @@ export default function hud(pi: ExtensionAPI): void {
     state.cwd = ctx.cwd
     state.providerLabel = ctx.model?.provider ?? ''
     state.modelLabel = prettyModel(ctx.model?.id)
-    state.effortLabel = ctx.model?.reasoning ? prettyEffort(pi.getThinkingLevel()) : ''
+    state.effortLevel = ctx.model?.reasoning ? pi.getThinkingLevel() : ''
+    state.effortLabel = prettyEffort(state.effortLevel)
     state.contextLabel = buildContextLabel(ctx)
     state.contextPercent = contextPercent(ctx)
     render()
@@ -191,6 +244,12 @@ export default function hud(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', (_event, ctx) => {
+    restoreRails(ctx)
+    applyThinkingLabel(ctx)
+    if (railCwd !== ctx.cwd) {
+      railCwd = ctx.cwd
+      applyRailTools(pi, railFor, ctx.cwd, railEnabled)
+    }
     if (!ctx.hasUI || ctx.mode !== 'tui') {
       return
     }
@@ -203,7 +262,10 @@ export default function hud(pi: ExtensionAPI): void {
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       footerOwned = true
+      spacerFix = installThinkingSpacerFix(tui, thinkingQuiet)
       requestRender = () => tui.requestRender()
+      dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
+      dimEditorBorder()
       const unsubscribe = footerData.onBranchChange(() => {
         start(refreshGit(ctx, life))
       })
@@ -211,6 +273,7 @@ export default function hud(pi: ExtensionAPI): void {
         dispose() {
           footerOwned = false
           requestRender = undefined
+          dimEditorBorder = undefined
           unsubscribe()
           active = false
           stop()
@@ -239,14 +302,58 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('agent_start', () => {
+    agentWorking = true
+    dimEditorBorder?.()
+    requestRender?.()
     dock.reset()
+    rail = new RailStore()
+    railTurn += 1
+    railTurnPending = true
+    railsByTurn.set(railTurn, rail)
+  })
+
+  pi.registerEntryRenderer(railEntryType, (entry, options, theme) => {
+    const turn = decodeRailEntry(entry.data)
+    if (turn === undefined) {
+      return undefined
+    }
+    return new RailComponent(() => railsByTurn.get(turn), theme, options.expanded)
+  })
+
+  pi.on('session_tree', (_event, ctx) => {
+    restoreRails(ctx)
   })
 
   pi.on('turn_start', (_event, ctx) => {
     if (active && ctx.hasUI && ctx.mode === 'tui') dock.start(ctx.ui)
   })
 
+  pi.events.on(railToolsChannel, (data) => {
+    const announcement = decodeRailTools(data)
+    if (announcement === undefined) return
+    for (const name of announcement.tools) railTools.add(name)
+    pi.events.emit(railEnabledChannel, { enabled: railEnabled })
+  })
+
+  pi.events.on(railActionChannel, (data) => {
+    const report = decodeRailAction(data)
+    if (report === undefined || !railEnabled) return
+    const { toolCallId, toolName, ...patch } = report
+    const fallback = toolName === undefined ? undefined : defaultRailLabel(toolName)
+    railFor(toolCallId).report(toolCallId, {
+      ...patch,
+      doneLabel: patch.doneLabel ?? fallback ?? 'Tool',
+      iconKey: patch.iconKey ?? (toolName === undefined ? 'tool' : defaultRailIcon(toolName)),
+      runningLabel: patch.runningLabel ?? patch.doneLabel ?? fallback ?? 'Tool',
+    })
+    if (toolName !== undefined) railTools.add(toolName)
+  })
+
   pi.on('tool_execution_start', (event, ctx) => {
+    if (railEnabled && railTurnPending && railTools.has(event.toolName)) {
+      railTurnPending = false
+      pi.appendEntry(railEntryType, { turn: railTurn })
+    }
     if (isAskTool(event.toolName)) {
       play(ctx, sound.awaitingInputSound)
     }
@@ -266,6 +373,10 @@ export default function hud(pi: ExtensionAPI): void {
     }
   })
 
+  pi.on('message_start', (event) => {
+    if (event.message.role === 'assistant') spacerFix?.markDirty()
+  })
+
   pi.on('message_end', (_event, ctx) => {
     if (active) {
       sync(ctx)
@@ -280,12 +391,36 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('agent_end', (_event, ctx) => {
+    agentWorking = false
+    requestRender?.()
     dock.stop()
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
       play(ctx, sound.completionSound)
     }
+  })
+
+  pi.registerCommand('hud-rail', {
+    description: 'Toggle the aggregated tool action rail',
+    handler: async (_args, ctx) => {
+      railEnabled = !railEnabled
+      rail = new RailStore()
+      applyRailTools(pi, railFor, railCwd ?? ctx.cwd, railEnabled)
+      pi.events.emit(railEnabledChannel, { enabled: railEnabled })
+      applyThinkingLabel(ctx)
+      ctx.ui.notify(`hud: rail ${railEnabled ? 'enabled' : 'disabled'}`, 'info')
+    },
+  })
+
+  pi.registerCommand('hud-thinking', {
+    description: 'Toggle the repeated hidden thinking marker',
+    handler: async (_args, ctx) => {
+      quietThinking = !quietThinking
+      spacerFix?.markDirty()
+      applyThinkingLabel(ctx)
+      ctx.ui.notify(`hud: thinking marker ${quietThinking ? 'hidden' : 'shown'}`, 'info')
+    },
   })
 
   pi.registerCommand('hud-sound', {

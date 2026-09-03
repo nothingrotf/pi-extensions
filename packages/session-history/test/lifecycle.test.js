@@ -11,6 +11,8 @@ import sessionHistory from '../src/index.ts'
 function harness() {
   let registered
   const api = {
+    events: { emit() {}, on: () => () => undefined },
+    on() {},
     registerTool(tool) {
       registered = tool
     },

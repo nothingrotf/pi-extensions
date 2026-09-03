@@ -2,7 +2,13 @@ import { visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import { emptyGitStatus } from '../src/git.ts'
-import { goalStatusKey, renderHud, type HudState, type HudTheme } from '../src/render.ts'
+import {
+  effortColor,
+  goalStatusKey,
+  renderHud,
+  type HudState,
+  type HudTheme,
+} from '../src/render.ts'
 
 const theme: HudTheme = {
   fg: (_color, text) => text,
@@ -15,6 +21,7 @@ function state(overrides: Partial<HudState> = {}): HudState {
     providerLabel: 'anthropic',
     modelLabel: 'Opus 4.8',
     effortLabel: 'High',
+    effortLevel: 'high',
     contextLabel: '42%/1.0M',
     contextPercent: 42,
     usage: {
@@ -29,7 +36,38 @@ function state(overrides: Partial<HudState> = {}): HudState {
   }
 }
 
+describe('effortColor', () => {
+  test('maps each thinking level to its editor border color', () => {
+    expect(effortColor('minimal')).toBe('thinkingMinimal')
+    expect(effortColor('low')).toBe('thinkingLow')
+    expect(effortColor('medium')).toBe('thinkingMedium')
+    expect(effortColor('high')).toBe('thinkingHigh')
+    expect(effortColor('xhigh')).toBe('thinkingXhigh')
+    expect(effortColor('max')).toBe('thinkingMax')
+  })
+
+  test('falls back to the off color for unknown levels', () => {
+    expect(effortColor('')).toBe('thinkingOff')
+    expect(effortColor('off')).toBe('thinkingOff')
+    expect(effortColor('weird')).toBe('thinkingOff')
+  })
+
+  test('ignores case and surrounding whitespace', () => {
+    expect(effortColor(' MAX ')).toBe('thinkingMax')
+  })
+})
+
 describe('compact HUD', () => {
+  test('paints the effort label with the thinking level color', () => {
+    const tagged: HudTheme = {
+      fg: (token, text) => `<${token}>${text}</${token}>`,
+    }
+    const value = state({ effortLevel: 'max', effortLabel: 'Max', usage: null })
+    const [line = ''] = renderHud(tagged, value, new Map(), 400)
+
+    expect(line).toContain('<thinkingMax>(Max)</thinkingMax>')
+  })
+
   test('draws the compact layout in one physical row', () => {
     const value = state({
       git: {

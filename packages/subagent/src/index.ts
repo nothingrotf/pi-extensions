@@ -4,7 +4,7 @@ import type {
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
-import type { Static } from 'typebox'
+import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { decodeSubagentRegistration } from './agents.ts'
@@ -15,6 +15,7 @@ import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
 import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs.ts'
 import { JobProgress } from './progress.ts'
+import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
 import {
@@ -46,14 +47,25 @@ interface BatchToolDetails {
 
 type TaskToolDetails = RuntimeDetails | BatchToolDetails | JobProgressDetails
 
+const TaskDetailSchema = Type.Object({
+  description: Type.Optional(Type.String()),
+  subagent_type: Type.Optional(Type.String()),
+})
+
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
   return `Task failed: ${result.details.error}${agent}`
 }
 
+export function railTaskDetail(args: Static<typeof TaskInputSchema>): string {
+  if (!Value.Check(TaskDetailSchema, args)) return ''
+  return args.description ?? args.subagent_type ?? ''
+}
+
 export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): SubagentRuntime {
   const host = acquireSubagentHost(pi, runTimeoutMs)
   const runtime = host.runtime
+  const rail = new RailBridge(pi, ['Task'])
   if (host.registered) return runtime
   host.registered = true
   const tui = new SubagentTui(runtime)
@@ -169,11 +181,38 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     label: 'Task',
     name: 'Task',
     parameters: TaskInputSchema,
+    renderShell: 'self',
     renderCall(args, theme, context) {
+      if (rail.active) {
+        rail.report({
+          detail: railTaskDetail(args),
+          doneLabel: 'Dispatched',
+          runningLabel: 'Dispatching',
+          status: 'pending',
+          toolCallId: context.toolCallId,
+          iconKey: 'agent',
+          toolName: 'Task',
+        })
+        return emptyRailComponent
+      }
       return new TaskCall(args, theme, context.state)
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details
+      if (rail.active) {
+        const status: RailStatus = context.isError ? 'error' : isPartial ? 'pending' : 'ok'
+        rail.report({
+          detail: railTaskDetail(context.args),
+          doneLabel: 'Dispatched',
+          output: railOutputText(result.content),
+          runningLabel: 'Dispatching',
+          status,
+          toolCallId: context.toolCallId,
+          iconKey: 'agent',
+          toolName: 'Task',
+        })
+        return emptyRailComponent
+      }
       if (details === undefined) {
         const text = result.content.find((content) => content.type === 'text')?.text ?? ''
         return plainText(theme.fg('dim', text))

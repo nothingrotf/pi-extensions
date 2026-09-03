@@ -50,6 +50,7 @@ import {
 } from './domain.ts'
 import { markdownToTodos, todosToMarkdown } from './markdown.ts'
 import { formatTodoLine, selectCollapsedTodos, TodoOverlay } from './overlay.ts'
+import { emptyRailComponent, RailBridge, type RailStatus } from './rail.ts'
 import {
   createReminderCycle,
   decideMidRunNudge,
@@ -149,6 +150,15 @@ const todoReadDescription =
   'Read the structured task list for the current coding session. Filter by status, ID, or both. Empty filters return the complete list.'
 
 const TODO_ICON = '☑'
+
+function railTodoDetail(details: TodoWriteDetails | null): string {
+  if (details === null) return 'failed'
+  const total = details.todos.length
+  if (total === 0) return 'cleared'
+  const label = `${total} task${total === 1 ? '' : 's'}`
+  const done = completedTodoCount(details.todos)
+  return done > 0 ? `${label} · ${done} done` : label
+}
 
 interface TodoRenderState {
   hasResult?: boolean
@@ -313,6 +323,7 @@ function resolveMarkdownPath(input: string, cwd: string): string {
 
 export default function todo(pi: ExtensionAPI): void {
   let todos: Todo[] = []
+  const rail = new RailBridge(pi, ['todo_read', 'todo_write'])
   const overlay = new TodoOverlay(() => todos)
   const statusKey = 'todos'
   let cycle = createReminderCycle()
@@ -531,12 +542,26 @@ export default function todo(pi: ExtensionAPI): void {
         details,
       }
     },
+    renderShell: 'self',
     renderCall(args, theme, context) {
       const op = !args.merge && args.todos.length === 0 ? 'clear' : args.merge ? 'merge' : 'init'
       const count =
         args.todos.length === 0
           ? ''
           : `${args.todos.length} item${args.todos.length === 1 ? '' : 's'}`
+      if (rail.active) {
+        rail.report({
+          detail: `${op} ${count}`.trim(),
+          category: 'meta',
+          doneLabel: 'Todo',
+          runningLabel: 'Todo',
+          status: 'pending',
+          toolCallId: context.toolCallId,
+          iconKey: 'todo',
+          toolName: 'todo_write',
+        })
+        return emptyRailComponent
+      }
       return pendingLine(
         context.state,
         todoStatusLine({ icon: theme.fg('muted', '⏳'), meta: [`${op} ${count}`.trim()] }, theme),
@@ -545,6 +570,20 @@ export default function todo(pi: ExtensionAPI): void {
     renderResult(result, options, theme, context) {
       context.state.hasResult = true
       const details = decodeTodoWriteDetails(result.details)
+      if (rail.active) {
+        const status: RailStatus = context.isError ? 'error' : 'ok'
+        rail.report({
+          detail: railTodoDetail(details),
+          category: 'meta',
+          doneLabel: 'Todo',
+          runningLabel: 'Todo',
+          status,
+          toolCallId: context.toolCallId,
+          iconKey: 'todo',
+          toolName: 'todo_write',
+        })
+        return emptyRailComponent
+      }
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Unknown error'
@@ -579,7 +618,21 @@ export default function todo(pi: ExtensionAPI): void {
         details,
       }
     },
+    renderShell: 'self',
     renderCall(args, theme, context) {
+      if (rail.active) {
+        rail.report({
+          detail: `view${readFilterSuffix(args)}`,
+          category: 'meta',
+          doneLabel: 'Todo',
+          runningLabel: 'Todo',
+          status: 'pending',
+          toolCallId: context.toolCallId,
+          iconKey: 'todo',
+          toolName: 'todo_read',
+        })
+        return emptyRailComponent
+      }
       return pendingLine(
         context.state,
         todoStatusLine(
@@ -591,6 +644,22 @@ export default function todo(pi: ExtensionAPI): void {
     renderResult(result, options, theme, context) {
       context.state.hasResult = true
       const details = decodeTodoReadDetails(result.details)
+      if (rail.active) {
+        rail.report({
+          detail:
+            details === null
+              ? 'view'
+              : `${details.todos.length} task${details.todos.length === 1 ? '' : 's'}`,
+          category: 'meta',
+          doneLabel: 'Todo',
+          runningLabel: 'Todo',
+          status: context.isError ? 'error' : 'ok',
+          toolCallId: context.toolCallId,
+          iconKey: 'todo',
+          toolName: 'todo_read',
+        })
+        return emptyRailComponent
+      }
       if (details === null) {
         const text = result.content.find((item) => item.type === 'text')
         const message = text?.type === 'text' ? text.text : 'Unknown error'
