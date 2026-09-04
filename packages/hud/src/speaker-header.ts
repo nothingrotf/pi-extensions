@@ -9,12 +9,14 @@ import {
   empryoBrandAlt,
   empryoBrandDim,
   empryoTextFaint,
+  empryoTextMuted,
   empryoTextPrimary,
   userAnsi,
 } from './colors.ts'
 import { pulseFrame } from './pulse.ts'
 import { shimmerTextAtTick } from './shimmer.ts'
-import { frameTranscriptLine } from './transcript-geometry.ts'
+import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
+import type { WorkingFrame } from './working.ts'
 
 export type SpeakerHeaderData = {
   assistant: boolean
@@ -28,6 +30,7 @@ export type SpeakerHeaderFrame = {
   motion: boolean
   tick: number
   timestamp: number
+  waiting?: WorkingFrame
 }
 
 export type SpeakerHeaderSource = (timestamp: number) => SpeakerHeaderFrame
@@ -38,6 +41,7 @@ const brandAnsi = assistantAnsi()
 const brandAltAnsi = ansiForeground(empryoBrandAlt)
 const brandDimAnsi = ansiForeground(empryoBrandDim)
 const textFaintAnsi = ansiForeground(empryoTextFaint)
+const textMutedAnsi = ansiForeground(empryoTextMuted)
 const textPrimaryAnsi = ansiForeground(empryoTextPrimary)
 
 export function formatSpeakerClock(timestamp: number): string {
@@ -90,6 +94,12 @@ export function speakerHeaderLine(
   return `${glyph}${name}${textFaintAnsi} · ${formatSpeakerClock(frame.timestamp)}${ansiReset}`
 }
 
+export function speakerWaitingLine(frame: WorkingFrame): string {
+  const elapsed =
+    frame.elapsed === undefined ? '' : `${textFaintAnsi} · ${frame.elapsed}${ansiReset}`
+  return `${brandDimAnsi}${frame.spinner}${ansiReset}${textMutedAnsi} ${frame.message}${ansiReset}${elapsed}`
+}
+
 export class SpeakerHeaderComponent implements Component {
   private readonly initialTick: number
 
@@ -106,12 +116,13 @@ export class SpeakerHeaderComponent implements Component {
 
   render(width: number): string[] {
     if (!this.visible()) return []
-    const line = speakerHeaderLine(
-      this.data,
-      this.theme,
-      this.source?.(this.data.timestamp),
-      this.initialTick,
-    )
-    return [frameTranscriptLine(line, width)]
+    const frame = this.source?.(this.data.timestamp)
+    const line = speakerHeaderLine(this.data, this.theme, frame, this.initialTick)
+    if (frame?.waiting === undefined) return [frameTranscriptLine(line, width)]
+    return [
+      frameTranscriptLine(line, width),
+      frameTranscriptLine(speakerWaitingLine(frame.waiting), width, speakerBodyIndent),
+      frameTranscriptLine('', width),
+    ]
   }
 }

@@ -1,3 +1,4 @@
+import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
 import { prettyModel } from './format.ts'
@@ -7,6 +8,7 @@ import {
   type SpeakerHeaderSource,
 } from './speaker-header.ts'
 import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
+import { formatWorkingFrame, type WorkingFrame, WorkingStatus } from './working.ts'
 
 export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
@@ -131,7 +133,10 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
   }
 }
 
-export type LiveUsage = { row: () => string | undefined }
+export type LiveUsage = {
+  row: () => string | undefined
+  waiting: () => WorkingFrame | undefined
+}
 
 export type LiveHeader = {
   onClose: () => void
@@ -145,14 +150,24 @@ export type TimestampControls = {
   toggle: () => boolean
 }
 
+export function assistantHasResponse(message: AssistantMessage): boolean {
+  return message.content.some((block) => {
+    if (block.type === 'toolCall') return true
+    if (block.type === 'text') return block.text.trim().length > 0
+    return block.thinking.trim().length > 0
+  })
+}
+
 export function registerTimestamps(
   pi: ExtensionAPI,
   live?: LiveUsage,
   header?: LiveHeader,
+  working = new WorkingStatus(),
 ): TimestampControls {
   let enabled = true
   let totals = emptyRunTotals()
   let assistantHeaderPending = true
+  let assistantResponded = false
   let assistantCandidate: RoleEntryData | undefined
 
   const openAssistant = (data: RoleEntryData) => {
@@ -164,8 +179,16 @@ export function registerTimestamps(
   }
 
   if (live !== undefined) {
+    const waiting = (): WorkingFrame | undefined => {
+      if (!enabled || totals.startedAt === undefined || assistantResponded) return undefined
+      return working.frame(totals.startedAt)
+    }
+    live.waiting = waiting
     live.row = () => {
       if (!enabled || totals.startedAt === undefined) return undefined
+      const pending = waiting()
+      if (pending !== undefined) return formatWorkingFrame(pending)
+      if (working.overridden()) return formatWorkingFrame(working.frame(totals.startedAt))
       return formatUsageRow(toUsageEntry(totals, Date.now()))
     }
   }
@@ -173,6 +196,7 @@ export function registerTimestamps(
   pi.on('agent_start', () => {
     totals = emptyRunTotals()
     assistantHeaderPending = true
+    assistantResponded = false
     assistantCandidate = undefined
   })
 
@@ -200,6 +224,7 @@ export function registerTimestamps(
       return
     }
     if (role !== 'assistant') return
+    if (assistantHasResponse(event.message)) assistantResponded = true
     if (assistantHeaderPending) {
       openAssistant(
         assistantCandidate ?? {
@@ -212,11 +237,18 @@ export function registerTimestamps(
     header?.onMessage(event.message.timestamp)
   })
 
+  pi.on('message_update', (event) => {
+    if (event.message.role === 'assistant' && assistantHasResponse(event.message)) {
+      assistantResponded = true
+    }
+  })
+
   pi.on('message_end', (event) => {
     if (event.message.role === 'user' && assistantCandidate !== undefined) {
       openAssistant(assistantCandidate)
     }
     if (event.message.role === 'assistant') {
+      if (assistantHasResponse(event.message)) assistantResponded = true
       totals = addMessageUsage(totals, event.message)
     }
   })
@@ -225,6 +257,7 @@ export function registerTimestamps(
     header?.onClose()
     const run = totals
     totals = emptyRunTotals()
+    assistantResponded = false
     assistantCandidate = undefined
     const entry = toUsageEntry(run, Date.now())
     if (enabled && hasUsage(entry)) {

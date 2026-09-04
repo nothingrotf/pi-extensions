@@ -1,4 +1,3 @@
-import { stripTerminalSequences } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
@@ -250,33 +249,16 @@ describe('HUD lifecycle', () => {
     expect(instance.wasCleared()).toBe(true)
   })
 
-  test('removes the working widget when a TUI session restarts', async () => {
+  test('does not register an above-editor working widget', async () => {
     const instance = harness()
     await instance.emit('session_start')
     instance.mount()
+    await instance.emit('agent_start')
     await instance.emit('turn_start')
-    expect(instance.widgetKeys()).toEqual(['hud-working'])
-    await instance.emit('session_start')
-    expect(instance.widgetKeys()).toEqual([])
-    instance.mount()
-    await instance.emit('session_shutdown')
-  })
-
-  test('owns the working loader widget from turn start to agent end', async () => {
-    const instance = harness()
-    await instance.emit('session_start')
-    expect(instance.widgetKeys()).toEqual([])
-    await instance.emit('turn_start')
-    expect(instance.widgetKeys()).toEqual(['hud-working'])
-    const widget = instance.widget('hud-working')
-    expect(stripTerminalSequences(widget.render(80)[0])).toContain('waiting for the model')
     instance.emitEvent('hud:working-message', 'Waiting on 2 jobs')
-    expect(stripTerminalSequences(widget.render(80)[0])).toContain('Waiting on 2 jobs')
     instance.emitEvent('hud:working-message', null)
-    expect(stripTerminalSequences(widget.render(80)[0])).toContain('waiting for the model')
-    expect(stripTerminalSequences(widget.render(80)[0])).toMatch(/ · \d+s$/)
+    expect(instance.widgetKeys()).toEqual([])
     await instance.emit('agent_end')
-    expect(widget.render(80)).toEqual([])
     await instance.emit('session_shutdown')
     expect(instance.widgetKeys()).toEqual([])
   })

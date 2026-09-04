@@ -47,14 +47,15 @@ import {
   type SoundSettings,
   stopSoundPlayback,
 } from './sound.ts'
-import { speakerMotionEnabled } from './speaker-header.ts'
+import { speakerMotionEnabled, type SpeakerHeaderFrame } from './speaker-header.ts'
 import { installSpeakerSpacingFix, type SpeakerSpacingFix } from './speaker-spacing.ts'
+import { installNativeStatusFix, type NativeStatusFix } from './status-indicator.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
 import { fetchUsageForProvider } from './usage.ts'
-import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
+import { decodeWorkingMessage, WorkingStatus, workingMessageChannel } from './working.ts'
 
 const gitRefreshMs = 30_000
 const usageRefreshMs = 5 * 60_000
@@ -75,7 +76,8 @@ function mergeHiddenTextBlocks(target: HiddenTextBlocks, source: HiddenTextBlock
 
 export default function hud(pi: ExtensionAPI): void {
   const animationClock = new AnimationClock()
-  const liveUsage: LiveUsage = { row: () => undefined }
+  const working = new WorkingStatus()
+  const liveUsage: LiveUsage = { row: () => undefined, waiting: () => undefined }
   let agentWorking = false
   let liveHeaderAt: number | undefined
   let liveHeaderMessageAt: number | undefined
@@ -96,7 +98,7 @@ export default function hud(pi: ExtensionAPI): void {
     },
     source: (timestamp) => {
       const current = timestamp === liveHeaderAt
-      return {
+      const frame: SpeakerHeaderFrame = {
         active: current && agentWorking && !liveHeaderClosed,
         motion: speakerMotionEnabled(),
         tick: animationClock.tick(),
@@ -104,9 +106,12 @@ export default function hud(pi: ExtensionAPI): void {
           ? (liveHeaderMessageAt ?? (agentWorking ? Date.now() : timestamp))
           : timestamp,
       }
+      const waiting = current && agentWorking && !liveHeaderClosed ? liveUsage.waiting() : undefined
+      if (waiting !== undefined) frame.waiting = waiting
+      return frame
     },
   }
-  const timestamps = registerTimestamps(pi, liveUsage, liveHeader)
+  const timestamps = registerTimestamps(pi, liveUsage, liveHeader, working)
   const timestampsEnabled = timestamps.enabled
 
   const state: HudState = {
@@ -134,7 +139,6 @@ export default function hud(pi: ExtensionAPI): void {
   let unsubscribeAnimation: (() => void) | undefined
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
-  const dock = new WorkingDock(() => animationClock.tick())
   let rail = new RailStore()
   let railTurn = 0
   let railTurnPending = false
@@ -193,6 +197,7 @@ export default function hud(pi: ExtensionAPI): void {
   let spacerFix: ThinkingSpacerFix | undefined
   let speakerSpacingFix: SpeakerSpacingFix | undefined
   let transcriptLayoutFix: TranscriptLayoutFix | undefined
+  let nativeStatusFix: NativeStatusFix | undefined
   let dimEditorBorder: (() => void) | undefined
 
   const applyThinkingLabel = (ctx: ExtensionContext) => {
@@ -229,7 +234,9 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.events.on(workingMessageChannel, (data) => {
     const message = decodeWorkingMessage(data)
-    if (message !== undefined) dock.setMessage(message ?? undefined)
+    if (message === undefined) return
+    working.setMessage(message ?? undefined)
+    requestRender?.()
   })
 
   const render = () => requestRender?.()
@@ -361,7 +368,6 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('session_start', (_event, ctx) => {
     stop()
-    dock.dispose(ctx.hasUI && ctx.mode === 'tui' ? ctx.ui : undefined)
     active = false
     if (!ctx.hasUI || ctx.mode !== 'tui') {
       footerOwned = false
@@ -373,6 +379,8 @@ export default function hud(pi: ExtensionAPI): void {
       speakerSpacingFix = undefined
       transcriptLayoutFix?.dispose()
       transcriptLayoutFix = undefined
+      nativeStatusFix?.dispose()
+      nativeStatusFix = undefined
     }
     restoreRails(ctx)
     applyThinkingLabel(ctx)
@@ -417,6 +425,7 @@ export default function hud(pi: ExtensionAPI): void {
         (toolCallId) => railEnabled && railReplacementToolCallIds.has(toolCallId),
       )
       transcriptLayoutFix = installTranscriptLayoutFix(tui, railOpeningAt)
+      nativeStatusFix = installNativeStatusFix(tui)
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
       dimEditorBorder()
@@ -434,6 +443,8 @@ export default function hud(pi: ExtensionAPI): void {
           speakerSpacingFix = undefined
           transcriptLayoutFix?.dispose()
           transcriptLayoutFix = undefined
+          nativeStatusFix?.dispose()
+          nativeStatusFix = undefined
           unsubscribe()
           active = false
           stop()
@@ -469,7 +480,6 @@ export default function hud(pi: ExtensionAPI): void {
     assistantUsageLines.clear()
     dimEditorBorder?.()
     requestRender?.()
-    dock.reset()
     if (!railTurnPending) {
       mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)
     }
@@ -522,7 +532,6 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('turn_start', (_event, ctx) => {
     if (!active || !ctx.hasUI || ctx.mode !== 'tui') return
     unsubscribeAnimation ??= animationClock.subscribe(() => requestRender?.())
-    dock.start(ctx.ui)
   })
 
   pi.events.on(railToolsChannel, (data) => {
@@ -717,7 +726,6 @@ export default function hud(pi: ExtensionAPI): void {
     railPendingNarration = false
     speakerSpacingFix?.markDirty()
     requestRender?.()
-    dock.stop()
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
@@ -890,7 +898,6 @@ export default function hud(pi: ExtensionAPI): void {
     active = false
     generation += 1
     stop()
-    dock.dispose(ctx.hasUI && ctx.mode === 'tui' ? ctx.ui : undefined)
     if (ctx.hasUI && ctx.mode === 'tui' && footerOwned) {
       ctx.ui.setFooter(undefined)
     }

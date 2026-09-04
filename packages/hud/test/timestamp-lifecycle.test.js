@@ -2,8 +2,9 @@ import { visibleWidth } from '@earendil-works/pi-tui'
 import { afterEach, describe, expect, test, vi } from 'vite-plus/test'
 
 import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/timestamp.ts'
+import { WorkingStatus } from '../src/working.ts'
 
-function harness(header, live) {
+function harness(header, live, working) {
   const handlers = new Map()
   const entries = []
   const renderers = new Map()
@@ -19,7 +20,7 @@ function harness(header, live) {
     },
   }
   const ctx = { ui: {} }
-  const controls = registerTimestamps(api, live, header)
+  const controls = registerTimestamps(api, live, header, working)
   return {
     turnStart(timestamp = Date.now()) {
       handlers.get('turn_start')({ timestamp }, ctx)
@@ -29,6 +30,9 @@ function harness(header, live) {
     },
     start(message) {
       handlers.get('message_start')({ message }, ctx)
+    },
+    update(message, assistantMessageEvent) {
+      handlers.get('message_update')({ assistantMessageEvent, message }, ctx)
     },
     agentEnd() {
       handlers.get('agent_end')({}, ctx)
@@ -51,6 +55,9 @@ function harness(header, live) {
 }
 
 const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
+const assistant = (timestamp, content = []) => ({ content, role: 'assistant', timestamp, usage })
+
+const liveUsage = () => ({ row: () => undefined, waiting: () => undefined })
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -89,10 +96,10 @@ describe('transcript lifecycle', () => {
     expect(opened).toEqual([150])
     expect(messages).toEqual([])
 
-    instance.start({ role: 'assistant', timestamp: 200 })
+    instance.start(assistant(200))
     expect(messages).toEqual([200])
     instance.turnStart(300)
-    instance.start({ role: 'assistant', timestamp: 400 })
+    instance.start(assistant(400))
     expect(opened).toEqual([150])
     expect(messages).toEqual([200, 400])
     instance.agentEnd()
@@ -108,28 +115,71 @@ describe('transcript lifecycle', () => {
     })
   })
 
-  test('shows a zeroed live usage row before token metrics arrive', () => {
-    const live = { row: () => undefined }
+  test('replaces zeroed usage with waiting before the first response', () => {
+    let now = 1_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const live = liveUsage()
     const instance = harness(undefined, live)
     instance.agentStart()
-    instance.turnStart(Date.now() + 1_000)
-    expect(live.row()).toMatch(/▪ 0s · \$0\.000 · 0 in · 0 out · ⛁ 0% cached/u)
+    instance.turnStart(99_000)
+    expect(live.row()).toMatch(/^⠹ waiting for the model$/u)
+    expect(live.waiting()?.message).toBe('waiting for the model')
+
+    now = 5_000
+    expect(live.row()).toContain(' · 4s')
+    instance.update(assistant(200, [{ text: 'Hello', type: 'text' }]), {
+      contentIndex: 0,
+      delta: 'Hello',
+      type: 'text_delta',
+    })
+    expect(live.waiting()).toBeUndefined()
+    expect(live.row()).toMatch(/▪ 4s · \$0\.000 · 0 in · 0 out · ⛁ 0% cached/u)
+  })
+
+  test('keeps waiting through empty stream events', () => {
+    const live = liveUsage()
+    const instance = harness(undefined, live)
+    instance.agentStart()
+    instance.turnStart()
+    instance.start(assistant(200))
+    const empty = assistant(200, [{ text: '', type: 'text' }])
+    instance.update(empty, {
+      contentIndex: 0,
+      type: 'text_start',
+    })
+    instance.end(empty)
+    instance.turnStart()
+    expect(live.row()).toContain('waiting for the model')
   })
 
   test('measures live and settled usage from the first turn receipt', () => {
     let now = 100
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const live = { row: () => undefined }
+    const live = liveUsage()
     const instance = harness(undefined, live)
     instance.agentStart()
     now = 1_000
     instance.turnStart(99_000)
+    instance.start(assistant(200, [{ text: 'Hello', type: 'text' }]))
     now = 2_400
     expect(live.row()).toContain('1s')
-    instance.start({ role: 'assistant', timestamp: 200 })
-    instance.end({ role: 'assistant', timestamp: 200, usage })
+    instance.end(assistant(200, [{ text: 'Hello', type: 'text' }]))
     instance.agentEnd()
     expect(instance.entries.at(-1).data.durationMs).toBe(1_400)
+  })
+
+  test('places an extension wait message in the live usage slot', () => {
+    const working = new WorkingStatus()
+    const live = liveUsage()
+    const instance = harness(undefined, live, working)
+    instance.agentStart()
+    instance.turnStart()
+    instance.start(assistant(200, [{ text: 'Delegating', type: 'text' }]))
+    working.setMessage('Waiting on 2 jobs')
+    expect(live.waiting()).toBeUndefined()
+    expect(live.row()).toContain('Waiting on 2 jobs')
+    working.setMessage(undefined)
+    expect(live.row()).toContain('▪')
   })
 
   test('records one usage row per agent run', () => {
@@ -138,13 +188,13 @@ describe('transcript lifecycle', () => {
     instance.turnStart(150)
     instance.start({ role: 'user', timestamp: 100 })
     instance.end({ role: 'user', timestamp: 100 })
-    instance.start({ role: 'assistant', timestamp: 200 })
-    instance.end({ role: 'assistant', timestamp: 200, usage })
+    instance.start(assistant(200))
+    instance.end(assistant(200))
     instance.start({ role: 'toolResult', timestamp: 300 })
     instance.end({ role: 'toolResult', timestamp: 300 })
     instance.turnStart()
-    instance.start({ role: 'assistant', timestamp: 400 })
-    instance.end({ role: 'assistant', timestamp: 400, usage })
+    instance.start(assistant(400))
+    instance.end(assistant(400))
     expect(instance.entries.map((entry) => entry.customType)).toEqual([
       roleEntryType,
       roleEntryType,
@@ -185,8 +235,8 @@ describe('transcript lifecycle', () => {
     instance.turnStart()
     instance.start({ role: 'user', timestamp: 1 })
     instance.end({ role: 'user', timestamp: 1 })
-    instance.start({ role: 'assistant', timestamp: 1 })
-    instance.end({ role: 'assistant', timestamp: 1, usage })
+    instance.start(assistant(1))
+    instance.end(assistant(1))
     instance.agentEnd()
     expect(instance.entries).toEqual([])
     expect(instance.render(data).render(80)).toEqual([])
@@ -195,8 +245,8 @@ describe('transcript lifecycle', () => {
     expect(persistedRole.render(80).length).toBeGreaterThan(0)
     instance.agentStart()
     instance.turnStart()
-    instance.start({ role: 'assistant', timestamp: 1 })
-    instance.end({ role: 'assistant', timestamp: 1, usage })
+    instance.start(assistant(1))
+    instance.end(assistant(1))
     instance.agentEnd()
     expect(instance.entries).toHaveLength(2)
     expect(instance.entries.map((entry) => entry.customType)).toEqual([

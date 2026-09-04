@@ -1,7 +1,7 @@
 # @nothingrotf/hud
 
 A compact one-line footer for [Pi](https://github.com/earendil-works/pi).
-It replaces the default footer and adds speaker headers, an action rail, a loader, usage rows, and completion sounds.
+It replaces the default footer and adds speaker headers, an action rail, a pre-response status, usage rows, and completion sounds.
 
 The left side shows:
 
@@ -43,7 +43,8 @@ The HUD names the active model instead of the literal `Empryo` product name. The
 
 The row totals every assistant message in the run. It shows the duration, cost, token counts, cache share, and output rate.
 
-An active run shows a zero-value row before token metrics arrive.
+Before the first response, an active run shows `waiting for the model` instead of zero-value usage.
+After the response starts, the run shows a zero-value row until token metrics arrive.
 A completed run with no tokens shows no row. Each row starts at the transcript body column.
 
 The throughput divides total output tokens by the time from the first turn through the run end.
@@ -107,13 +108,14 @@ Use `/hud rail off` to turn the rail off.
 Read `docs/rail-spec.md` for the full contract, including width rules and
 grouping semantics.
 
-## Working loader
+## Working status
 
-The extension hides the built-in working loader and renders its own loader as the last widget above the editor. This keeps the loader below the `TODO` and `Subagents` widgets, in the same order as the oh-my-pi dock.
+The extension hides the built-in working row and native compaction rows above the editor.
 
-The loader shows a braille spinner and shimmers the message with the elapsed time of the current run, for example ` ⠋ waiting for the model · 9s`.
+Before the first response, the assistant transcript shows a braille spinner in the usage-row position.
+The elapsed time appears after three seconds, for example `⠋ waiting for the model · 9s`.
 
-A live usage row reports the turn as it runs:
+A live usage row replaces the waiting row after the response starts:
 
 ```
  ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
@@ -126,11 +128,11 @@ The row always follows the newest visible interaction content. It shimmers while
 The shimmer is a narrow highlight that sweeps back and forth with a continuous
 color blend. Read `docs/rail-spec.md` for the exact wave.
 
-Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `waiting for the model`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
+Other extensions set the status text through the `hud:working-message` event.
+Emit a string to replace the text. Emit `null` to restore the default behavior.
+The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on child agents.
 
-Retry, compaction, and branch summary indicators still use the built-in status row.
-
-Every widget in the dock ends with one blank line.
+Request retry and branch summary indicators still use the built-in status row.
 
 ## Sounds
 

@@ -1,12 +1,7 @@
-import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
-import { truncateToWidth, type TUI } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { shimmerTextAtTick, shimmerTickMs } from './shimmer.ts'
-
 export const workingMessageChannel = 'hud:working-message'
-const widgetKey = 'hud-working'
 
 const WorkingMessageSchema = Type.Union([Type.String({ minLength: 1 }), Type.Null()])
 
@@ -15,9 +10,15 @@ export function decodeWorkingMessage<Input>(data: Input): string | null | undefi
 }
 
 export const defaultWorkingMessage = 'waiting for the model'
-const FRAME_MS = 33
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const SPINNER_ADVANCE_MS = 80
+const ELAPSED_DELAY_MS = 3_000
+
+export type WorkingFrame = {
+  elapsed: string | undefined
+  message: string
+  spinner: string
+}
 
 export function spinnerFrame(now: number): string {
   return SPINNER_FRAMES[Math.floor(now / SPINNER_ADVANCE_MS) % SPINNER_FRAMES.length] ?? '⠋'
@@ -33,93 +34,28 @@ export function formatElapsed(milliseconds: number): string {
   return minutes % 60 > 0 ? `${hours}h${minutes % 60}m` : `${hours}h`
 }
 
-export class WorkingDock {
-  private message: string | undefined
-  private active = false
-  private registered = false
-  private initialTick: number | undefined
-  private owner: ExtensionUIContext | undefined
-  private tui: TUI | undefined
-  private timer: ReturnType<typeof setInterval> | undefined
-  private startedAt = Date.now()
+export function formatWorkingFrame(frame: WorkingFrame): string {
+  const elapsed = frame.elapsed === undefined ? '' : ` · ${frame.elapsed}`
+  return `${frame.spinner} ${frame.message}${elapsed}`
+}
 
-  constructor(private readonly tick: () => number = () => Math.floor(Date.now() / shimmerTickMs)) {}
+export class WorkingStatus {
+  private message: string | undefined
 
   setMessage(message: string | undefined): void {
     this.message = message
-    this.tui?.requestRender()
   }
 
-  reset(): void {
-    this.startedAt = Date.now()
+  overridden(): boolean {
+    return this.message !== undefined
   }
 
-  start(ui: ExtensionUIContext): void {
-    if (!this.active) this.initialTick = this.tick()
-    this.active = true
-    if (!this.registered) {
-      this.registered = true
-      this.owner = ui
-      ui.setWidget(widgetKey, (tui, theme) => this.mount(tui, theme), {
-        placement: 'aboveEditor',
-      })
+  frame(startedAt: number, now = Date.now()): WorkingFrame {
+    const duration = Math.max(0, now - startedAt)
+    return {
+      elapsed: duration < ELAPSED_DELAY_MS ? undefined : formatElapsed(duration),
+      message: this.message ?? defaultWorkingMessage,
+      spinner: spinnerFrame(now),
     }
-    this.startTicking()
-    this.tui?.requestRender()
-  }
-
-  stop(): void {
-    this.active = false
-    this.initialTick = undefined
-    this.stopTicking()
-    this.tui?.requestRender()
-  }
-
-  dispose(ui: ExtensionUIContext | undefined): void {
-    this.stop()
-    if (this.registered) (this.owner ?? ui)?.setWidget(widgetKey, undefined)
-    this.owner = undefined
-    this.registered = false
-    this.tui = undefined
-  }
-
-  private text(): string {
-    return this.message ?? defaultWorkingMessage
-  }
-
-  private startTicking(): void {
-    if (this.timer !== undefined || this.tui === undefined) return
-    this.timer = setInterval(() => this.tui?.requestRender(), FRAME_MS)
-  }
-
-  private stopTicking(): void {
-    if (this.timer !== undefined) clearInterval(this.timer)
-    this.timer = undefined
-  }
-
-  private mount(tui: TUI, theme: Theme) {
-    this.tui = tui
-    if (this.active) this.startTicking()
-    const widget = {
-      dispose: () => this.stopTicking(),
-      invalidate: () => undefined,
-      render: (width: number): string[] => {
-        if (!this.active) return []
-        const now = Date.now()
-        const text = `${this.text()} · ${formatElapsed(now - this.startedAt)}`
-        const currentTick = this.tick()
-        const shimmer =
-          currentTick === this.initialTick
-            ? theme.fg('dim', text)
-            : shimmerTextAtTick(
-                text,
-                { baseAnsi: theme.getFgAnsi('dim'), tintAnsi: theme.getFgAnsi('accent') },
-                currentTick,
-              )
-        const line = ` ${theme.fg('accent', spinnerFrame(now))} ${shimmer}`
-        return [truncateToWidth(line, width, '…'), '']
-      },
-    }
-    return widget
   }
 }

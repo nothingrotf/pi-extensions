@@ -7,6 +7,7 @@ import {
   toUsageEntry,
   type RunTotals,
 } from '../src/timestamp.ts'
+import { defaultWorkingMessage, formatWorkingFrame, WorkingStatus } from '../src/working.ts'
 
 const escape = String.fromCharCode(27)
 const ansiPattern = new RegExp(`${escape}\\[[0-9;]*m`, 'gu')
@@ -15,6 +16,33 @@ const plain = (line: string): string => line.replace(ansiPattern, '')
 function totalsWith(overrides: Partial<RunTotals>): RunTotals {
   return { ...emptyRunTotals(), ...overrides }
 }
+
+describe('working row', () => {
+  test('uses the model wait message before the elapsed delay', () => {
+    const status = new WorkingStatus()
+    const frame = status.frame(1_000, 2_999)
+    expect(frame.message).toBe(defaultWorkingMessage)
+    expect(frame.elapsed).toBeUndefined()
+    expect(formatWorkingFrame(frame)).toMatch(/^⠧ waiting for the model$/u)
+  })
+
+  test('adds elapsed time after three seconds', () => {
+    const status = new WorkingStatus()
+    const frame = status.frame(1_000, 4_000)
+    expect(frame.elapsed).toBe('3s')
+    expect(formatWorkingFrame(frame)).toMatch(/^⠋ waiting for the model · 3s$/u)
+  })
+
+  test('accepts and clears an extension message', () => {
+    const status = new WorkingStatus()
+    status.setMessage('Waiting on 2 jobs')
+    expect(status.overridden()).toBe(true)
+    expect(formatWorkingFrame(status.frame(0, 3_000))).toContain('Waiting on 2 jobs')
+    status.setMessage(undefined)
+    expect(status.overridden()).toBe(false)
+    expect(status.frame(0, 3_000).message).toBe(defaultWorkingMessage)
+  })
+})
 
 describe('live usage row', () => {
   test('stays hidden before any tokens arrive', () => {

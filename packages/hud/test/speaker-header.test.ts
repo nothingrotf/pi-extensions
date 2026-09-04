@@ -7,6 +7,7 @@ import {
   empryoBrandAlt,
   empryoBrandDim,
   empryoTextFaint,
+  empryoTextMuted,
   empryoTextPrimary,
 } from '../src/colors.ts'
 import {
@@ -14,6 +15,7 @@ import {
   SpeakerHeaderComponent,
   speakerHeaderLine,
   speakerMotionEnabled,
+  speakerWaitingLine,
   type SpeakerHeaderData,
   type SpeakerHeaderFrame,
 } from '../src/speaker-header.ts'
@@ -110,6 +112,18 @@ describe('speaker header', () => {
     expect(line).toContain(`${ansiForeground(empryoBrand)}●`)
     expect(line.split('\x1b[38;2;')).toHaveLength(4)
   })
+
+  test('styles the waiting spinner as transcript metadata', () => {
+    const line = speakerWaitingLine({
+      elapsed: '30s',
+      message: 'waiting for the model',
+      spinner: '⠏',
+    })
+    expect(plain(line)).toBe('⠏ waiting for the model · 30s')
+    expect(line).toContain(`${ansiForeground(empryoBrandDim)}⠏`)
+    expect(line).toContain(`${ansiForeground(empryoTextMuted)} waiting for the model`)
+    expect(line).toContain(`${ansiForeground(empryoTextFaint)} · 30s`)
+  })
 })
 
 describe('SpeakerHeaderComponent', () => {
@@ -134,6 +148,21 @@ describe('SpeakerHeaderComponent', () => {
     const line = plain(component.render(40)[0] ?? '')
     expect(line.startsWith('● Empryo')).toBe(true)
     expect(visibleWidth(line)).toBe(40)
+  })
+
+  test('places waiting in the body slot until the response starts', () => {
+    let current = frame({
+      waiting: { elapsed: '30s', message: 'waiting for the model', spinner: '⠏' },
+    })
+    const component = new SpeakerHeaderComponent(assistant, theme, () => current)
+    const waiting = component.render(40)
+    expect(waiting).toHaveLength(3)
+    expect(plain(waiting[1] ?? '').startsWith('   ⠏ waiting for the model · 30s')).toBe(true)
+    expect(visibleWidth(waiting[1] ?? '')).toBe(40)
+    expect(plain(waiting[2] ?? '').trim()).toBe('')
+
+    current = frame({ tick: 1 })
+    expect(component.render(40)).toHaveLength(1)
   })
 
   test('can hide an existing header without remounting', () => {
