@@ -212,6 +212,19 @@ describe('transcript lifecycle', () => {
     expect(instance.entries).toHaveLength(3)
   })
 
+  test('renders persisted usage from before cost tracking', () => {
+    const instance = harness()
+    const persistedUsage = instance.render({
+      cacheRead: 0,
+      durationMs: 1_000,
+      input: 12,
+      output: 3,
+      timestamp: Date.now(),
+    })
+    expect(persistedUsage).toBeDefined()
+    expect(persistedUsage.render(80)[0]).toContain('▪ 1s · 12 in · 3 out · ⛁ 0% cached')
+  })
+
   test('toggles transcript recording and rendering', () => {
     const instance = harness()
     const data = {

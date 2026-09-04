@@ -20,6 +20,7 @@ import { Value } from 'typebox/value'
 import { argumentGlyphs } from './arg-glyphs.ts'
 import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
+import { askCallPatch, askResultPatch, normalizeAskPatch } from './rail-ask.ts'
 import { defaultRailIcon, defaultRailLabel, type RailActionReport } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
 import { decodeRailReplacementEntry, railReplacementEntryType } from './rail-replacement-entry.ts'
@@ -115,6 +116,7 @@ export function railDetail(call: RailCallInput, cwd: string): string {
 }
 
 export function railPatchForCall(call: RailCallInput, cwd: string): RailPatch {
+  if (call.toolName === 'AskQuestion') return askCallPatch(call.arguments)
   const meta = builtInMeta.get(call.toolName)
   if (meta !== undefined) {
     return {
@@ -152,7 +154,12 @@ function applyStateReport(
   preserveSettlement = false,
   preserveResultPayload = false,
 ): void {
-  const patch: RailPatch = { ...report, measureDuration: false, resetDerived: true }
+  const patch: RailPatch = {
+    ...report,
+    ...normalizeAskPatch(report),
+    measureDuration: false,
+    resetDerived: true,
+  }
   if (report.argGlyphs?.length === 0) delete patch.argGlyphs
   if (preserveSettlement) {
     patch.measureDuration = true
@@ -284,6 +291,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       const began = startedAt.get(message.toolCallId)
       const patch: RailPatch = {
         output: resultText(message.content),
+        ...askResultPatch(message.toolName, message.details),
         status: message.isError ? 'error' : 'ok',
       }
       if (began !== undefined && message.timestamp >= began) {

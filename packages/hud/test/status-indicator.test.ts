@@ -1,7 +1,7 @@
 import { Container, type Component } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
-import { sweepNativeStatusIndicators } from '../src/status-indicator.ts'
+import { installNativeStatusFix, sweepNativeStatusIndicators } from '../src/status-indicator.ts'
 
 class NativeStatus implements Component {
   constructor(
@@ -23,7 +23,65 @@ function tree() {
   return { root, status }
 }
 
+class TuiRoot extends Container {
+  renders = 0
+
+  requestRender(): void {
+    this.renders += 1
+  }
+}
+
+class TuiTree extends TuiRoot {
+  readonly statusContainer = new Container()
+
+  constructor() {
+    super()
+    this.addChild(this.statusContainer)
+  }
+}
+
 describe('native status suppression', () => {
+  test('finds a new dock status without scanning the transcript on each frame', () => {
+    const tui = new TuiRoot()
+    const document = new Container()
+    const transcript = new Container()
+    const status = new Container()
+    document.addChild(transcript)
+    tui.addChild(document)
+    tui.addChild(status)
+    const children = transcript.children
+    let reads = 0
+    Object.defineProperty(transcript, 'children', {
+      get: () => {
+        reads += 1
+        return children
+      },
+    })
+    installNativeStatusFix(tui)
+    for (let index = 0; index < 100; index += 1) tui.requestRender()
+    expect(reads).toBe(0)
+
+    status.addChild(new NativeStatus('compaction', 'Compacting context...'))
+    tui.requestRender()
+    expect(status.render(80)).toEqual([])
+    expect(reads).toBe(0)
+  })
+
+  test('patches the stable status container before compaction starts', () => {
+    const tui = new TuiTree()
+    tui.statusContainer.addChild({ invalidate: () => undefined, render: () => ['', ''] })
+    installNativeStatusFix(tui)
+    tui.clear()
+
+    const compaction = new NativeStatus('compaction', 'Auto-compacting...')
+    tui.statusContainer.clear()
+    tui.statusContainer.addChild(compaction)
+    for (let index = 0; index < 100; index += 1) tui.requestRender()
+
+    expect(tui.renders).toBe(101)
+    expect(tui.statusContainer.render(80)).toEqual([])
+  })
+
   test('removes the compaction row without removing its component', () => {
     const { root, status } = tree()
     const compaction = new NativeStatus('compaction', 'Auto-compacting...')

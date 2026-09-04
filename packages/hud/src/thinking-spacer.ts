@@ -3,6 +3,7 @@ import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { walkComponents } from './component-tree.ts'
+import { observeTranscript, type TranscriptSubscription } from './transcript-observer.ts'
 
 const patched = new WeakSet<Component>()
 const AssistantContentBlockSchema = Type.Object({ type: Type.String() })
@@ -169,42 +170,34 @@ export function installThinkingSpacerFix(
   let visibleSource = visible
   let suffixSource = suffix
   let enabled = true
-  let dirty = true
-  let retries = 0
-  const fix: InstalledThinkingFix = {
-    dispose: () => {
-      enabled = false
-      dirty = true
-      retries = 0
-      tui.requestRender()
-    },
-    markDirty: () => {
-      dirty = true
-      retries = 1
-    },
-    setSources: (nextActive, nextVisible, nextSuffix) => {
-      activeSource = nextActive
-      visibleSource = nextVisible
-      suffixSource = nextSuffix
-      enabled = true
-      dirty = true
-      retries = 0
-    },
-  }
+  let subscription: TranscriptSubscription | undefined
   const isActive = () => enabled && activeSource()
   const isVisible: AssistantVisibility = (timestamp, contentIndex) =>
     !enabled || visibleSource(timestamp, contentIndex)
   const appendSuffix: AssistantSuffix = (timestamp, width) =>
     enabled ? suffixSource(timestamp, width) : []
-  installed.set(tui, fix)
-  const original = tui.requestRender.bind(tui)
-  tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (dirty) {
+  const subscribe = () => {
+    subscription ??= observeTranscript(tui, 20, () => {
       sweepAssistantMessages(tui, isActive, isVisible, appendSuffix)
-      if (retries > 0) retries -= 1
-      else dirty = false
-    }
-    original(...args)
+    })
   }
+  const fix: InstalledThinkingFix = {
+    dispose: () => {
+      enabled = false
+      subscription?.dispose()
+      subscription = undefined
+      tui.requestRender()
+    },
+    markDirty: () => subscription?.markDirty(),
+    setSources: (nextActive, nextVisible, nextSuffix) => {
+      activeSource = nextActive
+      visibleSource = nextVisible
+      suffixSource = nextSuffix
+      enabled = true
+      subscribe()
+    },
+  }
+  installed.set(tui, fix)
+  subscribe()
   return fix
 }

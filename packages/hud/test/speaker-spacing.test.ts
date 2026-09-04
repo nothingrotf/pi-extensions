@@ -314,4 +314,63 @@ describe('speaker spacing', () => {
     expect(compact(user.render(40))).toEqual(['   prompt'])
     expect(assistant.render(40)).toEqual(framedAssistant)
   })
+
+  test('renders a long turn without reading transcript siblings again', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    for (let index = 0; index < 300; index += 1) {
+      root.addChild(new EmptyAssistantMessageFixture())
+    }
+    const assistant = new AssistantMessageFixture()
+    const rail = new RailEntryFixture()
+    root.addChild(assistant)
+    root.addChild(rail)
+    const children = root.children
+    let reads = 0
+    Object.defineProperty(root, 'children', {
+      get: () => {
+        reads += 1
+        return children
+      },
+    })
+    sweepSpeakerSpacing(root, () => true)
+    reads = 0
+
+    expect(assistant.render(40)).toEqual(framedAssistant)
+    expect(rail.render(40)).toEqual(['', 'rail'])
+    expect(reads).toBe(0)
+  })
+
+  test('updates leading gaps when an existing rail moves', () => {
+    const root = new Container()
+    const assistant = new AssistantMessageFixture()
+    const rail = new RailEntryFixture()
+    root.addChild(new RoleEntryFixture('assistant'))
+    root.addChild(assistant)
+    root.addChild(rail)
+    sweepSpeakerSpacing(root, () => true)
+    expect(assistant.render(40)).toEqual(framedAssistant)
+    expect(rail.render(40)).toEqual(['', 'rail'])
+
+    root.children.splice(1, 2, rail, assistant)
+    sweepSpeakerSpacing(root, () => true)
+    expect(assistant.render(40)).toEqual(framedAssistantWithGap)
+    expect(rail.render(40)).toEqual(['rail'])
+
+    root.children.splice(1, 2, assistant, rail)
+    sweepSpeakerSpacing(root, () => true)
+    expect(assistant.render(40)).toEqual(framedAssistant)
+    expect(rail.render(40)).toEqual(['', 'rail'])
+  })
+
+  test('resets the leading gap at the next speaker header', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    root.addChild(new RailEntryFixture())
+    root.addChild(new RoleEntryFixture('assistant'))
+    const assistant = new AssistantMessageFixture()
+    root.addChild(assistant)
+    sweepSpeakerSpacing(root, () => true)
+    expect(assistant.render(40)).toEqual(framedAssistant)
+  })
 })

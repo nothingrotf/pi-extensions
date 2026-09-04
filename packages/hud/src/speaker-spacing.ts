@@ -18,6 +18,7 @@ import {
   transcriptInsets,
 } from './transcript-geometry.ts'
 import { placeSpeakerEntries } from './transcript-layout.ts'
+import { observeTranscript, type TranscriptSubscription } from './transcript-observer.ts'
 
 const osc = String.fromCharCode(27)
 const bell = String.fromCharCode(7)
@@ -32,6 +33,8 @@ const patchedRails = new WeakSet<Component>()
 const patchedSpacers = new WeakSet<Component>()
 const patchedTools = new WeakSet<Component>()
 const patchedUsers = new WeakSet<Component>()
+const assistantsAfterRail = new WeakSet<Component>()
+const railsAfterAssistant = new WeakSet<Component>()
 
 const CustomEntrySchema = Type.Object({ entry: Type.Object({ customType: Type.String() }) })
 const RoleEntrySchema = Type.Object({
@@ -144,11 +147,36 @@ function transcriptMessageWidth(width: number, editable: boolean): number {
   return Math.max(1, inner - transcriptCopyChipWidth(width) - editChipWidth)
 }
 
+class MessageFrame {
+  private source: readonly string[] = []
+  private width = -1
+  private leadingGap = false
+  private lines: string[] = []
+
+  render(source: readonly string[], width: number, leadingGap = false): string[] {
+    if (
+      this.width === width &&
+      this.leadingGap === leadingGap &&
+      this.source.length === source.length &&
+      source.every((line, index) => line === this.source[index])
+    )
+      return this.lines
+    this.source = [...source]
+    this.width = width
+    this.leadingGap = leadingGap
+    this.lines = normalizeMessageLines(source, leadingGap).map((line) =>
+      frameTranscriptLine(line, width, speakerBodyIndent),
+    )
+    return this.lines
+  }
+}
+
 function patchUser(component: UserMessageLike, active: () => boolean): void {
   if (patchedUsers.has(component)) return
   patchedUsers.add(component)
   const original = component.render.bind(component)
   const nativeOutputPad = component.outputPad
+  const frame = new MessageFrame()
   let styled = false
   component.render = (width: number): string[] => {
     const enabled = active()
@@ -163,9 +191,7 @@ function patchUser(component: UserMessageLike, active: () => boolean): void {
     clearUserBackground(component)
     styleMarkdown(component)
     const inner = transcriptMessageWidth(width, true)
-    return normalizeMessageLines(original(inner)).map((line) =>
-      frameTranscriptLine(line, width, speakerBodyIndent),
-    )
+    return frame.render(original(inner), width)
   }
 }
 
@@ -220,6 +246,7 @@ function patchAssistant(
   patchedAssistants.add(component)
   const original = component.render.bind(component)
   const nativeOutputPad = component.outputPad
+  const frame = new MessageFrame()
   let styled = false
   component.render = (width: number): string[] => {
     const enabled = active()
@@ -233,9 +260,7 @@ function patchAssistant(
     if (!enabled) return original(width)
     styleMarkdown(component)
     const inner = transcriptMessageWidth(width, false)
-    return normalizeMessageLines(original(inner), needsLeadingGap()).map((line) =>
-      frameTranscriptLine(line, width, speakerBodyIndent),
-    )
+    return frame.render(original(inner), width, needsLeadingGap())
   }
 }
 
@@ -250,38 +275,30 @@ export function sweepSpeakerSpacing(
   const children = childrenOf(root)
   let assistantTurn = false
   let pendingUser = false
-  const hasEarlierRail = (component: Component) => {
-    const index = childrenOf(root).indexOf(component)
-    for (let prior = index - 1; prior >= 0; prior -= 1) {
-      const candidate = childrenOf(root)[prior]
-      if (candidate === undefined) continue
-      if (customTypeOf(candidate) === 'hud-rail') return true
-      if (roleOf(candidate) !== undefined) return false
-    }
-    return false
-  }
+  let earlierRail = false
   children.forEach((child, index) => {
     if (isToolExecution(child)) patchToolExecution(child, hideTools)
     const customType = customTypeOf(child)
     if (customType === 'hud-role' || customType === 'timestamp-pi') patchEntry(child, active)
     if (customType === 'hud-rail') {
+      const previous = children[index - 1]
+      if (previous !== undefined && isAssistantMessage(previous)) railsAfterAssistant.add(child)
+      else railsAfterAssistant.delete(child)
       patchRail(child, active, () => {
-        const current = childrenOf(root)
-        const previous = current[current.indexOf(child) - 1]
         const component = childrenOf(child).find((entry) => entry instanceof RailComponent)
-        return (
-          (previous !== undefined && isAssistantMessage(previous)) ||
-          component?.needsLeadingGap() === true
-        )
+        return railsAfterAssistant.has(child) || component?.needsLeadingGap() === true
       })
+      earlierRail = true
     }
     const role = roleOf(child)
     if (role === 'assistant') {
       assistantTurn = true
       pendingUser = false
+      earlierRail = false
     } else if (role === 'user') {
       assistantTurn = false
       pendingUser = true
+      earlierRail = false
     } else if (isUserMessage(child)) {
       if (pendingUser) {
         patchUser(child, active)
@@ -290,7 +307,9 @@ export function sweepSpeakerSpacing(
       }
       pendingUser = false
     } else if (isAssistantMessage(child)) {
-      if (assistantTurn) patchAssistant(child, active, () => hasEarlierRail(child))
+      if (earlierRail) assistantsAfterRail.add(child)
+      else assistantsAfterRail.delete(child)
+      if (assistantTurn) patchAssistant(child, active, () => assistantsAfterRail.has(child))
     }
     sweepSpeakerSpacing(child, active, hideTools, depth + 1)
   })
@@ -322,50 +341,30 @@ export function installSpeakerSpacingFix(
   let activeSource = active
   let hideToolsSource = hideTools
   let installedActive = true
-  let dirty = true
-  let deadline = Date.now() + 3000
-  let retryVersion = 0
-  const retry = () => {
-    const version = ++retryVersion
-    const render = () => {
-      if (!installedActive || !dirty || version !== retryVersion) return
-      tui.requestRender()
-      if (dirty) setTimeout(render, 50).unref()
-    }
-    queueMicrotask(render)
+  let subscription: TranscriptSubscription | undefined
+  const isActive = () => installedActive && activeSource()
+  const toolsHidden = (toolCallId: string) => installedActive && hideToolsSource(toolCallId)
+  const subscribe = () => {
+    subscription ??= observeTranscript(tui, 30, () => {
+      sweepSpeakerSpacing(tui, isActive, toolsHidden)
+    })
   }
   const fix: InstalledSpacingFix = {
     dispose: () => {
       installedActive = false
-      dirty = false
-      retryVersion += 1
+      subscription?.dispose()
+      subscription = undefined
       tui.requestRender()
     },
-    markDirty: () => {
-      deadline = Date.now() + 3000
-      dirty = true
-      retry()
-    },
+    markDirty: () => subscription?.markDirty(),
     setSources: (next, nextHideTools) => {
       activeSource = next
       hideToolsSource = nextHideTools
       installedActive = true
-      deadline = Date.now() + 3000
-      dirty = true
-      retry()
+      subscribe()
     },
   }
-  const isActive = () => installedActive && activeSource()
-  const toolsHidden = (toolCallId: string) => installedActive && hideToolsSource(toolCallId)
   installed.set(tui, fix)
-  const original = tui.requestRender.bind(tui)
-  tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (installedActive && dirty) {
-      sweepSpeakerSpacing(tui, isActive, toolsHidden)
-      if (Date.now() >= deadline) dirty = false
-    }
-    original(...args)
-  }
-  retry()
+  subscribe()
   return fix
 }

@@ -2,9 +2,10 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 
 import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
-import { buildContextLabel, contextPercent, prettyEffort, prettyModel } from './format.ts'
-import { emptyGitStatus, readGitStatus } from './git.ts'
+import { contextSummary, prettyEffort, prettyModel } from './format.ts'
+import { emptyGitStatus, readGitStatus, type GitStatus } from './git.ts'
 import { hudCommandCompletions, parseHudCommand, resolveToggle } from './hud-command.ts'
+import { askResultPatch, askRows, normalizeAskPatch } from './rail-ask.ts'
 import {
   builtInRailToolNames,
   decodeRailAction,
@@ -28,6 +29,7 @@ import {
   RailStore,
   showsPendingNarration,
 } from './rail.ts'
+import { RefreshTask } from './refresh-task.ts'
 import { renderHud, type HudState } from './render.ts'
 import {
   choiceValue,
@@ -54,7 +56,7 @@ import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spa
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
-import { fetchUsageForProvider } from './usage.ts'
+import { fetchUsageForProvider, type UsageSnapshot } from './usage.ts'
 import { decodeWorkingMessage, WorkingStatus, workingMessageChannel } from './working.ts'
 
 const gitRefreshMs = 30_000
@@ -127,14 +129,11 @@ export default function hud(pi: ExtensionAPI): void {
   }
   let active = false
   let generation = 0
-  let gitRevision = 0
-  let usageRevision = 0
   let requestRender: (() => void) | undefined
   let footerOwned = false
-  let gitTimer: ReturnType<typeof setInterval> | undefined
-  let usageTimer: ReturnType<typeof setTimeout> | undefined
-  let gitController: AbortController | undefined
-  let usageController: AbortController | undefined
+  let gitRefresh: RefreshTask<GitStatus> | undefined
+  let usageRefresh: RefreshTask<UsageSnapshot> | undefined
+  let usageProvider: string | undefined
   let sound: SoundSettings = { ...defaultSoundSettings }
   let unsubscribeAnimation: (() => void) | undefined
   let unsubscribeInput: (() => void) | undefined
@@ -268,96 +267,39 @@ export default function hud(pi: ExtensionAPI): void {
     state.modelLabel = prettyModel(ctx.model?.id)
     state.effortLevel = ctx.model?.reasoning ? pi.getThinkingLevel() : ''
     state.effortLabel = prettyEffort(state.effortLevel)
-    state.contextLabel = buildContextLabel(ctx)
-    state.contextPercent = contextPercent(ctx)
+    const context = contextSummary(ctx)
+    state.contextLabel = context.label
+    state.contextPercent = context.percent
     render()
   }
 
-  const refreshGit = async (ctx: ExtensionContext, life: number): Promise<void> => {
-    const revision = ++gitRevision
-    gitController?.abort()
-    const controller = new AbortController()
-    gitController = controller
-    const cwd = ctx.cwd
-    const git = await readGitStatus(cwd, controller.signal)
-    if (
-      active &&
-      life === generation &&
-      revision === gitRevision &&
-      !controller.signal.aborted &&
-      cwd === ctx.cwd
-    ) {
-      state.git = git
-      render()
-    }
-    if (gitController === controller) {
-      gitController = undefined
-    }
-  }
-
-  const scheduleUsage = (ctx: ExtensionContext, life: number) => {
-    if (usageTimer !== undefined) {
-      clearTimeout(usageTimer)
-    }
-    usageTimer = setTimeout(() => {
-      usageTimer = undefined
-      if (active && life === generation) {
-        refreshUsage(ctx, life)
-      }
-    }, usageRefreshMs)
-  }
-
-  const refreshUsage = (ctx: ExtensionContext, life: number) => {
-    const revision = ++usageRevision
-    usageController?.abort()
-    const controller = new AbortController()
-    usageController = controller
+  const refreshUsage = (ctx: ExtensionContext) => {
     const provider = ctx.model?.provider
-    const task = fetchUsageForProvider(provider, controller.signal)
-    if (task === null) {
+    if (provider !== usageProvider) {
+      usageRefresh?.stop()
+      usageProvider = provider
       state.usage = null
       render()
-      return
+      usageRefresh = new RefreshTask(
+        (signal) => fetchUsageForProvider(provider, signal),
+        (snapshot) => {
+          if (snapshot.windows.length > 0 || state.usage === null) {
+            state.usage = snapshot
+            render()
+          }
+        },
+        usageRefreshMs,
+      )
     }
-    start(
-      task
-        .then((snapshot) => {
-          if (
-            active &&
-            life === generation &&
-            revision === usageRevision &&
-            !controller.signal.aborted &&
-            provider === ctx.model?.provider
-          ) {
-            if (snapshot.windows.length > 0 || state.usage?.windows.length === undefined) {
-              state.usage = snapshot
-              render()
-            }
-          }
-        })
-        .finally(() => {
-          if (active && life === generation && revision === usageRevision) {
-            scheduleUsage(ctx, life)
-          }
-        }),
-    )
+    usageRefresh?.request()
   }
 
   const stop = () => {
-    if (gitTimer !== undefined) {
-      clearInterval(gitTimer)
-    }
-    if (usageTimer !== undefined) {
-      clearTimeout(usageTimer)
-    }
-    gitController?.abort()
-    usageController?.abort()
-    gitTimer = undefined
-    usageTimer = undefined
-    gitController = undefined
-    usageController = undefined
-    gitRevision += 1
-    usageRevision += 1
+    gitRefresh?.stop()
+    usageRefresh?.stop()
+    gitRefresh = undefined
+    usageRefresh = undefined
+    usageProvider = undefined
     unsubscribeAnimation?.()
     unsubscribeAnimation = undefined
     unsubscribeInput?.()
@@ -369,6 +311,16 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('session_start', (_event, ctx) => {
     stop()
     active = false
+    agentWorking = false
+    liveHeaderAt = undefined
+    liveHeaderMessageAt = undefined
+    liveHeaderClosed = true
+    liveUsageAssistantAt = undefined
+    railTurnPending = false
+    railPendingNarration = false
+    working.setMessage(undefined)
+    state.git = emptyGitStatus()
+    state.usage = null
     if (!ctx.hasUI || ctx.mode !== 'tui') {
       footerOwned = false
       requestRender = undefined
@@ -394,6 +346,7 @@ export default function hud(pi: ExtensionAPI): void {
     ctx.ui.setWorkingVisible(false)
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
+      let disposed = false
       footerOwned = true
       assistantUsageLines = new Map<number, RailUsageLine>()
       const assistantUsage = (timestamp: number | undefined, width: number): readonly string[] => {
@@ -430,10 +383,12 @@ export default function hud(pi: ExtensionAPI): void {
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
       dimEditorBorder()
       const unsubscribe = footerData.onBranchChange(() => {
-        start(refreshGit(ctx, life))
+        gitRefresh?.request()
       })
       return {
         dispose() {
+          if (disposed) return
+          disposed = true
           footerOwned = false
           requestRender = undefined
           dimEditorBorder = undefined
@@ -456,9 +411,16 @@ export default function hud(pi: ExtensionAPI): void {
       }
     })
     active = true
-    start(refreshGit(ctx, life))
-    refreshUsage(ctx, life)
-    gitTimer = setInterval(() => start(refreshGit(ctx, life)), gitRefreshMs)
+    gitRefresh = new RefreshTask(
+      (signal) => readGitStatus(ctx.cwd, signal),
+      (git) => {
+        state.git = git
+        render()
+      },
+      gitRefreshMs,
+    )
+    gitRefresh.request()
+    refreshUsage(ctx)
     unsubscribeInput = ctx.ui.onTerminalInput((data) => {
       focus.handleInput(data)
       return undefined
@@ -552,12 +514,13 @@ export default function hud(pi: ExtensionAPI): void {
     const targetStatus = target.status(toolCallId)
     if (report.status === 'pending' && (targetStatus === 'ok' || targetStatus === 'error')) return
     const fallback = toolName === undefined ? undefined : defaultRailLabel(toolName)
-    const resolved = {
+    const base = {
       ...patch,
       doneLabel: patch.doneLabel ?? fallback ?? 'Tool',
       iconKey: patch.iconKey ?? (toolName === undefined ? 'tool' : defaultRailIcon(toolName)),
       runningLabel: patch.runningLabel ?? patch.doneLabel ?? fallback ?? 'Tool',
     }
+    const resolved = { ...base, ...normalizeAskPatch(base) }
     const actionPatch = { ...resolved, measureDuration: false, resetDerived: true }
     openRailEntry()
     if (parentToolCallId === undefined) target.report(toolCallId, actionPatch)
@@ -635,6 +598,9 @@ export default function hud(pi: ExtensionAPI): void {
           railPatchForCall({ arguments: event.args, toolName: event.toolName }, ctx.cwd),
         )
       }
+      if (event.toolName === 'AskQuestion') {
+        target.report(event.toolCallId, { askRows: askRows(event.args) })
+      }
       openRailEntry()
       markToolReplacement(event.toolCallId)
       reconcileRailVoice()
@@ -652,7 +618,7 @@ export default function hud(pi: ExtensionAPI): void {
       return
     }
     sync(ctx)
-    refreshUsage(ctx, generation)
+    refreshUsage(ctx)
   })
 
   pi.on('thinking_level_select', (_event, ctx) => {
@@ -693,6 +659,9 @@ export default function hud(pi: ExtensionAPI): void {
     const target = railFor(event.toolCallId)
     if (target.has(event.toolCallId)) {
       const patch: RailPatch = { status: event.isError ? 'error' : 'ok' }
+      if (event.toolName === 'AskQuestion') {
+        Object.assign(patch, askResultPatch(event.toolName, event.result.details))
+      }
       if (fallbackToolCallIds.delete(event.toolCallId)) {
         const output = railResultText(event.result)
         if (output.length > 0) patch.output = output
@@ -703,7 +672,7 @@ export default function hud(pi: ExtensionAPI): void {
     reconcileRailVoice()
     if (active) {
       sync(ctx)
-      start(refreshGit(ctx, generation))
+      gitRefresh?.request()
     }
   })
 
@@ -728,7 +697,7 @@ export default function hud(pi: ExtensionAPI): void {
     requestRender?.()
     if (active) {
       sync(ctx)
-      start(refreshGit(ctx, generation))
+      gitRefresh?.request()
       play(ctx, sound.completionSound)
     }
   })

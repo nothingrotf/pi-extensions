@@ -132,6 +132,25 @@ describe('placeSpeakerEntries', () => {
 })
 
 describe('placeRailsAfterOpening', () => {
+  test('keeps multiple restored rails at one opening in a stable order', () => {
+    const root = new Container()
+    const first = new RailEntry(1)
+    const second = new RailEntry(2)
+    const opening = new AssistantEntry(8)
+    root.addChild(first)
+    root.addChild(second)
+    root.addChild(opening)
+    const timestamps = new Map([
+      [1, 8],
+      [2, 8],
+    ])
+    placeRailsAfterOpening(root, timestamps)
+    const placed = [...root.children]
+    expect(placeRailsAfterOpening(root, timestamps)).toBe(0)
+    expect(root.children).toEqual(placed)
+    expect(root.children).toEqual([opening, first, second])
+  })
+
   test('moves a rail directly after its opening assistant message', () => {
     const root = new Container()
     const transcript = new Container()

@@ -74,6 +74,18 @@ export class RailComponent implements Component {
   private readonly liveTheme: RailTheme
   private readonly settledTheme: RailTheme
   private readonly usageLine: RailUsageLine
+  private cached:
+    | {
+        active: boolean
+        lines: string[]
+        pending: boolean
+        store: RailStore
+        tick: number
+        usage: string
+        version: number
+        width: number
+      }
+    | undefined
 
   constructor(
     private readonly resolve: () => RailStore | undefined,
@@ -91,7 +103,9 @@ export class RailComponent implements Component {
     this.usageLine = new RailUsageLine(theme, this.source)
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.cached = undefined
+  }
 
   needsLeadingGap(): boolean {
     const store = this.resolve()
@@ -108,17 +122,38 @@ export class RailComponent implements Component {
     const insets = transcriptInsets(width, speakerBodyIndent)
     const usage = this.usage()
     const pending = this.pending()
-    return railLines(store.groups(), this.active() ? this.liveTheme : this.settledTheme, {
+    const active = this.active()
+    const groups = store.groups()
+    const animating = pending || groups.some((group) => group.status === 'pending')
+    const tick = animating ? (usage.tick ?? Math.floor(Date.now() / shimmerTickMs)) : 0
+    const usageRow = this.usageLine.render(usage) ?? ''
+    const version = store.version()
+    const cached = this.cached
+    if (
+      cached !== undefined &&
+      cached.store === store &&
+      cached.version === version &&
+      cached.width === width &&
+      cached.active === active &&
+      cached.pending === pending &&
+      cached.tick === tick &&
+      cached.usage === usageRow
+    ) {
+      return cached.lines
+    }
+    const lines = railLines(groups, active ? this.liveTheme : this.settledTheme, {
       copyChipWidth: transcriptCopyChipWidth(width),
       expanded: this.expanded,
       pending,
-      tick: usage.tick,
-      usage: this.usageLine.render(usage) ?? '',
+      tick,
+      usage: usageRow,
       width: insets.inner,
     }).map((line) =>
       line.length === 0
         ? ''
         : frameTranscriptLine(truncateToWidth(line, insets.inner, ''), width, speakerBodyIndent),
     )
+    this.cached = { active, lines, pending, store, tick, usage: usageRow, version, width }
+    return lines
   }
 }

@@ -1,6 +1,6 @@
 import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
 import type { TUI } from '@earendil-works/pi-tui'
-import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
+import { truncateToWidth } from '@earendil-works/pi-tui'
 
 import { sanitizeTerminalText, type Todo } from './domain.ts'
 
@@ -94,15 +94,7 @@ export function formatTodoLine(todo: Todo, theme: TodoOverlayTheme): string {
 }
 
 function dockInset(width: number): number {
-  if (width >= 110) return 4
-  if (width >= 80) return 3
-  if (width >= 56) return 2
-  return width >= 12 ? 1 : 0
-}
-
-function fitLine(line: string, width: number): string {
-  const fitted = truncateToWidth(line, width, '…')
-  return `${fitted}${' '.repeat(Math.max(0, width - visibleWidth(fitted)))}`
+  return Math.min(3, Math.max(0, Math.floor(width) - 1))
 }
 
 function renderPanel(
@@ -114,29 +106,11 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const panelWidth = Math.max(1, safeWidth - inset * 2)
+  const innerWidth = safeWidth - inset
   const outer = ' '.repeat(inset)
+  const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
   const color = active ? 'accent' : 'muted'
-  const border = (text: string) => theme.fg(color, text)
-  const background = theme.getBgAnsi?.('toolPendingBg') ?? ''
-  const surface = (content: string) =>
-    `${outer}${theme.bg('toolPendingBg', content.replaceAll('\u001B[0m', `\u001B[0m${background}`))}`
-  if (panelWidth < 8) {
-    return rows.map((row) => surface(truncateToWidth(row, panelWidth, '…')))
-  }
-  const titleWidth = Math.max(1, panelWidth - 3)
-  const titleText = truncateToWidth(` ${title} `, titleWidth, '')
-  const titleChip = theme.bold(theme.fg(color, titleText))
-  const topFill = '─'.repeat(Math.max(0, panelWidth - visibleWidth(titleText) - 3))
-  const innerWidth = Math.max(1, panelWidth - 6)
-  const framedRows = rows.map((row) =>
-    surface(`${border('│')}  ${fitLine(row, innerWidth)}  ${border('│')}`),
-  )
-  return [
-    surface(`${border('╭─')}${titleChip}${border(`${topFill}╮`)}`),
-    ...framedRows,
-    surface(border(`╰${'─'.repeat(Math.max(0, panelWidth - 2))}╯`)),
-  ]
+  return [line(theme.bold(theme.fg(color, title))), ...rows.map(line)]
 }
 
 function settledSignature(todos: readonly Todo[]): string {

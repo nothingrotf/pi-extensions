@@ -13,7 +13,12 @@ export type BorderTheme = {
   fg: (color: 'borderMuted', text: string) => string
 }
 
-const patched = new WeakSet<Component>()
+type BorderSources = {
+  theme: BorderTheme
+  working: () => boolean
+}
+
+const patched = new WeakMap<Component, BorderSources>()
 
 export function isEditorLike(component: Component): component is EditorLike {
   if (!('borderColor' in component) || !('getText' in component)) return false
@@ -25,14 +30,20 @@ export function patchEditorBorder(
   theme: BorderTheme,
   working: () => boolean,
 ): void {
-  if (patched.has(editor)) return
-  patched.add(editor)
+  const current = patched.get(editor)
+  if (current !== undefined) {
+    current.theme = theme
+    current.working = working
+    return
+  }
+  const sources = { theme, working }
+  patched.set(editor, sources)
   let idle = editor.borderColor
-  const busy: BorderPainter = (text) => theme.fg('borderMuted', text)
+  const busy: BorderPainter = (text) => sources.theme.fg('borderMuted', text)
   Object.defineProperty(editor, 'borderColor', {
     configurable: true,
     enumerable: true,
-    get: (): BorderPainter => (working() ? busy : idle),
+    get: (): BorderPainter => (sources.working() ? busy : idle),
     set: (painter: BorderPainter) => {
       idle = painter
     },

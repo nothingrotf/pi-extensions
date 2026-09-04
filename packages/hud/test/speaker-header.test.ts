@@ -46,6 +46,22 @@ function frame(patch: Partial<SpeakerHeaderFrame> = {}): SpeakerHeaderFrame {
 }
 
 describe('speaker header', () => {
+  test('tolerates invalid timestamps in restored history', () => {
+    for (const timestamp of [Number.NaN, Number.POSITIVE_INFINITY, 1e20]) {
+      expect(formatSpeakerClock(timestamp)).toBe(new Date(timestamp).toLocaleTimeString())
+    }
+  })
+
+  test('reuses settled headers but refreshes after invalidation and resizing', () => {
+    const component = new SpeakerHeaderComponent(assistant, theme)
+    const first = component.render(80)
+    expect(component.render(80)).toBe(first)
+    expect(component.render(40)).not.toBe(first)
+    const narrow = component.render(40)
+    component.invalidate()
+    expect(component.render(40)).not.toBe(narrow)
+  })
+
   test('formats the clock with the system two-digit locale', () => {
     expect(formatSpeakerClock(timestamp)).toBe(
       new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

@@ -86,12 +86,12 @@ describe('patchEditorBorder', () => {
     expect(top).not.toContain('<idle>')
   })
 
-  test('patches each editor only once', () => {
+  test('rebinds the working state when the HUD is reinstalled', () => {
     const editor = realEditor()
     patchEditorBorder(editor, theme, () => true)
     patchEditorBorder(editor, theme, () => false)
 
-    expect(editor.borderColor('─')).toBe('<muted>─</muted>')
+    expect(editor.borderColor('─')).toBe('<idle>─</idle>')
   })
 })
 

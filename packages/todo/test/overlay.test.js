@@ -71,12 +71,12 @@ describe('persistent todo panel', () => {
       options: { placement: 'aboveEditor' },
     })
     const lines = instance.render()
-    expect(lines[0]).toMatch(/^    ╭─  Tasks 1\/3 ▾ ─+╮$/)
+    expect(lines[0]).toMatch(/^    Tasks 1\/3 ▾$/)
     expect(lines[1]).toContain('+1 done')
     expect(lines[2]).toMatch(/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/)
     expect(lines[2]).toContain('active')
     expect(lines[3]).toContain('○ pending')
-    expect(lines.at(-1)).toMatch(/^    ╰─+╯$/)
+    expect(lines.join('\n')).not.toMatch(/[╭╮╯│]/)
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true)
     instance.overlay.dispose()
   })
@@ -102,7 +102,7 @@ describe('persistent todo panel', () => {
     const lines = instance.render()
     expect(lines.join('\n')).toContain('+8 more')
     expect(lines.filter((line) => line.includes('○')).length).toBe(6)
-    expect(lines).toHaveLength(9)
+    expect(lines).toHaveLength(8)
     instance.overlay.dispose()
   })
 
@@ -222,7 +222,7 @@ describe('persistent todo panel', () => {
     instance.overlay.dispose()
   })
 
-  test('keeps one uninterrupted surface span per panel line', () => {
+  test('leaves the terminal background unchanged', () => {
     const surfaceStart = '\u001B[48;2;1;2;3m'
     const surfaceEnd = '\u001B[49m'
     const surfaceTheme = {
@@ -232,19 +232,19 @@ describe('persistent todo panel', () => {
       },
     }
     const lines = renderTodoHudLines([todo('active', 'in_progress')], surfaceTheme, 120, 0)
-    expect(lines.every((line) => line.split(surfaceStart).length === 2)).toBe(true)
-    expect(lines.every((line) => line.split(surfaceEnd).length === 2)).toBe(true)
+    expect(lines.every((line) => line.split(surfaceStart).length === 1)).toBe(true)
+    expect(lines.every((line) => line.split(surfaceEnd).length === 1)).toBe(true)
   })
 
-  test('uses the responsive dock insets', () => {
+  test('aligns widgets with the three-space text inset', () => {
     const todos = [todo('active', 'in_progress')]
     for (const item of [
-      { inset: 1, width: 55 },
-      { inset: 2, width: 56 },
-      { inset: 2, width: 79 },
+      { inset: 3, width: 55 },
+      { inset: 3, width: 56 },
+      { inset: 3, width: 79 },
       { inset: 3, width: 80 },
       { inset: 3, width: 109 },
-      { inset: 4, width: 110 },
+      { inset: 3, width: 110 },
     ]) {
       expect(renderTodoHudLines(todos, theme, item.width, 0)[0]?.match(/^ */)?.[0].length).toBe(
         item.inset,

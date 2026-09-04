@@ -1,9 +1,98 @@
 import { Value } from 'typebox/value'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vite-plus/test'
 
-import goal from '../src/index.ts'
+import { createGoalExtension } from '../src/index.ts'
+import { GoalReviewAbortedError } from '../src/reviewer.ts'
 
-function harness(branch = [], mode = 'tui') {
+const theme = {
+  bg(_color, text) {
+    return text
+  },
+  bold(text) {
+    return text
+  },
+  italic(text) {
+    return text
+  },
+  fg(color, text) {
+    return color === 'accent' || color === 'success' || color === 'warning' || color === 'muted'
+      ? `<${color}>${text}</${color}>`
+      : text
+  },
+}
+
+function outcome(overrides = {}) {
+  return {
+    status: 'FAIL',
+    reason: 'The implementation is incomplete.',
+    evidence: ['src/main.ts:1'],
+    checks: [],
+    reviewerModel: 'test/reviewer',
+    report: '{"status":"FAIL"}',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  }
+}
+
+function passingChecks() {
+  return [
+    { kind: 'typecheck', label: 'Typecheck', status: 'passed', durationMs: 1 },
+    { kind: 'test', label: 'Tests', status: 'passed', durationMs: 1 },
+  ]
+}
+
+class FakeCheckRunner {
+  constructor(results = passingChecks()) {
+    this.results = results
+    this.calls = []
+  }
+
+  async run(request) {
+    this.calls.push(request)
+    return structuredClone(this.results)
+  }
+}
+
+class FakeReviewer {
+  constructor(outcomes = [outcome()]) {
+    this.outcomes = [...outcomes]
+    this.calls = []
+    this.steering = []
+    this.imageSteering = []
+    this.cancelCount = 0
+    this.gate = undefined
+    this.acceptSteering = true
+  }
+
+  hold() {
+    this.gate = Promise.withResolvers()
+    return this.gate
+  }
+
+  async review(request) {
+    this.calls.push(request)
+    if (this.gate !== undefined) return await this.gate.promise
+    return structuredClone(this.outcomes.shift() ?? outcome())
+  }
+
+  async steer(message, images = []) {
+    this.steering.push(message)
+    this.imageSteering.push(structuredClone(images))
+    return this.gate !== undefined && this.acceptSteering
+  }
+
+  async cancel() {
+    this.cancelCount += 1
+    this.gate?.resolve(outcome({ status: 'PARTIAL', reason: 'Cancelled.' }))
+    this.gate = undefined
+  }
+}
+
+function harness(options = {}) {
+  const branch = options.branch ?? []
+  const mode = options.mode ?? 'tui'
+  const reviewer = options.reviewer ?? new FakeReviewer(options.outcomes)
+  const checkRunner = options.checkRunner ?? new FakeCheckRunner(options.checks)
   const handlers = new Map()
   const tools = new Map()
   const commands = new Map()
@@ -11,6 +100,7 @@ function harness(branch = [], mode = 'tui') {
   const userMessages = []
   const entries = []
   const notices = []
+  const busEvents = []
   const statuses = new Map()
   const widgetCalls = []
   let widget
@@ -29,11 +119,11 @@ function harness(branch = [], mode = 'tui') {
     appendEntry(customType, data) {
       entries.push({ type: 'custom', customType, data })
     },
-    sendMessage(message, options) {
-      messages.push({ message, options })
+    sendMessage(message, sendOptions) {
+      messages.push({ message, options: sendOptions })
     },
-    sendUserMessage(content, options) {
-      userMessages.push({ content, options })
+    sendUserMessage(content, sendOptions) {
+      userMessages.push({ content, options: sendOptions })
     },
     registerTool(tool) {
       tools.set(tool.name, tool)
@@ -47,13 +137,25 @@ function harness(branch = [], mode = 'tui') {
     setActiveTools(names) {
       activeTools = [...names]
     },
+    events: {
+      emit(name, data) {
+        busEvents.push({ name, data })
+      },
+    },
   }
   const ctx = {
     cwd: process.cwd(),
     hasUI: true,
     mode,
+    model: undefined,
+    modelRegistry: {},
+    signal: undefined,
+    thinkingLevel: 'medium',
     isIdle() {
       return idle
+    },
+    isProjectTrusted() {
+      return true
     },
     hasPendingMessages() {
       return pending
@@ -61,6 +163,9 @@ function harness(branch = [], mode = 'tui') {
     sessionManager: {
       getBranch() {
         return branch
+      },
+      getSessionFile() {
+        return undefined
       },
     },
     ui: {
@@ -71,12 +176,15 @@ function harness(branch = [], mode = 'tui') {
       setStatus(key, value) {
         statuses.set(key, value)
       },
-      setWidget(key, factory, options) {
-        widgetCalls.push({ key, factory, options })
+      setWidget(key, factory, widgetOptions) {
+        widgetCalls.push({ key, factory, options: widgetOptions })
         widget = factory === undefined ? undefined : factory(tui, theme)
       },
       getEditorText() {
         return editorText
+      },
+      setEditorText(value) {
+        editorText = value
       },
       async select() {
         return selectAnswer
@@ -92,28 +200,22 @@ function harness(branch = [], mode = 'tui') {
       },
     },
   }
-  goal(api)
+  createGoalExtension({ checkRunner, reviewer })(api)
   return {
     async emit(name, event = {}) {
       const handler = handlers.get(name)
-      if (handler === undefined) {
-        throw new Error(`Missing ${name} handler`)
-      }
-      return handler(event, ctx)
+      if (handler === undefined) throw new Error(`Missing ${name} handler`)
+      return await handler(event, ctx)
     },
     async command(name, args) {
       const command = commands.get(name)
-      if (command === undefined) {
-        throw new Error(`Missing ${name} command`)
-      }
-      return command.handler(args, ctx)
+      if (command === undefined) throw new Error(`Missing ${name} command`)
+      return await command.handler(args, ctx)
     },
     async tool(params) {
       const tool = tools.get('goal')
-      if (tool === undefined) {
-        throw new Error('Missing goal tool')
-      }
-      return tool.execute('call-1', params, undefined, undefined, ctx)
+      if (tool === undefined) throw new Error('Missing goal tool')
+      return await tool.execute('call-1', params, undefined, undefined, ctx)
     },
     schema() {
       return tools.get('goal').parameters
@@ -130,8 +232,11 @@ function harness(branch = [], mode = 'tui') {
     messages,
     userMessages,
     notices,
+    busEvents,
     statuses,
     widgetCalls,
+    reviewer,
+    checkRunner,
     renderWidget(width = 120) {
       return widget?.render(width) ?? []
     },
@@ -160,43 +265,23 @@ function harness(branch = [], mode = 'tui') {
   }
 }
 
-const theme = {
-  bg(_color, text) {
-    return text
-  },
-  bold(text) {
-    return text
-  },
-  italic(text) {
-    return text
-  },
-  fg(color, text) {
-    return color === 'accent' || color === 'success' || color === 'warning' || color === 'muted'
-      ? `<${color}>${text}</${color}>`
-      : text
-  },
-}
-
-function todoEntry(todos) {
-  return {
-    type: 'message',
-    message: { role: 'toolResult', toolName: 'todo_write', details: { todos } },
-  }
-}
-
 function modeEntries(instance) {
   return instance.entries.filter((entry) => entry.customType === 'pi-goal-mode')
 }
 
 function latestMode(instance) {
   const entry = modeEntries(instance).at(-1)
-  if (entry === undefined) {
-    throw new Error('No goal mode entry was persisted')
-  }
+  if (entry === undefined) throw new Error('No goal mode entry was persisted')
   return entry.data
 }
 
-function assistant(usage, stopReason = 'stop') {
+function latestState(instance) {
+  const mode = latestMode(instance)
+  if (mode.mode === 'none') throw new Error('No goal state is active')
+  return mode.state
+}
+
+function assistant(usage = {}, stopReason = 'stop') {
   return {
     role: 'assistant',
     content: [],
@@ -205,19 +290,16 @@ function assistant(usage, stopReason = 'stop') {
   }
 }
 
+async function flushAsync() {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve()
+}
+
 async function runTurn(instance, options = {}) {
   await instance.emit('agent_start')
   await instance.emit('turn_start', { turnIndex: 0, timestamp: Date.now() })
-  if (options.tool) {
-    await instance.emit('tool_execution_start', {
-      toolCallId: 't',
-      toolName: options.tool,
-      args: {},
-    })
-  }
-  const message = assistant(options.usage ?? {}, options.stopReason)
+  const message = assistant(options.usage, options.stopReason)
   await instance.emit('message_end', { message })
-  if (options.tool) {
+  if (options.tool !== undefined) {
     await instance.emit('tool_execution_end', {
       toolCallId: 't',
       toolName: options.tool,
@@ -227,9 +309,10 @@ async function runTurn(instance, options = {}) {
   }
   await instance.emit('agent_end', { messages: [message] })
   await instance.emit('agent_settled')
+  await flushAsync()
 }
 
-function storedGoal(overrides = {}) {
+function legacyGoal(overrides = {}) {
   return {
     id: 'goal-1',
     objective: 'restore me',
@@ -259,322 +342,391 @@ describe('goal lifecycle', () => {
     expect(instance.statuses.get('pi-goal')).toBeUndefined()
   })
 
-  test('creates a goal from /goal and submits the objective as the user prompt', async () => {
+  test('creates a configured v3 goal and injects trusted context', async () => {
     const instance = harness()
     await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'ship the release')
+    await instance.command(
+      'goal',
+      'ship the release --max=8 --review-model=openai/reviewer --runtime-probe',
+    )
     expect(latestMode(instance)).toMatchObject({
-      version: 2,
+      version: 3,
       mode: 'goal',
-      goal: { objective: 'ship the release', status: 'active', tokensUsed: 0 },
+      state: {
+        goal: { objective: 'ship the release', status: 'active', tokensUsed: 0 },
+        loop: {
+          maxIterations: 8,
+          reviewModel: 'openai/reviewer',
+          runtimeProbe: true,
+        },
+      },
     })
-    expect(instance.activeTools()).toContain('goal')
     expect(instance.userMessages).toEqual([{ content: 'ship the release', options: undefined }])
-    expect(instance.statuses.get('pi-goal')).toBeUndefined()
-    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · active ▾')
+    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · coding 1/8 ▾')
     const injected = await instance.emit('before_agent_start', { systemPrompt: 'base' })
-    expect(injected.message.customType).toBe('goal-mode-context')
     expect(injected.message.content).toContain('<objective>\nship the release\n</objective>')
-    expect(injected.message.display).toBe(false)
+    expect(injected.message.content).toContain('Only reviewer PASS can complete the goal.')
   })
 
-  test('steers goal context and the objective while streaming', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    instance.setIdle(false)
-    await instance.command('goal', 'ship <it>')
-    expect(instance.messages.at(-1)).toMatchObject({
-      message: { customType: 'goal-mode-context' },
-      options: { deliverAs: 'steer' },
-    })
-    expect(instance.messages.at(-1).message.content).toContain('ship &lt;it&gt;')
-    expect(instance.userMessages).toEqual([
-      { content: 'ship <it>', options: { deliverAs: 'steer' } },
-    ])
-  })
-
-  test('sends a hidden continuation after the agent settles', async () => {
-    const instance = harness()
+  test('runs checks and independent review after every coding turn', async () => {
+    const instance = harness({ outcomes: [outcome({ reason: 'Missing release notes.' })] })
     await instance.emit('session_start', { reason: 'startup' })
     await instance.command('goal', 'finish migration')
-    await runTurn(instance, { tool: 'read' })
-    expect(instance.messages).toHaveLength(0)
+    await runTurn(instance, { tool: 'read', usage: { input: 2, output: 1 } })
+    expect(instance.checkRunner.calls).toHaveLength(1)
+    expect(instance.reviewer.calls).toHaveLength(1)
+    expect(latestState(instance)).toMatchObject({
+      enabled: true,
+      goal: { status: 'active', tokensUsed: 3 },
+      loop: { iteration: 1, phase: 'between' },
+    })
+    expect(latestState(instance).loop.verdictHistory[0]).toMatchObject({
+      status: 'FAIL',
+      reason: 'Missing release notes.',
+    })
+    expect(instance.entries.some((entry) => entry.customType === 'pi-goal-review')).toBe(true)
+    await instance.command('goal', 'show')
+    expect(instance.notices.at(-1).text).toContain('Review history:')
+    expect(instance.notices.at(-1).text).toContain('Evidence: src/main.ts:1')
     await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(1)
-    expect(instance.messages[0]).toMatchObject({
+    expect(instance.messages.at(-1)).toMatchObject({
       message: { customType: 'goal-continuation', display: false },
       options: { triggerTurn: true, deliverAs: 'followUp' },
     })
-    expect(instance.messages[0].message.content).toContain('Continue active goal.')
-    expect(instance.messages[0].message.content).toContain('NEVER narrate continuation')
+    expect(instance.messages.at(-1).message.content).toContain('Missing release notes.')
   })
 
-  test('suppresses one continuation after a continuation turn without tool calls', async () => {
-    const instance = harness()
+  test('uses complete as a review request and exits only after PASS', async () => {
+    const instance = harness({
+      outcomes: [outcome({ status: 'PASS', reason: 'Every requirement is verified.' })],
+    })
     await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'wait for evidence')
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(1)
+    const created = await instance.tool({
+      op: 'create',
+      objective: 'tool goal',
+      token_budget: 50,
+      max_iterations: 6,
+    })
+    expect(created.details.loop.maxIterations).toBe(6)
+    const requested = await instance.tool({ op: 'complete' })
+    expect(requested.details.goal.status).toBe('active')
+    expect(requested.details.loop.reviewRequested).toBe(true)
+    expect(requested.content[0].text).toContain('Independent completion review requested')
 
     await runTurn(instance)
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(1)
-
-    await instance.emit('message_start', { message: { role: 'user', content: 'go on' } })
-    await runTurn(instance)
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(2)
+    expect(latestMode(instance)).toEqual({ version: 3, mode: 'none' })
+    expect(instance.entries.at(-1)).toMatchObject({
+      customType: 'pi-goal-completed',
+      data: {
+        version: 2,
+        objective: 'tool goal',
+        iterations: 1,
+        finalVerdict: { status: 'PASS' },
+      },
+    })
+    expect(instance.activeTools()).not.toContain('goal')
+    expect(instance.notices.at(-1).text).toBe('Goal completed after independent review.')
   })
 
-  test('keeps continuing while continuation turns use tools', async () => {
-    const instance = harness()
+  test('overrides reviewer PASS when an automated check fails', async () => {
+    const checkRunner = new FakeCheckRunner([
+      {
+        kind: 'typecheck',
+        label: 'Typecheck',
+        status: 'failed',
+        durationMs: 3,
+        command: 'bun run check',
+        output: 'type error',
+      },
+      { kind: 'test', label: 'Tests', status: 'passed', durationMs: 2 },
+    ])
+    const instance = harness({
+      checkRunner,
+      outcomes: [outcome({ status: 'PASS', reason: 'Looks complete.' })],
+    })
     await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'keep working')
-    for (let count = 1; count <= 3; count += 1) {
-      await runTurn(instance, { tool: 'bash' })
-      await vi.advanceTimersByTimeAsync(800)
-      expect(instance.messages).toHaveLength(count)
+    await instance.command('goal', 'fix types')
+    await runTurn(instance)
+    expect(latestState(instance).loop.verdictHistory[0]).toMatchObject({
+      status: 'FAIL',
+      reason: 'Automated checks failed: Typecheck.',
+    })
+    expect(latestState(instance).goal.status).toBe('active')
+  })
+
+  test('stops after an oscillating verdict', async () => {
+    const repeated = outcome({ reason: 'Button remains broken at src/ui.ts:10.' })
+    const instance = harness({ outcomes: [repeated, repeated, repeated] })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'repair button')
+    await runTurn(instance)
+    await vi.advanceTimersByTimeAsync(800)
+    await runTurn(instance)
+    expect(latestState(instance).enabled).toBe(true)
+    await runTurn(instance)
+    expect(latestMode(instance)).toMatchObject({
+      mode: 'goal_paused',
+      state: {
+        enabled: false,
+        reason: 'stuck',
+        goal: { status: 'stuck' },
+        loop: { iteration: 3 },
+      },
+    })
+    expect(latestState(instance).loop.stopReason).toContain('same review failure')
+    expect(instance.busEvents.at(-1)).toMatchObject({
+      name: '@nothingrotf/goal/review-stop',
+    })
+  })
+
+  test('preserves review steering for the coder and subsequent reviews', async () => {
+    const reviewer = new FakeReviewer()
+    const instance = harness({ reviewer })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'review steering')
+    const gate = reviewer.hold()
+    await runTurn(instance)
+    expect(latestState(instance).loop.phase).toBe('reviewing')
+    const result = await instance.emit('input', {
+      text: 'Preserve the CLI output.',
+      images: [{ type: 'image', data: 'AA==', mimeType: 'image/png' }],
+      source: 'user',
+    })
+    expect(result).toEqual({ action: 'handled' })
+    expect(reviewer.steering).toEqual(['Preserve the CLI output.'])
+    expect(reviewer.imageSteering[0]).toHaveLength(1)
+    gate.resolve(outcome({ reason: 'CLI output changed.' }))
+    await flushAsync()
+    expect(latestState(instance).loop.nextPrompt).toContain('Preserve the CLI output.')
+    expect(latestState(instance).loop.userSteering).toEqual(['Preserve the CLI output.'])
+    expect(latestState(instance).loop.pendingSteering).toEqual([])
+    await runTurn(instance)
+    expect(reviewer.calls.at(-1).state.loop.userSteering).toEqual(['Preserve the CLI output.'])
+  })
+
+  test('restarts a review when steering delivery fails', async () => {
+    const reviewer = new FakeReviewer([
+      outcome({ status: 'PASS', reason: 'The restarted review verified the note.' }),
+    ])
+    reviewer.acceptSteering = false
+    const instance = harness({ reviewer })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'review delivery race')
+    reviewer.hold()
+    await runTurn(instance)
+    await instance.emit('input', {
+      text: 'Check the failure path.',
+      images: [],
+      source: 'user',
+    })
+    await flushAsync()
+    expect(reviewer.calls).toHaveLength(2)
+    expect(reviewer.calls[1].state.loop.pendingSteering).toContain('Check the failure path.')
+    expect(latestMode(instance)).toEqual({ version: 3, mode: 'none' })
+  })
+
+  test('caps queued reviewer steering at five messages', async () => {
+    const reviewer = new FakeReviewer()
+    const instance = harness({ reviewer })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'bounded steering')
+    const gate = reviewer.hold()
+    await runTurn(instance)
+    for (let index = 1; index <= 6; index += 1) {
+      await instance.emit('input', {
+        text: `Review note ${index}`,
+        images: [],
+        source: 'user',
+      })
     }
+    expect(reviewer.steering).toHaveLength(5)
+    expect(latestState(instance).loop.pendingSteering).toHaveLength(5)
+    gate.resolve(outcome({ status: 'PASS', reason: 'Verified with steering.' }))
+    await flushAsync()
   })
 
-  test('does not continue while the agent is busy or the editor has text', async () => {
-    const instance = harness()
+  test('cancels review when the user pauses the goal', async () => {
+    const reviewer = new FakeReviewer()
+    const instance = harness({ reviewer })
     await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'stay quiet')
-    instance.setEditorText('draft')
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
-    instance.setEditorText('')
-    instance.setPending(true)
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
+    await instance.command('goal', 'safely pause')
+    reviewer.hold()
+    await runTurn(instance)
+    expect(latestState(instance).loop.phase).toBe('reviewing')
+    await instance.command('goal', 'pause')
+    await flushAsync()
+    expect(reviewer.cancelCount).toBeGreaterThan(0)
+    expect(latestState(instance)).toMatchObject({
+      enabled: false,
+      goal: { status: 'paused' },
+      loop: { phase: 'between' },
+    })
   })
 
-  test('pauses the goal when the user aborts a run', async () => {
+  test('charges cancelled reviewer usage without applying its verdict', async () => {
+    const reviewer = new FakeReviewer()
+    reviewer.cancel = async () => {
+      reviewer.gate?.reject(
+        new GoalReviewAbortedError('Paused.', {
+          input: 100,
+          output: 20,
+          cacheRead: 500,
+          cacheWrite: 30,
+        }),
+      )
+      reviewer.gate = undefined
+    }
+    const instance = harness({ reviewer })
+    await instance.emit('session_start')
+    await instance.command('goal', 'set pause review accounting')
+    reviewer.hold()
+    await runTurn(instance, { usage: { input: 10, output: 5 } })
+    await instance.command('goal', 'pause')
+    expect(latestState(instance).goal.tokensUsed).toBe(165)
+    expect(latestState(instance).loop.verdictHistory).toEqual([])
+    expect(latestState(instance).goal.status).toBe('paused')
+  })
+
+  test('cancels stale reviews before an external coding turn starts', async () => {
+    const reviewer = new FakeReviewer()
+    const instance = harness({ reviewer })
+    await instance.emit('session_start')
+    await instance.command('goal', 'review current code only')
+    const gate = reviewer.hold()
+    await runTurn(instance)
+    await instance.emit('agent_start')
+    gate.resolve(outcome({ status: 'PASS' }))
+    await flushAsync()
+    expect(latestState(instance).loop.phase).toBe('coding')
+    expect(latestState(instance).loop.iteration).toBe(0)
+    expect(instance.entries.some((entry) => entry.customType === 'pi-goal-completed')).toBe(false)
+  })
+
+  test('waits for late steering delivery before accepting PASS', async () => {
+    const reviewer = new FakeReviewer([outcome({ reason: 'The new requirement needs work.' })])
+    const delivery = Promise.withResolvers()
+    reviewer.steer = async () => await delivery.promise
+    const instance = harness({ reviewer })
+    await instance.emit('session_start')
+    await instance.command('goal', 'review with late guidance')
+    const gate = reviewer.hold()
+    await runTurn(instance)
+    const input = instance.emit('input', { text: 'Check the cancellation path.', source: 'user' })
+    await flushAsync()
+    gate.resolve(outcome({ status: 'PASS' }))
+    await flushAsync()
+    expect(latestState(instance).loop.iteration).toBe(0)
+    delivery.resolve(false)
+    await input
+    await flushAsync()
+    expect(reviewer.calls).toHaveLength(2)
+    expect(reviewer.calls[1].state.loop.pendingSteering).toContain('Check the cancellation path.')
+    expect(latestState(instance).loop.verdictHistory[0].status).toBe('FAIL')
+  })
+
+  test('cancels an old review before goal replacement', async () => {
+    const reviewer = new FakeReviewer()
+    const instance = harness({ reviewer })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'first objective')
+    const firstId = latestState(instance).goal.id
+    reviewer.hold()
+    await runTurn(instance)
+    await instance.command('goal', 'set replacement objective')
+    expect(latestState(instance)).toMatchObject({
+      enabled: true,
+      goal: { objective: 'replacement objective', status: 'active' },
+      loop: { iteration: 0, phase: 'coding', verdictHistory: [] },
+    })
+    expect(latestState(instance).goal.id).not.toBe(firstId)
+    expect(reviewer.cancelCount).toBeGreaterThan(0)
+  })
+
+  test('launches a final review when an idle budget becomes exhausted', async () => {
+    const reviewer = new FakeReviewer([
+      outcome({ reason: 'One fix remains.' }),
+      outcome({ status: 'PASS', reason: 'The bounded goal passes.' }),
+    ])
+    const instance = harness({ reviewer })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'finish within budget --tokens=100')
+    await runTurn(instance, { usage: { output: 6 } })
+    expect(latestState(instance).loop.phase).toBe('between')
+    await instance.command('goal', 'budget 1')
+    await flushAsync()
+    expect(reviewer.calls).toHaveLength(2)
+    expect(latestMode(instance)).toEqual({ version: 3, mode: 'none' })
+    expect(instance.busEvents.at(-1)).toMatchObject({
+      name: '@nothingrotf/goal/review-stop',
+      data: { reason: 'completed' },
+    })
+  })
+
+  test('configures and resumes a stopped goal', async () => {
+    const instance = harness({ outcomes: [outcome()] })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'one try --max=1')
+    await runTurn(instance)
+    expect(latestState(instance).goal.status).toBe('stuck')
+    await instance.command('goal', 'resume')
+    expect(instance.notices.at(-1).text).toContain('Increase the iteration cap')
+    await instance.command('goal', 'max 3')
+    await instance.command('goal', 'reviewer anthropic/reviewer')
+    await instance.command('goal', 'probe on')
+    await instance.command('goal', 'resume')
+    expect(latestState(instance)).toMatchObject({
+      enabled: true,
+      goal: { status: 'active' },
+      loop: { maxIterations: 3, reviewModel: 'anthropic/reviewer', runtimeProbe: true },
+    })
+  })
+
+  test('pauses interrupted turns without a review', async () => {
     const instance = harness()
     await instance.emit('session_start', { reason: 'startup' })
     await instance.command('goal', 'long task')
-    await runTurn(instance, { tool: 'read', stopReason: 'aborted' })
+    await runTurn(instance, { stopReason: 'aborted', usage: { output: 4 } })
+    expect(instance.reviewer.calls).toHaveLength(0)
+    expect(latestState(instance)).toMatchObject({
+      enabled: false,
+      goal: { status: 'paused', tokensUsed: 4 },
+    })
+  })
+
+  test('migrates v2 state and pauses active goals on resume', async () => {
+    const instance = harness({
+      branch: [
+        {
+          type: 'custom',
+          customType: 'pi-goal-mode',
+          data: { version: 2, mode: 'goal', goal: legacyGoal() },
+        },
+      ],
+    })
+    await instance.emit('session_start', { reason: 'resume' })
+    expect(latestMode(instance)).toMatchObject({
+      version: 3,
+      mode: 'goal_paused',
+      state: {
+        goal: { status: 'paused', tokensUsed: 10 },
+        loop: { iteration: 0, maxIterations: 5, phase: 'between' },
+      },
+    })
+    expect(instance.notices.at(-1).text).toContain('Goal paused on session resume')
+  })
+
+  test('reviews under an external loop but leaves wake ownership external', async () => {
+    const branch = [{ type: 'custom', customType: 'pi-loop-state', data: { status: 'active' } }]
+    const instance = harness({ branch })
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'ship under loop')
+    await runTurn(instance)
+    expect(instance.reviewer.calls).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(800)
     expect(instance.messages).toHaveLength(0)
-    expect(latestMode(instance)).toMatchObject({ mode: 'goal_paused', goal: { status: 'paused' } })
-    expect(instance.notices.at(-1)).toEqual({
-      text: 'Goal paused. Use /goal resume to continue.',
-      level: 'info',
-    })
-    expect(instance.statuses.get('pi-goal')).toBeUndefined()
-    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · paused ▾')
-    expect(instance.activeTools()).toContain('goal')
   })
 
-  test('accounts tokens and time and flips to budget-limited with a steer', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'bounded work')
-    await instance.command('goal', 'budget 10')
-    expect(instance.notices.at(-1).text).toBe('Goal budget set to 10.')
-    expect(latestMode(instance).goal.tokenBudget).toBe(10)
-
-    await instance.emit('agent_start')
-    await instance.emit('turn_start', { turnIndex: 0, timestamp: Date.now() })
-    vi.setSystemTime(13_000)
-    await instance.emit('message_end', {
-      message: assistant({ input: 4, output: 2, cacheRead: 50 }),
-    })
-    await instance.emit('tool_execution_end', {
-      toolCallId: 't',
-      toolName: 'read',
-      result: {},
-      isError: false,
-    })
-    expect(latestMode(instance).goal).toMatchObject({
-      tokensUsed: 6,
-      timeUsedSeconds: 3,
-      status: 'active',
-    })
-    expect(instance.statuses.get('pi-goal')).toBeUndefined()
-    expect(instance.renderWidget().join('\n')).toContain('6/10 tokens')
-
-    await instance.emit('message_end', { message: assistant({ input: 3, output: 3 }) })
-    await instance.emit('tool_execution_end', {
-      toolCallId: 't2',
-      toolName: 'read',
-      result: {},
-      isError: false,
-    })
-    expect(latestMode(instance).goal).toMatchObject({ tokensUsed: 12, status: 'budget-limited' })
-    expect(instance.messages.at(-1)).toMatchObject({
-      message: { customType: 'goal-budget-limit', display: false },
-      options: { triggerTurn: false, deliverAs: 'steer' },
-    })
-
-    await instance.emit('agent_end', { messages: [assistant({})] })
-    await instance.emit('agent_settled')
-    await vi.advanceTimersByTimeAsync(800)
-    expect(
-      instance.messages.filter((entry) => entry.message.customType === 'goal-continuation'),
-    ).toHaveLength(0)
-  })
-
-  test('replaces the active goal with /goal set and refuses bare objectives', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'first')
-    const firstId = latestMode(instance).goal.id
-    await instance.command('goal', 'second')
-    expect(instance.notices.at(-1).text).toContain('Goal mode is already active.')
-    expect(latestMode(instance).goal.objective).toBe('first')
-    await instance.command('goal', 'set second')
-    expect(latestMode(instance).goal.objective).toBe('second')
-    expect(latestMode(instance).goal.id).not.toBe(firstId)
-    expect(instance.userMessages.at(-1).content).toBe('second')
-  })
-
-  test('pauses, resumes, and refuses objectives while paused', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'release package')
-    await instance.command('goal', 'pause')
-    expect(latestMode(instance).mode).toBe('goal_paused')
-    expect(instance.notices.at(-1).text).toBe('Goal mode paused.')
-    expect(instance.activeTools()).toContain('goal')
-
-    await instance.command('goal', 'another objective')
-    expect(instance.notices.at(-1)).toEqual({
-      text: 'Resume the current goal first, or drop it before setting a new objective.',
-      level: 'warning',
-    })
-    await instance.command('goal', 'budget 5')
-    expect(instance.notices.at(-1).text).toBe('Resume the goal before adjusting the budget.')
-
-    await instance.command('goal', 'resume')
-    expect(latestMode(instance)).toMatchObject({ mode: 'goal', goal: { status: 'active' } })
-    expect(instance.notices.at(-1).text).toBe('Goal mode resumed.')
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages.at(-1).message.customType).toBe('goal-continuation')
-  })
-
-  test('opens the menu for a bare /goal and applies the choice', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'menu target')
-    instance.setSelectAnswer('Pause')
-    await instance.command('goal', '')
-    expect(latestMode(instance).mode).toBe('goal_paused')
-    instance.setSelectAnswer('Resume')
-    await instance.command('goal', '')
-    expect(latestMode(instance).mode).toBe('goal')
-    instance.setSelectAnswer('Show details')
-    await instance.command('goal', 'show')
-    expect(instance.notices.at(-1).text).toContain('Objective: menu target')
-    expect(instance.notices.at(-1).text).toContain('Tokens: 0 (no budget)')
-  })
-
-  test('drops a goal after confirmation', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'discard later')
-    instance.setConfirmAnswer(false)
-    await instance.command('goal', 'drop')
-    expect(latestMode(instance).mode).toBe('goal')
-    instance.setConfirmAnswer(true)
-    await instance.command('goal', 'drop')
-    expect(latestMode(instance).mode).toBe('none')
-    expect(instance.notices.at(-1).text).toBe('Goal dropped.')
-    expect(instance.activeTools()).not.toContain('goal')
-    expect(instance.statuses.get('pi-goal')).toBeUndefined()
-  })
-
-  test('rejects invalid budgets', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'budget 5')
-    expect(instance.notices.at(-1).text).toBe('No active goal.')
-    await instance.command('goal', 'objective')
-    await instance.command('goal', 'budget nope')
-    expect(instance.notices.at(-1).text).toBe('Goal budget must be a positive integer or `off`.')
-    await instance.command('goal', 'budget off')
-    expect(instance.notices.at(-1).text).toBe('Goal budget cleared.')
-  })
-
-  test('uses a closed tool schema', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    expect(Value.Check(instance.schema(), { op: 'get' })).toBe(true)
-    expect(Value.Check(instance.schema(), { op: 'get', extra: true })).toBe(false)
-    expect(Value.Check(instance.schema(), { op: 'set' })).toBe(false)
-  })
-
-  test('drives the goal from the tool and exits after completion', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    const missing = await instance.tool({ op: 'get' })
-    expect(missing.content[0].text).toBe('No active goal.')
-    await expect(instance.tool({ op: 'complete' })).rejects.toThrow(
-      'cannot complete goal because no goal is active',
-    )
-    await expect(instance.tool({ op: 'create', objective: '  ' })).rejects.toThrow(
-      'objective is required when op=create',
-    )
-
-    const created = await instance.tool({ op: 'create', objective: 'tool goal', token_budget: 50 })
-    expect(created.details).toMatchObject({
-      op: 'create',
-      goal: { objective: 'tool goal' },
-      remainingTokens: 50,
-    })
-    expect(created.content[0].text).toContain('Remaining tokens: 50')
-    await expect(instance.tool({ op: 'create', objective: 'again' })).rejects.toThrow(
-      'cannot create a new goal because this session already has a goal',
-    )
-
-    await instance.emit('agent_start')
-    await instance.emit('turn_start', { turnIndex: 0, timestamp: Date.now() })
-    vi.setSystemTime(15_000)
-    const completed = await instance.tool({ op: 'complete' })
-    expect(completed.details.goal.status).toBe('complete')
-    expect(completed.content[0].text).toContain(
-      'Goal achieved. Report final budget usage to the user',
-    )
-    expect(completed.content[0].text).toContain('time used: 5 seconds')
-    await expect(instance.tool({ op: 'complete' })).rejects.toThrow('goal is already complete')
-
-    await instance.emit('agent_end', { messages: [assistant({})] })
-    await instance.emit('agent_settled')
-    expect(latestMode(instance)).toEqual({ version: 2, mode: 'none' })
-    expect(instance.entries.at(-1)).toMatchObject({
-      customType: 'pi-goal-completed',
-      data: { objective: 'tool goal', tokenBudget: 50 },
-    })
-    expect(instance.notices.at(-1).text).toBe('Goal mode completed.')
-    expect(instance.activeTools()).not.toContain('goal')
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
-
-    const next = await instance.tool({ op: 'create', objective: 'phase two' })
-    expect(next.details.goal.objective).toBe('phase two')
-  })
-
-  test('resumes and drops from the tool', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'tool controlled')
-    await instance.command('goal', 'pause')
-    const paused = await instance.tool({ op: 'get' })
-    expect(paused.content[0].text).toContain('Status: paused')
-    const resumed = await instance.tool({ op: 'resume' })
-    expect(resumed.details.goal.status).toBe('active')
-    expect(latestMode(instance).mode).toBe('goal')
-    const dropped = await instance.tool({ op: 'drop' })
-    expect(dropped.details.goal.status).toBe('dropped')
-    expect(latestMode(instance).mode).toBe('none')
-    expect(instance.activeTools()).not.toContain('goal')
-  })
-
-  test('starts a guided interview with the goal tool exposed', async () => {
+  test('starts guided interview and keeps the goal tool exposed', async () => {
     const instance = harness()
     await instance.emit('session_start', { reason: 'startup' })
     await instance.command('guided-goal', 'make <ci> green')
@@ -586,158 +738,57 @@ describe('goal lifecycle', () => {
     expect(instance.messages.at(-1).message.content).toContain(
       '<rough-goal>\nmake &lt;ci&gt; green\n</rough-goal>',
     )
-    await instance.command('guided-goal', '')
-    expect(instance.messages.at(-1).message.content).toContain('No objective stated')
+    expect(instance.messages.at(-1).message.content).toContain('max_iterations')
   })
 
-  test('pauses an active goal on session resume', async () => {
-    const instance = harness([
-      {
-        type: 'custom',
-        customType: 'pi-goal-mode',
-        data: { version: 2, mode: 'goal', goal: storedGoal() },
-      },
-    ])
-    await instance.emit('session_start', { reason: 'resume' })
-    expect(latestMode(instance)).toMatchObject({
-      mode: 'goal_paused',
-      goal: { status: 'paused', tokensUsed: 10 },
+  test('uses a closed schema and renders review metadata', async () => {
+    const instance = harness()
+    await instance.emit('session_start', { reason: 'startup' })
+    expect(
+      Value.Check(instance.schema(), {
+        op: 'create',
+        objective: 'ship',
+        max_iterations: 7,
+        runtime_probe: true,
+      }),
+    ).toBe(true)
+    expect(Value.Check(instance.schema(), { op: 'get', extra: true })).toBe(false)
+    expect(
+      instance.renderCall({
+        op: 'create',
+        objective: 'ship it',
+        token_budget: 5000,
+        max_iterations: 7,
+      }),
+    ).toContain('budget 5,000 · max 7')
+    const created = await instance.tool({
+      op: 'create',
+      objective: 'ship it',
+      token_budget: 5000,
+      max_iterations: 7,
     })
-    expect(instance.notices.at(-1).text).toBe(
-      'Goal paused on session resume. Use /goal resume to continue.',
-    )
-    expect(instance.activeTools()).toContain('goal')
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
+    expect(instance.renderResult(created)).toContain('review 0/7')
+    expect(
+      instance.renderResult({
+        content: [],
+        details: {
+          op: 'get',
+          goal: null,
+          loop: null,
+          remainingTokens: null,
+          completionBudgetReport: null,
+        },
+      }),
+    ).toContain('no active goal')
   })
 
   test('does not register the editor panel outside TUI mode', async () => {
-    const instance = harness([], 'rpc')
+    const instance = harness({ mode: 'rpc' })
     await instance.emit('session_start', { reason: 'startup' })
     expect(instance.widgetCalls).toEqual([])
   })
 
-  test('restores a paused goal and ignores invalid entries', async () => {
-    const instance = harness([
-      {
-        type: 'custom',
-        customType: 'pi-goal-mode',
-        data: { version: 2, mode: 'goal_paused', goal: storedGoal({ status: 'paused' }) },
-      },
-      { type: 'custom', customType: 'pi-goal-mode', data: { version: 1 } },
-    ])
-    await instance.emit('session_start', { reason: 'resume' })
-    expect(
-      instance.notices.some((notice) => notice.text === 'Ignored an invalid persisted goal state.'),
-    ).toBe(true)
-    const result = await instance.tool({ op: 'get' })
-    expect(result.details.goal).toMatchObject({ objective: 'restore me', status: 'paused' })
-    expect(modeEntries(instance)).toHaveLength(0)
-  })
-
-  test('clears state after a none entry', async () => {
-    const instance = harness([
-      {
-        type: 'custom',
-        customType: 'pi-goal-mode',
-        data: { version: 2, mode: 'goal', goal: storedGoal() },
-      },
-      { type: 'custom', customType: 'pi-goal-mode', data: { version: 2, mode: 'none' } },
-    ])
-    await instance.emit('session_start', { reason: 'resume' })
-    expect(instance.activeTools()).not.toContain('goal')
-    const result = await instance.tool({ op: 'get' })
-    expect(result.content[0].text).toBe('No active goal.')
-  })
-
-  test('appends live todo state to the goal context when todo_write is active', async () => {
-    const instance = harness([
-      todoEntry([
-        { id: '1', content: 'Read <config>', status: 'completed' },
-        { id: '2', content: 'Write tests', status: 'in_progress' },
-      ]),
-    ])
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'ship with todos')
-    const withoutTodoTool = await instance.emit('before_agent_start', { systemPrompt: 'base' })
-    expect(withoutTodoTool.message.content).not.toContain('<todo_context>')
-
-    instance.setActiveTools([...instance.activeTools(), 'todo_write'])
-    const injected = await instance.emit('before_agent_start', { systemPrompt: 'base' })
-    expect(injected.message.content).toContain('</goal_context>\n<todo_context>')
-    expect(injected.message.content).toContain('Overall: 1/2 done, 1 open.')
-    expect(injected.message.content).toContain('- [completed] #1 Read &lt;config&gt;')
-    expect(injected.message.content).toContain('- [in_progress] #2 Write tests')
-  })
-
-  test('renders the goal tool call and result for the TUI', async () => {
-    const instance = harness()
-    await instance.emit('session_start', { reason: 'startup' })
-    expect(instance.renderCall({ op: 'create', objective: 'ship it', token_budget: 5000 })).toBe(
-      '<muted>⏳</muted> <accent>Goal</accent>: <muted>set</muted> <muted>"ship it"</muted> · budget 5,000',
-    )
-    expect(instance.renderCall({ op: 'get' })).toBe(
-      '<muted>⏳</muted> <accent>Goal</accent>: <muted>check</muted>',
-    )
-    const created = await instance.tool({ op: 'create', objective: 'ship it', token_budget: 5000 })
-    expect(instance.renderResult(created)).toBe(
-      [
-        '<accent>◎</accent> <accent>Goal</accent>: <muted>set</muted> <accent>⟦active⟧</accent>',
-        '  <muted>"ship it"</muted>',
-        '  0 / 5,000 tokens (5,000 left)',
-      ].join('\n'),
-    )
-    await instance.emit('agent_start')
-    await instance.emit('turn_start', { turnIndex: 0, timestamp: Date.now() })
-    vi.setSystemTime(72_000)
-    const completed = await instance.tool({ op: 'complete' })
-    expect(instance.renderResult(completed)).toBe(
-      [
-        '<accent>◎</accent> <accent>Goal</accent>: <muted>complete</muted> <success>⟦complete⟧</success>',
-        '  <muted>"ship it"</muted>',
-        '  0 / 5,000 tokens (5,000 left) · 1m 2s elapsed',
-        '  Report',
-        '    <muted>Goal achieved. Report final budget usage to the user: tokens used: 0 of 5000; time used: 62 seconds.</muted>',
-      ].join('\n'),
-    )
-    const dropped = await instance.tool({ op: 'get' })
-    expect(instance.renderResult(dropped)).toContain('<success>⟦complete⟧</success>')
-    expect(
-      instance.renderResult({ content: [{ type: 'text', text: 'boom' }], details: undefined }),
-    ).toBe('✘ <accent>Goal</accent>\n  boom')
-    expect(
-      instance.renderResult({
-        content: [],
-        details: { op: 'get', goal: null, remainingTokens: null, completionBudgetReport: null },
-      }),
-    ).toBe(
-      '<warning>⚠</warning> <accent>Goal</accent>: <muted>check</muted> <warning>no active goal</warning>',
-    )
-  })
-
-  test('does not continue while a scheduled or repeat loop is active', async () => {
-    const branch = []
-    const instance = harness(branch)
-    await instance.emit('session_start', { reason: 'startup' })
-    await instance.command('goal', 'ship under a loop')
-    branch.push({ type: 'custom', customType: 'pi-loop-state', data: { status: 'active' } })
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
-    branch.push({ type: 'custom', customType: 'pi-loop-state', data: { status: 'stopped' } })
-    branch.push({ type: 'custom', customType: 'pi-loop-repeat', data: { enabled: true } })
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(0)
-    branch.push({ type: 'custom', customType: 'pi-loop-repeat', data: { enabled: false } })
-    branch.push({ type: 'custom', customType: 'pi-loop-repeat', data: { nope: true } })
-    await runTurn(instance, { tool: 'read' })
-    await vi.advanceTimersByTimeAsync(800)
-    expect(instance.messages).toHaveLength(1)
-    expect(instance.messages[0].message.customType).toBe('goal-continuation')
-  })
-
-  test('persists wall-clock usage on shutdown', async () => {
+  test('persists wall time and cancels review on shutdown', async () => {
     const instance = harness()
     await instance.emit('session_start', { reason: 'startup' })
     await instance.command('goal', 'shutdown safe')
@@ -745,10 +796,7 @@ describe('goal lifecycle', () => {
     await instance.emit('turn_start', { turnIndex: 0, timestamp: Date.now() })
     vi.setSystemTime(14_000)
     await instance.emit('session_shutdown')
-    expect(latestMode(instance)).toMatchObject({
-      mode: 'goal',
-      goal: { status: 'active', timeUsedSeconds: 4 },
-    })
+    expect(latestState(instance).goal.timeUsedSeconds).toBe(4)
     expect(instance.widgetCalls.at(-1)).toMatchObject({ key: 'goal', factory: undefined })
   })
 })

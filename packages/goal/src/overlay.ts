@@ -9,10 +9,7 @@ const widgetKey = 'goal'
 export type GoalOverlayTheme = Pick<Theme, 'bg' | 'bold' | 'fg'> & Partial<Pick<Theme, 'getBgAnsi'>>
 
 function dockInset(width: number): number {
-  if (width >= 110) return 4
-  if (width >= 80) return 3
-  if (width >= 56) return 2
-  return width >= 12 ? 1 : 0
+  return Math.min(3, Math.max(0, Math.floor(width) - 1))
 }
 
 function oneLine(value: string): string {
@@ -51,13 +48,17 @@ function fitLine(line: string, width: number): string {
 }
 
 function panelTone(status: GoalStatus, enabled: boolean): 'accent' | 'muted' | 'warning' {
+  if (status === 'stuck' || status === 'budget-limited') return 'warning'
   if (!enabled || status === 'paused') return 'muted'
-  if (status === 'budget-limited') return 'warning'
   return 'accent'
 }
 
 function statusLabel(state: GoalModeState): string {
-  return state.enabled ? state.goal.status : 'paused'
+  if (!state.enabled) return state.goal.status
+  if (state.loop.phase === 'reviewing') {
+    return `reviewing ${state.loop.iteration + 1}/${state.loop.maxIterations}`
+  }
+  return `coding ${Math.min(state.loop.iteration + 1, state.loop.maxIterations)}/${state.loop.maxIterations}`
 }
 
 function tokenLabel(state: GoalModeState): string {
@@ -68,9 +69,13 @@ function tokenLabel(state: GoalModeState): string {
 }
 
 function footerLabel(state: GoalModeState): string {
+  if (state.goal.status === 'stuck') return state.loop.stopReason ?? 'goal stopped'
   if (!state.enabled || state.goal.status === 'paused') return 'paused · /goal resume'
-  if (state.goal.status === 'budget-limited') return 'token budget reached'
-  return 'continuing toward the objective'
+  if (state.loop.phase === 'reviewing') return 'fresh independent review'
+  if (state.goal.status === 'budget-limited') return 'token budget reached · final review'
+  const verdict = state.loop.verdictHistory.at(-1)
+  if (verdict !== undefined) return `${verdict.status} · correcting reviewer findings`
+  return 'working toward reviewer PASS'
 }
 
 function renderPanel(
@@ -84,59 +89,19 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const panelWidth = Math.max(1, safeWidth - inset * 2)
+  const innerWidth = safeWidth - inset
   const outer = ' '.repeat(inset)
-  const border = (text: string) => theme.fg(tone, text)
-  const background = theme.getBgAnsi?.('toolPendingBg') ?? ''
-  const surface = (content: string) =>
-    `${outer}${theme.bg('toolPendingBg', content.replaceAll('\u001B[0m', `\u001B[0m${background}`))}`
-  if (panelWidth < 8) return [surface(truncateToWidth(body, panelWidth, '…'))]
-
-  const maxTitleWidth = Math.max(1, Math.floor(panelWidth * 0.62))
-  const titleText = truncateToWidth(` ${title} `, maxTitleWidth, '')
-  const titleChip = theme.bold(theme.fg(tone, titleText))
-  const rightBudget = Math.max(0, panelWidth - visibleWidth(titleText) - 8)
-  const rightText = truncateToWidth(titleRight, rightBudget, '')
-  const right = rightText.length === 0 ? '' : ` ${theme.fg('dim', rightText)} `
-  const topFill = '─'.repeat(
-    Math.max(
-      0,
-      panelWidth - visibleWidth(titleText) - visibleWidth(right) - (right === '' ? 3 : 4),
-    ),
-  )
-  const top =
-    right === ''
-      ? surface(`${border('╭─')}${titleChip}${border(`${topFill}╮`)}`)
-      : surface(`${border('╭─')}${titleChip}${border(topFill)}${right}${border('─╮')}`)
-
-  const innerWidth = Math.max(1, panelWidth - 6)
-  const bodyLine = surface(
-    `${border('│')}  ${fitLine(theme.fg('muted', ` ${oneLine(body)}`), innerWidth)}  ${border('│')}`,
-  )
-  const leftFooterText = truncateToWidth(
-    footer,
-    Math.max(0, Math.min(Math.floor(panelWidth * 0.6), panelWidth - 5)),
-    '',
-  )
-  const rightFooterText = '/goal drop'
-  const leftFooter = leftFooterText.length === 0 ? '' : ` ${theme.fg('dim', leftFooterText)} `
-  const availableRight = Math.max(0, panelWidth - visibleWidth(leftFooter) - 8)
-  const clippedRight = truncateToWidth(rightFooterText, availableRight, '')
-  const rightFooter = clippedRight.length === 0 ? '' : ` ${theme.fg('dim', clippedRight)} `
-  const bottomFill = '─'.repeat(
-    Math.max(
-      0,
-      panelWidth -
-        visibleWidth(leftFooter) -
-        visibleWidth(rightFooter) -
-        (rightFooter === '' ? 3 : 4),
-    ),
-  )
-  const bottom =
-    rightFooter === ''
-      ? surface(`${border('╰─')}${leftFooter}${border(`${bottomFill}╯`)}`)
-      : surface(`${border('╰─')}${leftFooter}${border(bottomFill)}${rightFooter}${border('─╯')}`)
-  return [top, bodyLine, bottom]
+  const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
+  const columns = (left: string, right: string) => {
+    const clippedLeft = truncateToWidth(left, innerWidth, '…')
+    const rightWidth = Math.max(0, innerWidth - visibleWidth(clippedLeft) - 2)
+    const clippedRight = truncateToWidth(right, rightWidth, '')
+    if (clippedRight.length === 0) return line(clippedLeft)
+    return line(`${fitLine(clippedLeft, innerWidth - visibleWidth(clippedRight))}${clippedRight}`)
+  }
+  const top = columns(theme.bold(theme.fg(tone, title)), theme.fg('dim', titleRight))
+  const bottom = columns(theme.fg('dim', oneLine(footer)), theme.fg('dim', '/goal drop'))
+  return [top, line(theme.fg('muted', oneLine(body))), bottom]
 }
 
 export function renderGoalHudLines(
@@ -180,9 +145,22 @@ export class GoalOverlay {
         widgetKey,
         (tui, theme) => {
           this.tui = tui
+          let cachedState: GoalModeState | undefined
+          let cachedWidth: number | undefined
+          let cachedLines: string[] = []
           return {
-            invalidate: () => undefined,
-            render: (width: number) => renderGoalHudLines(this.getState(), theme, width),
+            invalidate: () => {
+              cachedWidth = undefined
+            },
+            render: (width: number) => {
+              const state = this.getState()
+              if (cachedWidth !== width || cachedState !== state) {
+                cachedLines = renderGoalHudLines(state, theme, width)
+                cachedWidth = width
+                cachedState = state
+              }
+              return cachedLines
+            },
           }
         },
         { placement: 'aboveEditor' },

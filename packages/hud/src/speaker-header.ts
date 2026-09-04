@@ -43,12 +43,11 @@ const brandDimAnsi = ansiForeground(empryoBrandDim)
 const textFaintAnsi = ansiForeground(empryoTextFaint)
 const textMutedAnsi = ansiForeground(empryoTextMuted)
 const textPrimaryAnsi = ansiForeground(empryoTextPrimary)
+const clockFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 
 export function formatSpeakerClock(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  const date = new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? date.toString() : clockFormatter.format(date)
 }
 
 export function speakerMotionEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
@@ -102,6 +101,7 @@ export function speakerWaitingLine(frame: WorkingFrame): string {
 
 export class SpeakerHeaderComponent implements Component {
   private readonly initialTick: number
+  private cached: { key: string; lines: string[] } | undefined
 
   constructor(
     private readonly data: SpeakerHeaderData,
@@ -112,17 +112,30 @@ export class SpeakerHeaderComponent implements Component {
     this.initialTick = source?.(data.timestamp).tick ?? 0
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.cached = undefined
+  }
 
   render(width: number): string[] {
     if (!this.visible()) return []
     const frame = this.source?.(this.data.timestamp)
+    const key = JSON.stringify([
+      width,
+      Math.floor((frame?.timestamp ?? this.data.timestamp) / 60_000),
+      frame?.active === true && frame.motion ? frame.tick : undefined,
+      frame?.waiting,
+    ])
+    if (this.cached?.key === key) return this.cached.lines
     const line = speakerHeaderLine(this.data, this.theme, frame, this.initialTick)
-    if (frame?.waiting === undefined) return [frameTranscriptLine(line, width)]
-    return [
-      frameTranscriptLine(line, width),
-      frameTranscriptLine(speakerWaitingLine(frame.waiting), width, speakerBodyIndent),
-      frameTranscriptLine('', width),
-    ]
+    const lines =
+      frame?.waiting === undefined
+        ? [frameTranscriptLine(line, width)]
+        : [
+            frameTranscriptLine(line, width),
+            frameTranscriptLine(speakerWaitingLine(frame.waiting), width, speakerBodyIndent),
+            frameTranscriptLine('', width),
+          ]
+    this.cached = { key, lines }
+    return lines
   }
 }

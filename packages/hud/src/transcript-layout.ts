@@ -4,6 +4,7 @@ import { Value } from 'typebox/value'
 
 import { childrenOf, maxTreeDepth } from './component-tree.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
+import { observeTranscript, type TranscriptSubscription } from './transcript-observer.ts'
 
 const RoleEntryComponentSchema = Type.Object({
   entry: Type.Object({
@@ -23,12 +24,6 @@ const RailEntryComponentSchema = Type.Object({
 const AssistantMessageComponentSchema = Type.Object({
   lastMessage: Type.Object({ timestamp: Type.Number() }),
 })
-
-type RailPlacement = {
-  matched: number
-  moved: number
-  unresolved: number
-}
 
 function roleOf(component: Component): 'assistant' | 'user' | undefined {
   return Value.Check(RoleEntryComponentSchema, component) ? component.entry.data.role : undefined
@@ -103,52 +98,59 @@ export function placeSpeakerEntries(root: Component): number {
 function placeDirectChildren(
   root: Component,
   openingTimestamps: ReadonlyMap<number, number>,
-): RailPlacement {
-  const placement: RailPlacement = { matched: 0, moved: 0, unresolved: 0 }
-  if (!isPlainContainer(root)) return placement
-  for (const rail of childrenOf(root).filter((child) => railTurn(child) !== undefined)) {
-    const turn = railTurn(rail)
-    if (turn === undefined) continue
-    const timestamp = openingTimestamps.get(turn)
-    if (timestamp === undefined) continue
-    const assistant = childrenOf(root).find((child) => assistantTimestamp(child) === timestamp)
-    if (assistant === undefined) {
-      placement.unresolved += 1
-      continue
-    }
-    placement.matched += 1
-    const railIndex = root.children.indexOf(rail)
-    const assistantIndex = root.children.indexOf(assistant)
-    if (railIndex < 0 || assistantIndex < 0 || railIndex === assistantIndex + 1) continue
-    root.children.splice(railIndex, 1)
-    const nextAssistantIndex = root.children.indexOf(assistant)
-    root.children.splice(nextAssistantIndex + 1, 0, rail)
-    placement.moved += 1
+): number {
+  if (!isPlainContainer(root) || openingTimestamps.size === 0) return 0
+  const entries = childrenOf(root)
+  const assistants = new Map<number, Component>()
+  for (const child of entries) {
+    const timestamp = assistantTimestamp(child)
+    if (timestamp !== undefined && !assistants.has(timestamp)) assistants.set(timestamp, child)
   }
-  return placement
+  const anchored = new Map<Component, Component[]>()
+  const rails = new Set<Component>()
+  for (const child of entries) {
+    const turn = railTurn(child)
+    const timestamp = turn === undefined ? undefined : openingTimestamps.get(turn)
+    const assistant = timestamp === undefined ? undefined : assistants.get(timestamp)
+    if (assistant === undefined) continue
+    const siblings = anchored.get(assistant) ?? []
+    siblings.push(child)
+    anchored.set(assistant, siblings)
+    rails.add(child)
+  }
+  if (rails.size === 0) return 0
+  const ordered: Component[] = []
+  for (const child of entries) {
+    if (rails.has(child)) continue
+    ordered.push(child)
+    for (const rail of anchored.get(child) ?? []) ordered.push(rail)
+  }
+  const moved = ordered.reduce(
+    (count, child, index) => count + Number(rails.has(child) && entries[index] !== child),
+    0,
+  )
+  if (moved > 0) root.children = ordered
+  return moved
 }
 
 function placeRails(
   root: Component,
   openingTimestamps: ReadonlyMap<number, number>,
   depth = 0,
-): RailPlacement {
-  if (depth > maxTreeDepth) return { matched: 0, moved: 0, unresolved: 0 }
-  const placement = placeDirectChildren(root, openingTimestamps)
+): number {
+  if (depth > maxTreeDepth) return 0
+  let moved = placeDirectChildren(root, openingTimestamps)
   for (const child of childrenOf(root)) {
-    const nested = placeRails(child, openingTimestamps, depth + 1)
-    placement.matched += nested.matched
-    placement.moved += nested.moved
-    placement.unresolved += nested.unresolved
+    moved += placeRails(child, openingTimestamps, depth + 1)
   }
-  return placement
+  return moved
 }
 
 export function placeRailsAfterOpening(
   root: Component,
   openingTimestamps: ReadonlyMap<number, number>,
 ): number {
-  return placeRails(root, openingTimestamps).moved
+  return placeRails(root, openingTimestamps)
 }
 
 export type TranscriptLayoutFix = {
@@ -174,47 +176,24 @@ export function installTranscriptLayoutFix(
   }
 
   let source = openingTimestamps
-  let active = true
-  let dirty = true
-  let deadline = Date.now() + 3000
-  let retryVersion = 0
-  const retry = () => {
-    const version = ++retryVersion
-    const render = () => {
-      if (!active || !dirty || version !== retryVersion) return
-      tui.requestRender()
-      if (dirty) setTimeout(render, 50).unref()
-    }
-    queueMicrotask(render)
+  let subscription: TranscriptSubscription | undefined
+  const subscribe = () => {
+    subscription ??= observeTranscript(tui, 10, () => {
+      placeRails(tui, source)
+    })
   }
   const fix: InstalledTranscriptLayoutFix = {
     dispose: () => {
-      active = false
-      dirty = false
-      retryVersion += 1
+      subscription?.dispose()
+      subscription = undefined
     },
-    markDirty: () => {
-      deadline = Date.now() + 3000
-      dirty = true
-      retry()
-    },
+    markDirty: () => subscription?.markDirty(),
     setSource: (next) => {
-      active = true
-      deadline = Date.now() + 3000
       source = next
-      dirty = true
+      subscribe()
     },
   }
   installed.set(tui, fix)
-  const original = tui.requestRender.bind(tui)
-  tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (active && dirty) {
-      const placement = placeRails(tui, source)
-      const complete = placement.unresolved === 0 && placement.matched >= source.size
-      if (source.size === 0 || complete || Date.now() >= deadline) dirty = false
-    }
-    original(...args)
-  }
-  retry()
+  subscribe()
   return fix
 }

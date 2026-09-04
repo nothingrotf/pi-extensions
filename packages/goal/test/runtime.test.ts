@@ -1,13 +1,21 @@
 import { describe, expect, test } from 'vite-plus/test'
 
 import { escapeXmlText, renderGoalPrompt, renderTrustedObjective } from '../src/prompts.ts'
-import { GoalRuntime, type GoalRuntimeHost, goalTokenDelta } from '../src/runtime.ts'
-import type {
-  Goal,
-  GoalModeState,
-  GoalPersistMode,
-  GoalRuntimeEvent,
-  GoalTokenUsage,
+import {
+  GoalRuntime,
+  type GoalReviewOutcome,
+  type GoalRuntimeHost,
+  goalTokenDelta,
+} from '../src/runtime.ts'
+import {
+  cloneGoalState,
+  createGoalLoop,
+  type Goal,
+  type GoalModeState,
+  type GoalPersistMode,
+  type GoalRuntimeEvent,
+  type GoalTokenUsage,
+  MAX_VERDICT_HISTORY,
 } from '../src/state.ts'
 
 function createUsage(overrides: Partial<GoalTokenUsage> = {}): GoalTokenUsage {
@@ -27,8 +35,30 @@ function createGoal(overrides: Partial<Goal> = {}): Goal {
   }
 }
 
-function cloneState(state: GoalModeState | undefined): GoalModeState | undefined {
-  return state ? { ...state, goal: { ...state.goal } } : undefined
+function createState(
+  goalOverrides: Partial<Goal> = {},
+  stateOverrides: Partial<Pick<GoalModeState, 'enabled' | 'mode' | 'reason'>> = {},
+): GoalModeState {
+  return {
+    enabled: true,
+    mode: 'active',
+    goal: createGoal(goalOverrides),
+    loop: createGoalLoop(),
+    ...stateOverrides,
+  }
+}
+
+function reviewOutcome(overrides: Partial<GoalReviewOutcome> = {}): GoalReviewOutcome {
+  return {
+    status: 'FAIL',
+    reason: 'A requirement is missing.',
+    evidence: ['src/main.ts:10'],
+    checks: [],
+    reviewerModel: 'test/reviewer',
+    report: '{"status":"FAIL"}',
+    usage: createUsage(),
+    ...overrides,
+  }
 }
 
 interface HiddenMessage {
@@ -40,7 +70,7 @@ interface HiddenMessage {
 function createHarness(
   initial: { state?: GoalModeState; usage?: GoalTokenUsage; now?: number } = {},
 ) {
-  let state = cloneState(initial.state)
+  let state = initial.state === undefined ? undefined : cloneGoalState(initial.state)
   let usage = createUsage(initial.usage)
   let now = initial.now ?? 0
   let ids = 0
@@ -48,13 +78,13 @@ function createHarness(
   const persists: { mode: GoalPersistMode; state?: GoalModeState }[] = []
   const hiddenMessages: HiddenMessage[] = []
   const host: GoalRuntimeHost = {
-    getState: () => cloneState(state),
+    getState: () => (state === undefined ? undefined : cloneGoalState(state)),
     setState: (next) => {
-      state = cloneState(next)
+      state = next === undefined ? undefined : cloneGoalState(next)
     },
     getCurrentUsage: () => createUsage(usage),
     emit: (event) => {
-      const cloned = cloneState(event.state)
+      const cloned = event.state === undefined ? undefined : cloneGoalState(event.state)
       events.push(
         cloned === undefined
           ? { type: event.type, goal: event.goal ? { ...event.goal } : null }
@@ -62,7 +92,7 @@ function createHarness(
       )
     },
     persist: (mode, persistedState) => {
-      const cloned = cloneState(persistedState)
+      const cloned = persistedState === undefined ? undefined : cloneGoalState(persistedState)
       persists.push(cloned === undefined ? { mode } : { mode, state: cloned })
     },
     sendHiddenMessage: async (message) => {
@@ -76,15 +106,15 @@ function createHarness(
   }
   return {
     runtime: new GoalRuntime(host),
-    getState: () => cloneState(state),
+    getState: () => (state === undefined ? undefined : cloneGoalState(state)),
     setState: (next: GoalModeState | undefined) => {
-      state = cloneState(next)
+      state = next === undefined ? undefined : cloneGoalState(next)
     },
     setUsage: (next: Partial<GoalTokenUsage>) => {
       usage = createUsage(next)
     },
-    advance: (ms: number) => {
-      now += ms
+    advance: (milliseconds: number) => {
+      now += milliseconds
     },
     events,
     persists,
@@ -92,7 +122,12 @@ function createHarness(
   }
 }
 
-describe('goal runtime', () => {
+async function review(harness: ReturnType<typeof createHarness>, outcome: GoalReviewOutcome) {
+  await harness.runtime.beginReview()
+  return await harness.runtime.applyReview(outcome)
+}
+
+describe('goal runtime accounting', () => {
   test('counts cache writes but ignores cache reads in token deltas', () => {
     expect(
       goalTokenDelta(
@@ -105,160 +140,199 @@ describe('goal runtime', () => {
   test('clamps token deltas at zero across usage resets', () => {
     expect(
       goalTokenDelta(
-        createUsage({ input: 10, output: 5, cacheRead: 0, cacheWrite: 2 }),
+        createUsage({ input: 10, output: 5, cacheWrite: 2 }),
         createUsage({ input: 100, output: 50, cacheRead: 500, cacheWrite: 20 }),
       ),
     ).toBe(0)
   })
 
-  test('advances wall-clock accounting only by persisted whole seconds', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-
+  test('accounts whole wall seconds and serializes token flushes', async () => {
+    const harness = createHarness({ state: createState() })
     harness.runtime.onTurnStart('turn-1', createUsage())
     harness.advance(2_500)
-    harness.setUsage({ input: 1 })
-    await harness.runtime.flushUsage('suppressed')
+    harness.setUsage({ input: 2, output: 3 })
+    await Promise.all([
+      harness.runtime.flushUsage('suppressed'),
+      harness.runtime.flushUsage('suppressed'),
+      harness.runtime.onAgentEnd({ currentUsage: createUsage({ input: 2, output: 3 }) }),
+    ])
+    expect(harness.getState()?.goal.tokensUsed).toBe(5)
     expect(harness.getState()?.goal.timeUsedSeconds).toBe(2)
     expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(2_000)
-    expect(harness.persists).toHaveLength(1)
-
-    harness.advance(400)
-    await harness.runtime.flushUsage('suppressed')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(2)
-    expect(harness.persists).toHaveLength(1)
-
-    harness.advance(700)
-    harness.setUsage({ input: 2 })
-    await harness.runtime.flushUsage('suppressed')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(3)
-    expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(3_000)
-    expect(harness.persists).toHaveLength(2)
   })
 
-  test('does not persist snapshots on wall-clock-only flushes', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.advance(2_500)
-    await harness.runtime.flushUsage('suppressed')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(2)
-    expect(harness.persists).toHaveLength(0)
-  })
-
-  test('persists wall-clock-only usage before internal aborts', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.advance(2_500)
-    await harness.runtime.onTaskAborted({ reason: 'internal' })
-    expect(harness.getState()?.enabled).toBe(true)
-    expect(harness.getState()?.goal.status).toBe('active')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(2)
-    expect(harness.persists).toHaveLength(1)
-    expect(harness.persists[0]).toMatchObject({
-      mode: 'goal',
-      state: { goal: { timeUsedSeconds: 2 } },
-    })
-  })
-
-  test('resets the wall-clock baseline when preserving an active goal after a no-goal switch', async () => {
-    const goal = createGoal()
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.setState(undefined)
-    harness.advance(10_000)
-    harness.setState({ enabled: true, mode: 'active', goal })
-
-    const resumed = await harness.runtime.onThreadResumed({ preserveActiveGoal: true })
-    harness.advance(1_000)
-    await harness.runtime.flushUsage('suppressed')
-
-    expect(resumed?.goal.status).toBe('active')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(1)
-    expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(11_000)
-  })
-
-  test('clears stale accounting when reconciling to a no-goal session', async () => {
-    const goal = createGoal()
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.setState(undefined)
-    harness.runtime.clearAccounting()
-    harness.advance(10_000)
-    harness.setState({ enabled: true, mode: 'active', goal })
-
-    await harness.runtime.onThreadResumed({ preserveActiveGoal: true })
-    harness.advance(1_000)
-    await harness.runtime.flushUsage('suppressed')
-    expect(harness.getState()?.goal.timeUsedSeconds).toBe(1)
-    expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(11_000)
-  })
-
-  test('steers only once until a budget mutation resets the cycle', async () => {
+  test('steers once when the token budget is reached', async () => {
     const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ tokenBudget: 10, tokensUsed: 8 }),
-      },
+      state: createState({ tokenBudget: 10, tokensUsed: 8 }),
     })
-
     harness.runtime.onTurnStart('turn-1', createUsage())
     harness.setUsage({ input: 2 })
     await harness.runtime.flushUsage('allowed')
-    expect(harness.getState()?.goal.status).toBe('budget-limited')
-    expect(harness.hiddenMessages).toHaveLength(1)
-    expect(harness.hiddenMessages[0]).toMatchObject({
-      customType: 'goal-budget-limit',
-      deliverAs: 'steer',
-    })
-
     harness.setUsage({ input: 5 })
     await harness.runtime.flushUsage('allowed')
-    expect(harness.hiddenMessages).toHaveLength(1)
-
-    await harness.runtime.onBudgetMutated(20)
-    expect(harness.getState()?.enabled).toBe(true)
-    expect(harness.getState()?.goal.status).toBe('active')
-    expect(harness.getState()?.goal.tokenBudget).toBe(20)
-    expect(harness.hiddenMessages).toHaveLength(1)
-
-    harness.setUsage({ input: 15 })
-    await harness.runtime.flushUsage('allowed')
     expect(harness.getState()?.goal.status).toBe('budget-limited')
-    expect(harness.hiddenMessages).toHaveLength(2)
+    expect(harness.hiddenMessages).toHaveLength(1)
+    expect(harness.hiddenMessages[0]?.customType).toBe('goal-budget-limit')
   })
 
-  test('pauses an active goal when an interruption aborts the task', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
+  test('pauses on interruption and preserves usage', async () => {
+    const harness = createHarness({ state: createState() })
     harness.runtime.onTurnStart('turn-1', createUsage())
     harness.advance(1_000)
     harness.setUsage({ output: 4 })
     await harness.runtime.onTaskAborted({ reason: 'interrupted' })
-
-    const state = harness.getState()
-    expect(state?.enabled).toBe(false)
-    expect(state?.goal.status).toBe('paused')
-    expect(state?.goal.tokensUsed).toBe(4)
-    expect(state?.goal.timeUsedSeconds).toBe(1)
+    expect(harness.getState()).toMatchObject({
+      enabled: false,
+      goal: { status: 'paused', tokensUsed: 4, timeUsedSeconds: 1 },
+      loop: { phase: 'between' },
+    })
     expect(harness.persists.at(-1)?.mode).toBe('goal_paused')
   })
+})
 
-  test('auto-pauses active goals when a thread resumes', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    const resumed = await harness.runtime.onThreadResumed()
-    expect(resumed?.enabled).toBe(false)
-    expect(resumed?.goal.status).toBe('paused')
-    expect(harness.persists.at(-1)?.mode).toBe('goal_paused')
+describe('goal review loop', () => {
+  test('creates configured loop state with five reviews by default', async () => {
+    const harness = createHarness()
+    const standard = await harness.runtime.createGoal({ objective: 'Ship it' })
+    expect(standard.loop).toMatchObject({
+      iteration: 0,
+      maxIterations: 5,
+      phase: 'coding',
+      runtimeProbe: false,
+    })
+
+    await harness.runtime.dropGoal()
+    const configured = await harness.runtime.createGoal({
+      objective: 'Ship it again',
+      maxIterations: 9,
+      reviewModel: 'provider/reviewer',
+      reviewFallbackModel: 'provider/fallback',
+      runtimeProbe: true,
+    })
+    expect(configured.loop).toMatchObject({
+      maxIterations: 9,
+      reviewModel: 'provider/reviewer',
+      reviewFallbackModel: 'provider/fallback',
+      runtimeProbe: true,
+    })
   })
 
-  test('preserves an active goal during internal reconciliation', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    const resumed = await harness.runtime.onThreadResumed({ preserveActiveGoal: true })
-    expect(resumed?.enabled).toBe(true)
-    expect(resumed?.goal.status).toBe('active')
-    expect(harness.persists).toHaveLength(0)
+  test('treats complete as a review request', async () => {
+    const harness = createHarness({ state: createState() })
+    const requested = await harness.runtime.requestReviewFromTool()
+    expect(requested.goal.status).toBe('active')
+    expect(requested.loop.reviewRequested).toBe(true)
+    expect(requested.mode).toBe('active')
   })
 
-  test('escapes XML in goal helpers and rendered prompts', () => {
+  test('only a PASS verdict completes the goal', async () => {
+    const harness = createHarness({ state: createState({ tokenBudget: 10, tokensUsed: 9 }) })
+    const application = await review(
+      harness,
+      reviewOutcome({
+        status: 'PASS',
+        reason: 'All requirements are verified.',
+        usage: createUsage({ input: 2, output: 1 }),
+      }),
+    )
+    expect(application?.decision.action).toBe('pass')
+    expect(application?.state).toMatchObject({
+      enabled: false,
+      mode: 'exiting',
+      reason: 'completed',
+      goal: { status: 'complete', tokensUsed: 12 },
+      loop: { iteration: 1, phase: 'between' },
+    })
+  })
+
+  test('continues from reviewer findings and queued steering', async () => {
+    const harness = createHarness({ state: createState() })
+    await harness.runtime.beginReview()
+    await harness.runtime.queueReviewSteering('Preserve the CLI output format.')
+    const application = await harness.runtime.applyReview(reviewOutcome())
+    expect(application?.decision.action).toBe('continue')
+    expect(application?.state.loop.nextPrompt).toContain('A requirement is missing.')
+    expect(application?.state.loop.nextPrompt).toContain('Preserve the CLI output format.')
+    expect(application?.state.loop.pendingSteering).toEqual([])
+    expect(application?.state.goal.status).toBe('active')
+  })
+
+  test('stops when the token budget expires without PASS', async () => {
+    const harness = createHarness({ state: createState({ tokenBudget: 10, tokensUsed: 8 }) })
+    const application = await review(harness, reviewOutcome({ usage: createUsage({ input: 3 }) }))
+    expect(application?.decision.action).toBe('stuck')
+    expect(application?.state.goal.status).toBe('stuck')
+    expect(application?.state.loop.stopReason).toContain('Token budget exhausted')
+  })
+
+  test('requires three matching reviews and resets the audit on resume', async () => {
+    const harness = createHarness({ state: createState() })
+    const first = await review(
+      harness,
+      reviewOutcome({ reason: 'Missing behavior at src/a.ts:10.' }),
+    )
+    expect(first?.decision.action).toBe('continue')
+    await harness.runtime.beginCodingTurn()
+    const second = await review(
+      harness,
+      reviewOutcome({ reason: 'Missing behavior at src/a.ts:25.' }),
+    )
+    expect(second?.decision.action).toBe('continue')
+    await harness.runtime.beginCodingTurn()
+    const third = await review(
+      harness,
+      reviewOutcome({ reason: 'Missing behavior at src/a.ts:30.' }),
+    )
+    expect(third?.decision.action).toBe('stuck')
+    expect(third?.state.loop.stopReason).toContain('same review failure')
+    await harness.runtime.resumeGoal()
+    await harness.runtime.beginCodingTurn()
+    const resumed = await review(
+      harness,
+      reviewOutcome({ reason: 'Missing behavior at src/a.ts:30.' }),
+    )
+    expect(resumed?.decision.action).toBe('continue')
+  })
+
+  test('stops at the iteration cap and requires a larger cap before resume', async () => {
+    const harness = createHarness()
+    await harness.runtime.createGoal({ objective: 'Finish', maxIterations: 1 })
+    const application = await review(harness, reviewOutcome())
+    expect(application?.decision.action).toBe('stuck')
+    await expect(harness.runtime.resumeGoal()).rejects.toThrow('Increase the iteration cap')
+    await harness.runtime.setMaxIterations(2)
+    const resumed = await harness.runtime.resumeGoal()
+    expect(resumed.goal.status).toBe('active')
+  })
+
+  test('bounds persisted verdict history', async () => {
+    const harness = createHarness()
+    await harness.runtime.createGoal({ objective: 'Finish', maxIterations: 12 })
+    for (let index = 0; index < MAX_VERDICT_HISTORY + 2; index += 1) {
+      const application = await review(
+        harness,
+        reviewOutcome({ reason: `Distinct failure ${index}.` }),
+      )
+      expect(application?.decision.action).toBe('continue')
+      await harness.runtime.beginCodingTurn()
+    }
+    expect(harness.getState()?.loop.iteration).toBe(MAX_VERDICT_HISTORY + 2)
+    expect(harness.getState()?.loop.verdictHistory).toHaveLength(MAX_VERDICT_HISTORY)
+    expect(harness.getState()?.loop.verdictHistory[0]?.reason).toBe('Distinct failure 2.')
+  })
+
+  test('drops state and emits the dropped goal', async () => {
+    const harness = createHarness({ state: createState({ id: 'g-99' }) })
+    const dropped = await harness.runtime.dropGoal()
+    expect(dropped?.status).toBe('dropped')
+    expect(harness.getState()).toBeUndefined()
+    expect(harness.events.at(-1)?.goal?.status).toBe('dropped')
+    expect(harness.persists.at(-1)?.mode).toBe('none')
+  })
+})
+
+describe('goal prompt safety', () => {
+  test('escapes XML-significant objective text', () => {
     const objective = 'Fix <root>&keep>safe'
     const prompt = renderGoalPrompt('active', createGoal({ objective }))
     expect(renderTrustedObjective(objective)).toBe(
@@ -266,204 +340,17 @@ describe('goal runtime', () => {
     )
     expect(prompt).toContain('Fix &lt;root&gt;&amp;keep&gt;safe')
     expect(prompt).not.toContain(objective)
-  })
-
-  test('escapes only the XML-significant characters', () => {
-    const plain = 'plain text with \'quotes\' and "double" plus unicode ✓'
-    expect(escapeXmlText(plain)).toBe(plain)
     expect(escapeXmlText('a & b < c > d')).toBe('a &amp; b &lt; c &gt; d')
   })
 
-  test('renders budget values for bounded and unbounded goals', () => {
-    const bounded = renderGoalPrompt(
+  test('renders review and budget values', () => {
+    const prompt = renderGoalPrompt(
       'continuation',
       createGoal({ tokenBudget: 50, tokensUsed: 20 }),
+      createGoalLoop({ maxIterations: 8 }),
     )
-    expect(bounded).toContain('Token budget: 50')
-    expect(bounded).toContain('Tokens remaining: 30')
-    const unbounded = renderGoalPrompt('continuation', createGoal())
-    expect(unbounded).toContain('Token budget: none')
-    expect(unbounded).toContain('Tokens remaining: unbounded')
-  })
-
-  test('flips active to budget-limited and steers when the budget drops below usage', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ tokenBudget: 100, tokensUsed: 30 }),
-      },
-    })
-    const next = await harness.runtime.onBudgetMutated(20)
-    expect(next?.goal.status).toBe('budget-limited')
-    expect(next?.goal.tokenBudget).toBe(20)
-    expect(next?.goal.tokensUsed).toBe(30)
-    expect(harness.hiddenMessages).toHaveLength(1)
-    expect(harness.hiddenMessages[0]?.customType).toBe('goal-budget-limit')
-  })
-
-  test('removes the budget when mutated to off', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ tokenBudget: 100, tokensUsed: 30 }),
-      },
-    })
-    const next = await harness.runtime.onBudgetMutated(undefined)
-    expect(next?.goal.tokenBudget).toBeUndefined()
-    expect(next?.goal.tokensUsed).toBe(30)
-  })
-
-  test('completes from the tool with mode exiting', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ tokenBudget: 100, tokensUsed: 42, timeUsedSeconds: 7 }),
-      },
-    })
-    const completed = await harness.runtime.completeGoalFromTool()
-    expect(completed.status).toBe('complete')
-    const state = harness.getState()
-    expect(state?.enabled).toBe(false)
-    expect(state?.mode).toBe('exiting')
-    expect(state?.reason).toBe('completed')
-  })
-
-  test('drops the goal, emits the dropped goal, and clears persisted state', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ id: 'g-99', objective: 'Ship soon' }),
-      },
-    })
-    const dropped = await harness.runtime.dropGoal()
-    expect(dropped?.status).toBe('dropped')
-    expect(dropped?.id).toBe('g-99')
-    expect(harness.getState()).toBeUndefined()
-    const lastEvent = harness.events.at(-1)
-    expect(lastEvent?.goal?.status).toBe('dropped')
-    expect(lastEvent?.state?.enabled).toBe(false)
-    expect(harness.persists.at(-1)?.mode).toBe('none')
-  })
-
-  test('rejects create when a non-dropped goal already exists', async () => {
-    const harness = createHarness({
-      state: { enabled: true, mode: 'active', goal: createGoal({ objective: 'Existing' }) },
-    })
-    await expect(harness.runtime.createGoal({ objective: 'Second' })).rejects.toThrow(
-      'cannot create a new goal because this session already has a goal',
-    )
-  })
-
-  test('rejects create with a blank objective or invalid budget', async () => {
-    const harness = createHarness()
-    await expect(harness.runtime.createGoal({ objective: '   ' })).rejects.toThrow(
-      'objective is required when op=create',
-    )
-    await expect(harness.runtime.createGoal({ objective: 'x', tokenBudget: 0 })).rejects.toThrow(
-      'token_budget must be a positive integer when provided',
-    )
-  })
-
-  test('replaces an active goal with a fresh active goal', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: true,
-        mode: 'active',
-        goal: createGoal({ objective: 'Existing', tokenBudget: 100 }),
-      },
-    })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.advance(1_000)
-    harness.setUsage({ input: 12 })
-
-    const next = await harness.runtime.replaceGoal({ objective: 'Second', tokenBudget: 25 })
-    expect(next.enabled).toBe(true)
-    expect(next.goal.objective).toBe('Second')
-    expect(next.goal.status).toBe('active')
-    expect(next.goal.tokenBudget).toBe(25)
-    expect(next.goal.tokensUsed).toBe(0)
-    expect(next.goal.timeUsedSeconds).toBe(0)
-    expect(next.goal.id).not.toBe('goal-1')
-    expect(harness.persists.at(-1)?.state?.goal.objective).toBe('Second')
-  })
-
-  test('rejects replace when no goal is active', async () => {
-    const harness = createHarness({
-      state: { enabled: false, mode: 'active', goal: createGoal({ status: 'paused' }) },
-    })
-    await expect(harness.runtime.replaceGoal({ objective: 'Second' })).rejects.toThrow(
-      'cannot replace goal because no goal is active',
-    )
-  })
-
-  test('allows a new goal after the previous one is complete', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: false,
-        mode: 'exiting',
-        reason: 'completed',
-        goal: createGoal({ status: 'complete' }),
-      },
-    })
-    const next = await harness.runtime.createGoal({ objective: 'Phase 4' })
-    expect(next.goal.objective).toBe('Phase 4')
-    expect(next.goal.status).toBe('active')
-    expect(next.enabled).toBe(true)
-  })
-
-  test('completes a paused goal', async () => {
-    const harness = createHarness({
-      state: {
-        enabled: false,
-        mode: 'active',
-        goal: createGoal({ status: 'paused', tokensUsed: 30 }),
-      },
-    })
-    const completed = await harness.runtime.completeGoalFromTool()
-    expect(completed.status).toBe('complete')
-    expect(harness.getState()?.mode).toBe('exiting')
-  })
-
-  test('rejects resume of a complete goal and complete of a missing goal', async () => {
-    const completeHarness = createHarness({
-      state: {
-        enabled: false,
-        mode: 'exiting',
-        reason: 'completed',
-        goal: createGoal({ status: 'complete' }),
-      },
-    })
-    await expect(completeHarness.runtime.resumeGoal()).rejects.toThrow('Goal is already complete.')
-    const emptyHarness = createHarness()
-    await expect(emptyHarness.runtime.completeGoalFromTool()).rejects.toThrow(
-      'cannot complete goal because no goal is active',
-    )
-    await expect(emptyHarness.runtime.resumeGoal()).rejects.toThrow('No paused goal.')
-  })
-
-  test('ignores tool completions for the goal tool and paused goals', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.setUsage({ output: 3 })
-    await harness.runtime.onToolCompleted('goal')
-    expect(harness.getState()?.goal.tokensUsed).toBe(0)
-    await harness.runtime.onToolCompleted('read')
-    expect(harness.getState()?.goal.tokensUsed).toBe(3)
-  })
-
-  test('serializes overlapping accounting calls', async () => {
-    const harness = createHarness({ state: { enabled: true, mode: 'active', goal: createGoal() } })
-    harness.runtime.onTurnStart('turn-1', createUsage())
-    harness.setUsage({ output: 5 })
-    await Promise.all([
-      harness.runtime.flushUsage('suppressed'),
-      harness.runtime.flushUsage('suppressed'),
-      harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 5 }) }),
-    ])
-    expect(harness.getState()?.goal.tokensUsed).toBe(5)
+    expect(prompt).toContain('Token budget: 50')
+    expect(prompt).toContain('Tokens remaining: 30')
+    expect(prompt).toContain('Completed reviews: 0/8')
   })
 })

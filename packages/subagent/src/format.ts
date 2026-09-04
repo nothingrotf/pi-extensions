@@ -122,10 +122,7 @@ export function taskLine(snapshot: SubagentSnapshot): string {
 const widgetVisibleLimit = 5
 
 function dockInset(width: number): number {
-  if (width >= 110) return 4
-  if (width >= 80) return 3
-  if (width >= 56) return 2
-  return width >= 12 ? 1 : 0
+  return Math.min(3, Math.max(0, Math.floor(width) - 1))
 }
 
 function fitLine(line: string, width: number): string {
@@ -263,56 +260,19 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const panelWidth = Math.max(1, safeWidth - inset * 2)
+  const innerWidth = safeWidth - inset
   const outer = ' '.repeat(inset)
-  const border = (text: string) => theme.fg(tone, text)
-  const background = theme.getBgAnsi?.('toolPendingBg') ?? ''
-  const surface = (content: string) =>
-    `${outer}${theme.bg('toolPendingBg', content.replaceAll('\u001B[0m', `\u001B[0m${background}`))}`
-  if (panelWidth < 8) return rows.map((row) => surface(truncateToWidth(row, panelWidth, '…')))
-
-  const maxTitleWidth = Math.max(1, Math.floor(panelWidth * 0.62))
-  const titleText = truncateToWidth(` ${title} `, maxTitleWidth, '')
-  const titleChip = theme.bold(theme.fg(tone, titleText))
-  const rightBudget = Math.max(0, panelWidth - visibleWidth(titleText) - 8)
-  const rightText = truncateToWidth(titleRight, rightBudget, '')
-  const right = rightText.length === 0 ? '' : ` ${theme.fg('dim', rightText)} `
-  const topFill = '─'.repeat(
-    Math.max(
-      0,
-      panelWidth - visibleWidth(titleText) - visibleWidth(right) - (right === '' ? 3 : 4),
-    ),
-  )
-  const top =
-    right === ''
-      ? surface(`${border('╭─')}${titleChip}${border(`${topFill}╮`)}`)
-      : surface(`${border('╭─')}${titleChip}${border(topFill)}${right}${border('─╮')}`)
-
-  const innerWidth = Math.max(1, panelWidth - 6)
-  const body = rows.map((row) =>
-    surface(`${border('│')}  ${fitLine(row, innerWidth)}  ${border('│')}`),
-  )
-  const leftText = truncateToWidth(
-    footer,
-    Math.max(0, Math.min(Math.floor(panelWidth * 0.62), panelWidth - 5)),
-    '',
-  )
-  const left = leftText.length === 0 ? '' : ` ${theme.fg('dim', leftText)} `
-  const footerRightBudget = Math.max(0, panelWidth - visibleWidth(left) - 8)
-  const clippedFooterRight = truncateToWidth(footerRight, footerRightBudget, '')
-  const rightFooter =
-    clippedFooterRight.length === 0 ? '' : ` ${theme.fg('dim', clippedFooterRight)} `
-  const bottomFill = '─'.repeat(
-    Math.max(
-      0,
-      panelWidth - visibleWidth(left) - visibleWidth(rightFooter) - (rightFooter === '' ? 3 : 4),
-    ),
-  )
-  const bottom =
-    rightFooter === ''
-      ? surface(`${border('╰─')}${left}${border(`${bottomFill}╯`)}`)
-      : surface(`${border('╰─')}${left}${border(bottomFill)}${rightFooter}${border('─╯')}`)
-  return [top, ...body, bottom]
+  const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
+  const columns = (left: string, right: string) => {
+    const clippedLeft = truncateToWidth(left, innerWidth, '…')
+    const rightWidth = Math.max(0, innerWidth - visibleWidth(clippedLeft) - 2)
+    const clippedRight = truncateToWidth(right, rightWidth, '')
+    if (clippedRight.length === 0) return line(clippedLeft)
+    return line(`${fitLine(clippedLeft, innerWidth - visibleWidth(clippedRight))}${clippedRight}`)
+  }
+  const top = columns(theme.bold(theme.fg(tone, title)), theme.fg('dim', titleRight))
+  const bottom = columns(theme.fg('dim', footer), theme.fg('dim', footerRight))
+  return [top, ...rows.map(line), bottom]
 }
 
 function groupLines(
@@ -325,7 +285,7 @@ function groupLines(
 ): string[] {
   const visible = snapshots.slice(0, widgetVisibleLimit)
   const inset = dockInset(width)
-  const panelWidth = Math.max(1, width - inset * 2)
+  const panelWidth = Math.max(1, width - inset)
   const rows: string[] = []
   if (!background && parentModel !== undefined && panelWidth >= 56) {
     rows.push(`${theme.fg('accent', '◉')} ${theme.fg('muted', modelName(parentModel))}`)
@@ -333,7 +293,7 @@ function groupLines(
   visible.forEach((snapshot, index) => {
     const connector =
       index === visible.length - 1 && snapshots.length <= visible.length ? TREE_LAST : TREE_BRANCH
-    rows.push(agentRow(snapshot, connector, panelWidth - 6, theme, now))
+    rows.push(agentRow(snapshot, connector, panelWidth, theme, now))
   })
   if (snapshots.length > visible.length) {
     rows.push(theme.fg('dim', `${TREE_LAST} +${snapshots.length - visible.length} more`))

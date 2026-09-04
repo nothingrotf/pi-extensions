@@ -2,7 +2,7 @@ import type { Component, TUI } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { childrenOf, maxTreeDepth } from './component-tree.ts'
+import { childrenOf } from './component-tree.ts'
 
 const NativeStatusSchema = Type.Object({
   kind: Type.Union([
@@ -12,8 +12,15 @@ const NativeStatusSchema = Type.Object({
     Type.Literal('working'),
   ]),
 })
+const NativeStatusHostSchema = Type.Object({
+  statusContainer: Type.Object({
+    invalidate: Type.Function([], Type.Unknown()),
+    render: Type.Function([Type.Number()], Type.Array(Type.String())),
+  }),
+})
 
 type NativeStatusKind = 'branchSummary' | 'compaction' | 'retry' | 'working'
+type RenderHost = Component & { requestRender: TUI['requestRender'] }
 
 const patched = new WeakSet<Component>()
 
@@ -48,14 +55,19 @@ function patchStatusContainer(component: Component, enabled: () => boolean): boo
 export function sweepNativeStatusIndicators(
   root: Component,
   enabled: () => boolean = () => true,
-  depth = 0,
 ): number {
-  if (depth > maxTreeDepth) return 0
+  if (Value.Check(NativeStatusHostSchema, root)) {
+    return Number(patchStatusContainer(root.statusContainer, enabled))
+  }
   const children = childrenOf(root)
   let count = children.some((child) => nativeStatusKind(child) === 'compaction')
     ? Number(patchStatusContainer(root, enabled))
     : 0
-  for (const child of children) count += sweepNativeStatusIndicators(child, enabled, depth + 1)
+  for (const child of children) {
+    if (childrenOf(child).some((indicator) => nativeStatusKind(indicator) === 'compaction')) {
+      count += Number(patchStatusContainer(child, enabled))
+    }
+  }
   return count
 }
 
@@ -67,9 +79,9 @@ type InstalledNativeStatusFix = NativeStatusFix & {
   enable: () => void
 }
 
-const installed = new WeakMap<TUI, InstalledNativeStatusFix>()
+const installed = new WeakMap<RenderHost, InstalledNativeStatusFix>()
 
-export function installNativeStatusFix(tui: TUI): NativeStatusFix {
+export function installNativeStatusFix(tui: RenderHost): NativeStatusFix {
   const current = installed.get(tui)
   if (current !== undefined) {
     current.enable()
@@ -77,6 +89,7 @@ export function installNativeStatusFix(tui: TUI): NativeStatusFix {
   }
 
   let enabled = true
+  let patchedContainer = false
   const fix: InstalledNativeStatusFix = {
     dispose: () => {
       enabled = false
@@ -90,7 +103,9 @@ export function installNativeStatusFix(tui: TUI): NativeStatusFix {
   installed.set(tui, fix)
   const original = tui.requestRender.bind(tui)
   tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (enabled) sweepNativeStatusIndicators(tui, () => enabled)
+    if (enabled && !patchedContainer) {
+      patchedContainer = sweepNativeStatusIndicators(tui, () => enabled) > 0
+    }
     original(...args)
   }
   tui.requestRender()

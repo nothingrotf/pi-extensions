@@ -110,8 +110,10 @@ export function prettyEffort(level: string | undefined): string {
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`
 }
 
-export function buildContextLabel(ctx: ExtensionContext): string {
+export function contextSummary(ctx: ExtensionContext): { label: string; percent: number | null } {
   const usage = ctx.getContextUsage()
+  const rawPercent = usage?.percent ?? null
+  const percent = rawPercent !== null && Number.isFinite(rawPercent) ? rawPercent : null
   const contextWindow = ctx.model?.contextWindow ?? usage?.contextWindow
   if (
     usage === undefined ||
@@ -119,18 +121,21 @@ export function buildContextLabel(ctx: ExtensionContext): string {
     !Number.isFinite(contextWindow) ||
     contextWindow <= 0
   ) {
-    return '--'
+    return { label: '--', percent }
   }
-  const percent =
+  const labelPercent =
     usage.percent === null || !Number.isFinite(usage.percent)
       ? '?'
       : `${Math.max(0, Math.min(999, Math.round(usage.percent)))}%`
-  return `${percent}/${formatCount(contextWindow)}`
+  return { label: `${labelPercent}/${formatCount(contextWindow)}`, percent }
+}
+
+export function buildContextLabel(ctx: ExtensionContext): string {
+  return contextSummary(ctx).label
 }
 
 export function contextPercent(ctx: ExtensionContext): number | null {
-  const percent = ctx.getContextUsage()?.percent ?? null
-  return percent !== null && Number.isFinite(percent) ? percent : null
+  return contextSummary(ctx).percent
 }
 
 export function formatCwd(cwd: string): string {

@@ -81,7 +81,7 @@ describe('subagent TUI', () => {
     ]
     const lines = renderSubagentHudLines(snapshots, theme, 72, 2_500, 'anthropic/claude-opus-5')
     const plainLines = lines.map(stripTerminalSequences)
-    expect(plainLines[0]).toMatch(/^  ╭─ 󰚩 dispatch · 2 ▾/)
+    expect(plainLines[0]).toMatch(/^   󰚩 dispatch · 2 ▾/)
     expect(plainLines[1]).toContain('◉ opus')
     expect(plainLines[2]).toContain('(◉‿◉) Inspect r…')
     expect(plainLines[3]).toContain('(✓‿✓) Review te…')
@@ -113,15 +113,15 @@ describe('subagent TUI', () => {
     expect(new Set(rows).size).toBe(4)
   })
 
-  it('uses the responsive dock insets', () => {
+  it('aligns widgets with the three-space text inset', () => {
     const snapshots = [snapshot('foreground', 'Inspect runtime', 'running', '/tmp/one.jsonl')]
     for (const item of [
-      { inset: 1, width: 55 },
-      { inset: 2, width: 56 },
-      { inset: 2, width: 79 },
+      { inset: 3, width: 55 },
+      { inset: 3, width: 56 },
+      { inset: 3, width: 79 },
       { inset: 3, width: 80 },
       { inset: 3, width: 109 },
-      { inset: 4, width: 110 },
+      { inset: 3, width: 110 },
     ]) {
       expect(
         renderSubagentHudLines(snapshots, theme, item.width, 2_500)[0]?.match(/^ */)?.[0].length,

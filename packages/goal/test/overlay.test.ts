@@ -2,7 +2,7 @@ import { visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import { renderGoalHudLines, type GoalOverlayTheme } from '../src/overlay.ts'
-import type { GoalModeState } from '../src/state.ts'
+import { createGoalLoop, type GoalModeState } from '../src/state.ts'
 
 const theme: GoalOverlayTheme = {
   bg: (_color, text) => text,
@@ -14,6 +14,7 @@ function state(overrides: Partial<GoalModeState['goal']> = {}): GoalModeState {
   return {
     enabled: true,
     mode: 'active',
+    loop: createGoalLoop(),
     goal: {
       createdAt: 1,
       id: 'goal-1',
@@ -32,9 +33,9 @@ describe('goal editor panel', () => {
   test('renders the Empryo goal strip geometry', () => {
     const lines = renderGoalHudLines(state(), theme, 120)
     expect(lines).toHaveLength(3)
-    expect(lines[0]).toMatch(/^    ╭─ ⟲ goal · active ▾ .*1\.2k\/5k tokens · 1m 05s ─╮$/)
+    expect(lines[0]).toMatch(/^   ⟲ goal · coding 1\/5 ▾ +1\.2k\/5k tokens · 1m 05s$/)
     expect(lines[1]).toContain('Ship the editor dock')
-    expect(lines[2]).toContain('continuing toward the objective')
+    expect(lines[2]).toContain('working toward reviewer PASS')
     expect(lines[2]).toContain('/goal drop')
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true)
   })
@@ -43,9 +44,13 @@ describe('goal editor panel', () => {
     const paused = state({ status: 'paused' })
     paused.enabled = false
     expect(renderGoalHudLines(paused, theme, 80).join('\n')).toContain('paused · /goal resume')
-    expect(renderGoalHudLines(state({ status: 'budget-limited' }), theme, 80).join('\n')).toContain(
-      'token budget reached',
-    )
+    const limited = state({ status: 'budget-limited' })
+    limited.loop.phase = 'reviewing'
+    expect(renderGoalHudLines(limited, theme, 80).join('\n')).toContain('fresh independent review')
+    const stuck = state({ status: 'stuck' })
+    stuck.enabled = false
+    stuck.loop.stopReason = 'Iteration cap reached.'
+    expect(renderGoalHudLines(stuck, theme, 80).join('\n')).toContain('Iteration cap reached.')
   })
 
   test('sanitizes and truncates the objective', () => {
@@ -64,14 +69,14 @@ describe('goal editor panel', () => {
     expect(renderGoalHudLines(undefined, theme, 120)).toEqual([])
   })
 
-  test('uses the responsive dock insets', () => {
+  test('aligns widgets with the three-space text inset', () => {
     for (const item of [
-      { inset: 1, width: 55 },
-      { inset: 2, width: 56 },
-      { inset: 2, width: 79 },
+      { inset: 3, width: 55 },
+      { inset: 3, width: 56 },
+      { inset: 3, width: 79 },
       { inset: 3, width: 80 },
       { inset: 3, width: 109 },
-      { inset: 4, width: 110 },
+      { inset: 3, width: 110 },
     ]) {
       expect(renderGoalHudLines(state(), theme, item.width)[0]?.match(/^ */)?.[0].length).toBe(
         item.inset,

@@ -1,108 +1,197 @@
 # @nothingrotf/goal
 
-Goal mode for [Pi](https://github.com/earendil-works/pi) sessions.
+`@nothingrotf/goal` runs a persistent coder-reviewer loop for one objective.
 
-The package ports the goal subsystem of [oh-my-pi](https://github.com/can1357/oh-my-pi) to the Pi extension API. One session holds one persistent objective. Pi works toward the objective across autonomous turns until the agent verifies completion, the budget runs out, or the user stops the goal.
+The package keeps the coder active until an independent reviewer returns `PASS`. A self-reported completion only requests review.
 
-## Behavior
+The implementation combines persistent goal state and usage accounting from oh-my-pi, explicit objective and budget control as exposed by Codex, and the independent coder-reviewer cycle from Empryo:
 
-- `/goal <objective>` creates the goal and sends the objective as the first prompt.
-- After each settled run, the extension waits 800 ms and sends a hidden continuation prompt.
-- A continuation turn without tool calls suppresses the next continuation. A user message, a tool call, or a budget change resets the suppression.
-- Esc pauses the goal. Session resume pauses the goal. The user must run `/goal resume` to continue.
-- The goal tracks tokens and wall-clock time. Token accounting counts input, output, and cache writes. It ignores cache reads.
-- When usage reaches the token budget, the goal becomes `budget-limited` and the agent receives one wrap-up steer.
-- The objective enters every prompt as escaped XML inside `<objective>`, marked as user data and not as instructions.
-- The `goal` tool is visible to the model only while a goal exists.
-- When `@nothingrotf/todo` is installed and `todo_write` is active, the goal context includes the persisted todo list as live progress state.
-
-## Editor panel
-
-An Empryo-style goal strip appears above the editor while a goal exists:
-
-```text
-    ╭─ ⟲ goal · active ▾ ── 1.2k/5k tokens · 1m 05s ─╮
-    │   Ship the editor dock                         │
-    ╰─ continuing toward the objective ─ /goal drop ─╯
-```
-
-The responsive side inset uses one to four columns. The panel uses a rounded border and a title chip.
-
-The border reports the goal state. The title reports token use and elapsed time.
-
-A paused goal displays `/goal resume`. A limited goal displays `token budget reached`.
-
-The footer uses `/goal drop` because this package names the discard command `drop`.
+- A fresh reviewer context for each attempt.
+- Deterministic checks before reviewer judgment.
+- A strict `PASS`, `FAIL`, or `PARTIAL` verdict.
+- Bounded attempts, token budgets, and oscillation detection.
+- Persisted verdict history and user steering.
 
 ## Install
 
-```sh
+```bash
 pi install npm:@nothingrotf/goal
 ```
 
-Try the local workspace without installation:
+## Start a goal
 
-```sh
-pi --no-extensions -e ./packages/goal/src/index.ts
-```
-
-## Commands
+Run a direct goal:
 
 ```text
-/goal <objective>        create a goal and start work
-/goal                    open the goal menu
-/goal set <objective>    replace the active goal
-/goal show               print objective, status, tokens, and time
-/goal pause              pause the goal
-/goal resume             resume a paused goal
-/goal drop               discard the goal after confirmation
-/goal budget <n|off>     set or clear the token budget
-/guided-goal [idea]      interview the user, then create a goal
+/goal Ship the release
 ```
 
-`/guided-goal` asks one question per turn until five fields are fixed: binary success criteria, verification method, attempt cap, scope boundaries, and stop conditions. The agent then calls `goal({op:"create"})` with a structured objective.
+Set optional loop controls:
 
-## Tool
+```text
+/goal Ship the release --max=8 --review-model=openai/gpt-5 --review-fallback=anthropic/claude-opus-4-6 --runtime-probe
+```
 
-The model uses one tool named `goal` with a single `op` field:
+Use the guided interview for unclear work:
 
-- `create`: start a goal. Requires `objective`. Accepts a positive `token_budget`. Fails when a goal already exists.
-- `get`: return the current goal and the remaining budget.
-- `resume`: reactivate a paused goal.
-- `complete`: mark the goal complete. The prompt requires current-state evidence for every deliverable.
-- `drop`: discard the goal.
+```text
+/guided-goal migrate the service
+```
 
-## Session entries
+The interview fixes five fields before goal creation:
 
-- `pi-goal-mode`: the current mode (`goal`, `goal_paused`, or `none`) with the goal record.
-- `pi-goal-completed`: objective and usage of a completed goal.
+1. Binary success criteria.
+2. Exact verification actions.
+3. A maximum attempt count.
+4. Scope boundaries.
+5. Stop and escalation conditions.
 
-The extension restores the newest valid `pi-goal-mode` entry on session start and on branch switch.
+## Manage a goal
 
-## Loop integration
+```text
+/goal
+/goal show
+/goal pause
+/goal resume
+/goal drop
+/goal budget 80000
+/goal budget off
+/goal max 8
+/goal reviewer openai/gpt-5
+/goal reviewer inherit
+/goal probe on
+/goal probe off
+```
 
-While `@nothingrotf/loop` has an active loop (scheduled or repeat), the goal does not send continuations. The loop owns the wake cadence. The goal context still enters every prompt, and the completion rules still apply. This matches oh-my-pi, where loop mode disables the goal continuation.
+A bare `/goal` opens the management menu in TUI mode.
 
-## Todo integration
+## Review cycle
 
-The extension reads the newest successful `todo_write` tool result or `pi-todo-user-edit` entry on the session branch. It does not import the todo package. The rendered `<todo_context>` block lists each todo as `- [status] #id content` with XML escaping and flattened line breaks. `blocked` todos count as open and show the blocker note.
+Each completed coder turn starts this cycle:
 
-With the todo package installed, the stop reminder of the todo package runs before the goal continuation. The reminder fires on `agent_end`. The goal continuation waits for `agent_settled` and for an idle session.
+1. The package captures the current Git working tree scope.
+2. The package runs the project type check.
+3. The package runs the project test command.
+4. The package runs an optional runtime probe.
+5. A new read-only agent session inspects the repository.
+6. The reviewer returns one strict JSON verdict.
+7. The controller applies the verdict.
 
-## Differences from oh-my-pi
+`PASS` completes the goal. `FAIL` or `PARTIAL` returns evidence to the coder.
 
-- oh-my-pi groups todos into phases and keys them by text. This package renders one flat list keyed by `#id`.
-- Pi has no plan or vibe mode. The mode guards do not exist.
-- The `goal.enabled` and `goal.continuationModes` settings do not exist. Continuation runs in every mode with an idle session.
+A failed deterministic check forces `FAIL`. `PASS` requires concrete evidence and a successful final reviewer response. A provider error cannot reuse an earlier verdict. Reviewer token use counts against the goal token budget, including cancelled and restarted reviews when the provider reports usage.
+
+Budget exhaustion lets the current coder turn finish and permits one final review. It is a stopping policy between turns, not a hard limit on an individual model response. Completion and final budget usage stay visible in the session transcript.
+
+The default attempt cap is five reviews. The hard maximum is twelve reviews.
+
+The controller stops before the cap after three consecutive equivalent failures, comparing both reasons and evidence while ignoring line-number changes. Resuming starts a fresh repetition audit and preserves the overall attempt cap and token total.
+
+When configured, the controller uses the fallback reviewer after three failed reviews.
+
+Before the final available attempt, the coder receives a directive to reconsider the approach.
+
+Each reviewer gets only read/search tools, current requirements, check results, and prior findings. Parent conversation history, extensions, skills, and prompt templates are not loaded into the reviewer. Repository instructions follow the parent session's project trust setting.
+
+A review has a ten-minute deadline. Cancellation allows up to one second for provider cleanup; a provider that ignores cancellation cannot hold the Goal controller indefinitely.
+
+## Project checks
+
+For JavaScript and TypeScript projects, the package finds the nearest `package.json`.
+
+The package selects the first available type check script:
+
+1. `typecheck`
+2. `check`
+3. `lint`
+
+The package also runs `test` when that script exists.
+
+If the runtime probe is active, the package selects the first available script:
+
+1. `probe`
+2. `smoke`
+3. `test:e2e`
+
+The Git scope includes modified and untracked files. It tells each fresh reviewer where to start.
+
+Unavailable checks remain visible to the reviewer. Missing optional scripts do not force failure. A configured command that cannot launch, or an explicitly requested runtime probe that is unavailable, prevents `PASS`.
+
+Checks run with closed standard input and `CI=1`, have execution deadlines, and terminate their process group when cancelled. An invalid nearest `package.json` fails verification instead of selecting scripts from an ancestor project.
+
+The package does not execute project commands when Pi disables project trust.
+
+## Goal tool
+
+The extension exposes one tool with these operations:
+
+- `create`
+- `get`
+- `resume`
+- `complete`
+- `drop`
+
+`create` accepts these optional fields:
+
+- `token_budget`
+- `max_iterations`
+- `review_model`
+- `review_fallback_model`
+- `runtime_probe`
+
+`complete` requests independent review after the current turn. It does not set the goal status to complete.
+
+## Steering
+
+Send normal text during an active review to steer the reviewer.
+
+Steering is persisted, delivered to the reviewer, and included in subsequent coder and reviewer prompts. A review that misses a queued message restarts before its verdict can complete the goal.
+
+The queue accepts five messages per review and preserves up to 24 messages per goal, each up to 2,000 characters. Rejected text returns to the editor with an explanation. Use `/goal set` to revise the objective when its constraints need more space.
+
+Image attachments are forwarded to the active reviewer and retained for immediate review restarts. Image data is not persisted; resend attachments after reopening a session.
+
+Slash commands remain available during review.
+
+## Persistence
+
+The package writes version 3 state to `pi-goal-mode` custom entries.
+
+Persisted state includes:
+
+- The objective and budget totals.
+- The current review phase.
+- The attempt count and cap.
+- The last eight verdicts.
+- Pending and previously accepted user steering.
+- The start of the current repetition audit.
+- Reviewer and runtime probe settings.
+- The stop reason.
+
+Session restore pauses an active goal. Run `/goal resume` to continue it.
+
+The decoder migrates version 2 goal entries to version 3 state.
+
+## Events
+
+The extension emits these Pi events:
+
+- `@nothingrotf/goal/review-start`
+- `@nothingrotf/goal/review-verdict`
+- `@nothingrotf/goal/review-stop`
+
+Each verdict also creates a `pi-goal-review` custom entry.
+
+## External loops
+
+Goal still runs checks and review when a Loop extension controls cadence.
+
+Goal does not create a second wake while an external loop remains active. If another coder turn starts during review, the old review is cancelled and its verdict is discarded. The next settled turn is reviewed against current files.
+
+## Compatibility
+
+The package targets the repository Pi catalog (`0.84.4` or newer) and is validated with Pi `0.85.0`. It uses the `ModelRuntime` and `agent_settled` APIs.
 
 ## Development
 
-```sh
-bun install
-bun run check
-bun run test
-```
-
-## License
-
-[MIT](LICENSE)
+Run `bun run check` and `bun run test` from the repository root. Goal tests cover persistence, accounting, convergence, project subprocesses, lifecycle races, and fresh reviews using the actual Pi SDK with a deterministic local provider. The SDK tests require no network calls or model credits.

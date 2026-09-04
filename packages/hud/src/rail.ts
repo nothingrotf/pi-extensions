@@ -20,6 +20,7 @@ export function isPseudo(kind: RailKind | undefined): boolean {
 
 export type RailAction = {
   argGlyphs: readonly string[]
+  askRows?: readonly string[] | undefined
   category: RailCategory
   children: readonly RailAction[] | undefined
   detail: string
@@ -113,6 +114,7 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
   const groups: RailGroup[] = []
   let open: RailGroup | undefined
   for (const action of actions) {
+    if (action.iconKey === 'ask' && action.status === 'pending') continue
     if (isPseudo(action.kind) || (action.children?.length ?? 0) > 0) {
       open = undefined
       groups.push({
@@ -423,6 +425,20 @@ export function labelColumn(groups: readonly RailGroup[]): number {
   return width
 }
 
+function askDetailLines(
+  rows: readonly string[],
+  theme: RailTheme,
+  stem: string,
+  width: number,
+): string[] {
+  return rows.map((text) =>
+    truncateToWidth(
+      `${stem}${tint(theme.palette, text.trimStart().startsWith('[x] ') ? 'ask' : 'arg', text)}`,
+      Math.max(1, width),
+    ),
+  )
+}
+
 export function railLines(
   groups: readonly RailGroup[],
   theme: RailTheme,
@@ -454,7 +470,9 @@ export function railLines(
     const last = index === shownGroups.length - 1 && !pending
     const actionWidth = Math.max(1, width - (group.count === 1 ? copyChipWidth : 0))
     const caret =
-      group.count > 1 ? ` ${tint(theme.palette, 'groupCaret', options.expanded ? '▾' : '▸')}` : ''
+      group.count > 1 || group.actions[0]?.askRows !== undefined
+        ? ` ${tint(theme.palette, 'groupCaret', options.expanded ? '▾' : '▸')}`
+        : ''
     const parent = parentParts(group)
     lines.push(
       row(
@@ -480,6 +498,12 @@ export function railLines(
     const stem = last ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `
     if (group.count === 1) {
       const only = group.actions[0]
+      const rows = only?.askRows
+      if (rows !== undefined) {
+        if (options.expanded)
+          lines.push(...askDetailLines(rows, theme, stem, width - copyChipWidth))
+        return
+      }
       const nested = only?.children ?? []
       if (nested.length > 0) {
         const inner = railLines(groupActions(nested), theme, {
@@ -520,6 +544,10 @@ export function railLines(
           tick,
         )}`,
       )
+      if (action.askRows !== undefined) {
+        const childStem = `${stem}${childLast ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `}`
+        lines.push(...askDetailLines(action.askRows, theme, childStem, width - copyChipWidth))
+      }
     })
   })
   if (pending) {
@@ -553,6 +581,7 @@ export function summarizeOutput(text: string, status: RailStatus = 'ok'): string
 
 export type RailPatch = {
   argGlyphs?: readonly string[]
+  askRows?: readonly string[] | undefined
   category?: RailCategory
   children?: readonly RailAction[]
   detail?: string
@@ -568,11 +597,55 @@ export type RailPatch = {
   summary?: string
 }
 
+function sameItems<Item>(
+  left: readonly Item[] | undefined,
+  right: readonly Item[] | undefined,
+): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.length === right.length &&
+      left.every((item, index) => item === right[index]))
+  )
+}
+
+function sameAction(left: RailAction, right: RailAction): boolean {
+  return (
+    left.toolCallId === right.toolCallId &&
+    left.category === right.category &&
+    left.detail === right.detail &&
+    left.doneLabel === right.doneLabel &&
+    left.durationMs === right.durationMs &&
+    left.iconKey === right.iconKey &&
+    left.kind === right.kind &&
+    left.output === right.output &&
+    left.runningLabel === right.runningLabel &&
+    left.startedAt === right.startedAt &&
+    left.status === right.status &&
+    left.summary === right.summary &&
+    sameItems(left.askRows, right.askRows) &&
+    sameItems(left.argGlyphs, right.argGlyphs) &&
+    sameItems(left.children, right.children)
+  )
+}
+
 export class RailStore {
   private actions: RailAction[] = []
   private readonly index = new Map<string, number>()
+  private revision = 0
+  private grouped: RailGroup[] | undefined
 
   constructor(private readonly now: () => number = () => Date.now()) {}
+
+  version(): number {
+    return this.revision
+  }
+
+  private changed(): void {
+    this.revision += 1
+    this.grouped = undefined
+  }
 
   private rebuildIndex(): void {
     this.index.clear()
@@ -580,8 +653,10 @@ export class RailStore {
   }
 
   reset(): void {
+    if (this.actions.length === 0) return
     this.actions = []
     this.index.clear()
+    this.changed()
   }
 
   has(toolCallId: string): boolean {
@@ -603,6 +678,7 @@ export class RailStore {
     if (position === undefined) return
     this.actions.splice(position, 1)
     this.rebuildIndex()
+    this.changed()
   }
 
   reorder(toolCallIds: readonly string[]): void {
@@ -620,8 +696,10 @@ export class RailStore {
       seen.add(action.toolCallId)
       ordered.push(action)
     }
+    if (ordered.every((action, index) => action === this.actions[index])) return
     this.actions = ordered
     this.rebuildIndex()
+    this.changed()
   }
 
   reportChild(parentToolCallId: string, toolCallId: string, patch: RailPatch): void {
@@ -681,7 +759,16 @@ export class RailStore {
             : summarizeOutput(patch.output, status)),
       }
     }
+    const previousChild = parent.children?.[existing]
+    const nextChild = children[existing]
+    if (
+      previousChild !== undefined &&
+      nextChild !== undefined &&
+      sameAction(previousChild, nextChild)
+    )
+      return
     this.actions[position] = { ...parent, children }
+    this.changed()
   }
 
   report(toolCallId: string, patch: RailPatch): void {
@@ -692,6 +779,7 @@ export class RailStore {
       this.actions.push({
         argGlyphs: patch.argGlyphs ?? [],
         category: patch.category ?? 'other',
+        askRows: patch.askRows,
         children: patch.children,
         detail: patch.detail ?? '',
         doneLabel: patch.doneLabel ?? 'Tool',
@@ -707,6 +795,7 @@ export class RailStore {
           (patch.output === undefined ? '' : summarizeOutput(patch.output, status)),
         toolCallId,
       })
+      this.changed()
       return
     }
     const current = this.actions[position]
@@ -723,9 +812,10 @@ export class RailStore {
         : current.durationMs
     const durationMs =
       patch.resetDerived === true ? patch.durationMs : (patch.durationMs ?? measured)
-    this.actions[position] = {
+    const next: RailAction = {
       argGlyphs: patch.argGlyphs ?? current.argGlyphs,
       category: patch.category ?? current.category,
+      askRows: patch.askRows ?? current.askRows,
       children: patch.children ?? current.children,
       detail: patch.detail ?? current.detail,
       doneLabel: patch.doneLabel ?? current.doneLabel,
@@ -745,10 +835,14 @@ export class RailStore {
           : summarizeOutput(patch.output, status)),
       toolCallId,
     }
+    if (sameAction(current, next)) return
+    this.actions[position] = next
+    this.changed()
   }
 
   groups(): RailGroup[] {
-    return groupActions(this.actions)
+    this.grouped ??= groupActions(this.actions)
+    return this.grouped
   }
 
   size(): number {

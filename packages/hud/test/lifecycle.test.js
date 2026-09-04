@@ -14,7 +14,9 @@ function harness() {
   const eventHandlers = new Map()
   const api = {
     on(name, handler) {
-      handlers.set(name, handler)
+      const listeners = handlers.get(name) ?? []
+      listeners.push(handler)
+      handlers.set(name, listeners)
     },
     events: {
       emit(channel, data) {
@@ -57,6 +59,8 @@ function harness() {
           footerComponent = undefined
           return
         }
+        footerComponent?.dispose()
+        footerComponent = undefined
         footerFactory = value
       },
       notify() {},
@@ -83,11 +87,11 @@ function harness() {
   }
   hud(api)
   const emit = async (name, event = {}) => {
-    const handler = handlers.get(name)
-    if (handler === undefined) {
+    const listeners = handlers.get(name)
+    if (listeners === undefined) {
       throw new Error(`Missing ${name} handler`)
     }
-    await handler(event, ctx)
+    for (const handler of listeners) await handler(event, ctx)
   }
   const mount = () => {
     if (footerFactory === undefined) {
@@ -128,6 +132,19 @@ function harness() {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
 
 describe('HUD lifecycle', () => {
+  test('disposing an old footer twice does not disable its replacement', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    const previous = instance.mount()
+    await instance.emit('session_start')
+    instance.mount()
+    previous.dispose()
+    const count = instance.renderCount()
+    await instance.emit('agent_start')
+    expect(instance.renderCount()).toBeGreaterThan(count)
+    await instance.emit('session_shutdown')
+  })
+
   test('registers one settings command', () => {
     expect(harness().commandNames()).toEqual(['hud'])
   })
@@ -157,7 +174,12 @@ describe('HUD lifecycle', () => {
       toolCallId: 'read-1',
       toolName: 'read',
     })
-    await instance.emit('tool_execution_end', { isError: false, toolCallId: 'read-1' })
+    await instance.emit('tool_execution_end', {
+      isError: false,
+      result: { content: [{ text: '{}', type: 'text' }], details: undefined },
+      toolCallId: 'read-1',
+      toolName: 'read',
+    })
     await instance.emit('agent_end')
     expect(instance.appended().map((entry) => entry.customType)).toEqual([
       'hud-rail',

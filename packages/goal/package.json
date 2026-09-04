@@ -1,7 +1,7 @@
 {
   "name": "@nothingrotf/goal",
-  "version": "0.2.0",
-  "description": "Goal mode for Pi sessions: one persistent objective with autonomous continuation, token and time budgets, and verified completion.",
+  "version": "0.3.0",
+  "description": "Persistent coder-reviewer goals with deterministic checks and bounded convergence",
   "keywords": [
     "agent",
     "automation",
@@ -33,11 +33,13 @@
     "test": "vp test run"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
     "@earendil-works/pi-tui": "catalog:",
     "typebox": "catalog:"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"

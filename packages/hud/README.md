@@ -95,6 +95,9 @@ The rail also holds the model's own voice:
 - A separate pending `Thinking...` row appears after the last tool.
 - The pending row disappears when reasoning or answer text starts.
 
+AskQuestion stays hidden in the rail until the call finishes. Its compact `Asked` row shows the question and selected answer.
+Option details appear only in the expanded view. Selected options use `[x]`, and freeform text appears under Other.
+
 A check or a cross always identifies a tool call.
 
 A tool that spawns children, such as a subagent, nests them under its own row
@@ -165,6 +168,25 @@ pi --no-extensions -e ./packages/hud/src/index.ts
 ```
 
 ## Development
+
+Transcript layout, thinking visibility, and speaker spacing share one observer.
+It detects structural changes in the transcript containers and batches explicit
+invalidations from lifecycle events. Unchanged animation frames do not rescan
+the message history, and layout fixes do not create polling timers.
+
+Settled rails cache their grouped actions and rendered output. Message framing
+and speaker headers reuse unchanged output, retaining only the latest frame per
+component. Content changes, width changes, and theme invalidation refresh the
+relevant cache. Pending tool rows and live usage continue to animate.
+
+Git and quota refreshes coalesce event bursts and run at most one request per
+resource. Disposing the footer cancels their timers and in-flight work. Late
+results cannot update a replacement footer, and changing providers clears the
+previous provider's quota.
+
+Regression tests cover delayed transcript mounting, stable rail ordering,
+streaming updates, cache invalidation, repeated footer disposal, and background
+request cancellation without relying on wall-clock performance thresholds.
 
 ```sh
 bun install

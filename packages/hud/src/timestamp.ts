@@ -25,7 +25,7 @@ export type RoleEntryData = {
 
 export type UsageEntryData = {
   cacheRead: number
-  cost: number
+  cost?: number
   durationMs: number | undefined
   input: number
   output: number
@@ -87,7 +87,7 @@ export function hasUsage(data: UsageEntryData): boolean {
 export function formatUsageRow(data: UsageEntryData): string {
   const parts: string[] = []
   if (data.durationMs !== undefined) parts.push(formatSpan(data.durationMs))
-  parts.push(formatCost(data.cost))
+  if (data.cost !== undefined) parts.push(formatCost(data.cost))
   parts.push(`${formatTokens(data.input)} in`)
   parts.push(`${formatTokens(data.output)} out`)
   const cached = data.input > 0 ? Math.min(100, Math.round((data.cacheRead / data.input) * 100)) : 0
