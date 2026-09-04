@@ -22,6 +22,7 @@ import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
 import { defaultRailIcon, defaultRailLabel, type RailActionReport } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
+import { decodeRailReplacementEntry, railReplacementEntryType } from './rail-replacement-entry.ts'
 import type { RailSegment } from './rail-segments.ts'
 import { decodeRailStateEntry, railStateEntryType } from './rail-state-entry.ts'
 import { messageSegments, projectRailVoice } from './rail-voice.ts'
@@ -45,6 +46,18 @@ const PathArgs = Type.Object({ path: Type.String() })
 const CommandArgs = Type.Object({ command: Type.String() })
 const PatternArgs = Type.Object({ pattern: Type.String() })
 const EditArgs = Type.Object({ edits: Type.Array(Type.Unknown()), path: Type.String() })
+const TextResultBlockSchema = Type.Object({ text: Type.String(), type: Type.Literal('text') })
+const ImageResultBlockSchema = Type.Object({ type: Type.Literal('image') })
+const ToolExecutionResultSchema = Type.Object({
+  content: Type.Array(Type.Union([TextResultBlockSchema, ImageResultBlockSchema])),
+})
+
+export function railResultText<Input>(result: Input): string {
+  if (!Value.Check(ToolExecutionResultSchema, result)) return ''
+  return result.content
+    .flatMap((block) => (Value.Check(TextResultBlockSchema, block) ? [block.text] : []))
+    .join('\n')
+}
 
 function truncateDetail(value: string, maximum: number, retained: number): string {
   return value.length > maximum ? `${value.slice(0, retained)}...` : value
@@ -130,6 +143,7 @@ export type SessionRails = {
   hiddenAssistantTimestamps: Set<number>
   maxTurn: number
   openingAssistantTimestamps: Map<number, number>
+  renderedToolCallIds: Set<string>
 }
 
 function applyStateReport(
@@ -154,6 +168,22 @@ function applyStateReport(
   else target.reportChild(report.parentToolCallId, report.toolCallId, patch)
 }
 
+function replacementSegments(
+  segments: readonly RailSegment[],
+  toolCallIds: ReadonlySet<string>,
+): RailSegment[] {
+  const filtered: RailSegment[] = []
+  for (const segment of segments) {
+    if (segment.type !== 'tools') {
+      filtered.push(segment)
+      continue
+    }
+    const replacementIds = segment.toolCallIds.filter((toolCallId) => toolCallIds.has(toolCallId))
+    if (replacementIds.length > 0) filtered.push({ toolCallIds: replacementIds, type: 'tools' })
+  }
+  return filtered
+}
+
 export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): SessionRails {
   const byEntryTurn = new Map<number, RailStore>()
   const byToolCallId = new Map<string, RailStore>()
@@ -163,6 +193,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   const hiddenAssistantTextBlocks = new Map<number, Set<number>>()
   const hiddenAssistantTimestamps = new Set<number>()
   const renderedStores = new Set<RailStore>()
+  const renderedToolCallIds = new Set<string>()
   const turnsByStore = new Map<RailStore, Set<number>>()
   const openingAssistantTimestamps = new Map<number, number>()
   const deferredReports: {
@@ -174,10 +205,19 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   let segments: RailSegment[] = []
   let maxTurn = 0
   const finalize = () => {
-    const projection = projectRailVoice(segments, false)
+    const rendered = renderedStores.has(store)
+    if (rendered) {
+      for (const [toolCallId, target] of byToolCallId) {
+        if (target === store && !renderedToolCallIds.has(toolCallId)) store.remove(toolCallId)
+      }
+    }
+    const projectedSegments = rendered
+      ? replacementSegments(segments, renderedToolCallIds)
+      : segments
+    const projection = projectRailVoice(projectedSegments, false)
     for (const row of projection.rows) store.report(row.id, row.patch)
     store.reorder(projection.order)
-    if (renderedStores.has(store)) {
+    if (rendered) {
       if (projection.openingMessageTimestamp !== undefined) {
         for (const turn of turnsByStore.get(store) ?? []) {
           openingAssistantTimestamps.set(turn, projection.openingMessageTimestamp)
@@ -204,11 +244,18 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       }
       continue
     }
+    if (entry.type === 'custom' && entry.customType === railReplacementEntryType) {
+      const replacement = decodeRailReplacementEntry(entry.data)
+      if (replacement === undefined || !byEntryTurn.has(replacement.turn)) continue
+      renderedToolCallIds.add(replacement.toolCallId)
+      continue
+    }
     if (entry.type === 'custom' && entry.customType === railStateEntryType) {
       const state = decodeRailStateEntry(entry.data)
       if (state === undefined) continue
       const target = byEntryTurn.get(state.turn)
       if (target === undefined) continue
+      renderedToolCallIds.add(state.report.toolCallId)
       const settledWhenReported = settledToolCallIds.has(state.report.toolCallId)
       applyStateReport(
         target,
@@ -277,6 +324,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
     hiddenAssistantTimestamps,
     maxTurn,
     openingAssistantTimestamps,
+    renderedToolCallIds,
   }
 }
 

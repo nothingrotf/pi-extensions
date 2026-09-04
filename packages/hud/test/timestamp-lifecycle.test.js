@@ -175,7 +175,7 @@ describe('transcript lifecycle', () => {
     const persistedUsage = instance.render(data)
     const persistedRole = instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)
     expect(persistedUsage).toBeDefined()
-    expect(persistedUsage.render(80)[0].startsWith('      ▪')).toBe(true)
+    expect(persistedUsage.render(80)[0].startsWith('   ▪')).toBe(true)
     expect(visibleWidth(persistedUsage.render(80)[0])).toBe(80)
     expect(persistedRole).toBeDefined()
     instance.toggle()

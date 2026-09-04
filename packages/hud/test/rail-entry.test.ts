@@ -53,8 +53,8 @@ describe('RailComponent', () => {
     })
     stores.set(1, store)
     const lines = plain(component.render(80))
-    expect(lines[0]?.trimEnd()).toBe('      1 action ▾')
-    expect(lines[1]?.trimEnd()).toBe('      ╰─ ✓ □ Read        a.ts')
+    expect(lines[0]?.trimEnd()).toBe('   1 action ▾')
+    expect(lines[1]?.trimEnd()).toBe('   ╰─ ✓ □ Read        a.ts')
     expect(lines.every((line) => visibleWidth(line) === 80)).toBe(true)
   })
 
@@ -73,7 +73,7 @@ describe('RailComponent', () => {
     )
     expect(component.render(80)).toEqual([])
     visible = true
-    expect(plain(component.render(80))[0]?.trimEnd()).toBe('      1 action ▾')
+    expect(plain(component.render(80))[0]?.trimEnd()).toBe('   1 action ▾')
   })
 
   test('switches between settled and live body colors', () => {
@@ -116,8 +116,8 @@ describe('RailComponent', () => {
     expect(lines[1]?.trimEnd().endsWith('1.5s')).toBe(true)
     expect(lines[1]?.length).toBe(width)
     expect(lines[1]?.endsWith(' ')).toBe(true)
-    expect(lines[1]?.indexOf('1.5s')).toBe(32)
-    expect(plain(component.render(120))[1]?.indexOf('1.5s')).toBe(103)
+    expect(lines[1]?.indexOf('1.5s')).toBe(33)
+    expect(plain(component.render(120))[1]?.indexOf('1.5s')).toBe(107)
   })
 })
 

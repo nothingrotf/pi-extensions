@@ -17,10 +17,17 @@ import {
   railToolsChannel,
 } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType, RailComponent, RailUsageLine } from './rail-entry.ts'
+import { railReplacementEntryType } from './rail-replacement-entry.ts'
 import { railStateEntryType } from './rail-state-entry.ts'
-import { applyRailTools, mapSessionRails, railPatchForCall } from './rail-tools.ts'
+import { applyRailTools, mapSessionRails, railPatchForCall, railResultText } from './rail-tools.ts'
 import { RailVoice } from './rail-voice.ts'
-import { isPseudo, type RailAction, RailStore, showsPendingNarration } from './rail.ts'
+import {
+  isPseudo,
+  type RailAction,
+  type RailPatch,
+  RailStore,
+  showsPendingNarration,
+} from './rail.ts'
 import { renderHud, type HudState } from './render.ts'
 import {
   choiceValue,
@@ -141,6 +148,8 @@ export default function hud(pi: ExtensionAPI): void {
   let assistantUsageLines = new Map<number, RailUsageLine>()
   let railCwd: string | undefined
   const railTools = new Set(builtInRailToolNames)
+  let fallbackToolCallIds = new Set<string>()
+  let railReplacementToolCallIds = new Set<string>()
   const railVoice = new RailVoice()
   let railPseudoIds = new Set<string>()
   let persistedRailReports = new Map<string, string>()
@@ -207,11 +216,13 @@ export default function hud(pi: ExtensionAPI): void {
       railOpeningAt.set(turn, timestamp)
     }
     railTurn = session.maxTurn
+    railReplacementToolCallIds = session.renderedToolCallIds
     hiddenNarrationBlocks = session.hiddenAssistantTextBlocks
     currentHiddenNarrationBlocks = new Map()
     rail = new RailStore()
     railVoice.reset()
     railPseudoIds = new Set<string>()
+    fallbackToolCallIds = new Set<string>()
     persistedRailReports = new Map<string, string>()
     requestRender?.()
   }
@@ -400,7 +411,11 @@ export default function hud(pi: ExtensionAPI): void {
           : ['', frameTranscriptLine(rendered, width, speakerBodyIndent)]
       }
       spacerFix = installThinkingSpacerFix(tui, thinkingQuiet, assistantVisible, assistantUsage)
-      speakerSpacingFix = installSpeakerSpacingFix(tui, timestampsEnabled)
+      speakerSpacingFix = installSpeakerSpacingFix(
+        tui,
+        timestampsEnabled,
+        (toolCallId) => railEnabled && railReplacementToolCallIds.has(toolCallId),
+      )
       transcriptLayoutFix = installTranscriptLayoutFix(tui, railOpeningAt)
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
@@ -461,6 +476,7 @@ export default function hud(pi: ExtensionAPI): void {
     rail = new RailStore()
     railVoice.reset()
     railPseudoIds = new Set<string>()
+    fallbackToolCallIds = new Set<string>()
     persistedRailReports = new Map<string, string>()
     currentHiddenNarrationBlocks = new Map()
     railTurn += 1
@@ -493,6 +509,7 @@ export default function hud(pi: ExtensionAPI): void {
     )
   })
 
+  pi.registerEntryRenderer(railReplacementEntryType, () => undefined)
   pi.registerEntryRenderer(railStateEntryType, () => undefined)
 
   pi.on('session_tree', (_event, ctx) => {
@@ -519,6 +536,7 @@ export default function hud(pi: ExtensionAPI): void {
     const report = decodeRailAction(data)
     if (report === undefined || !railEnabled || !agentWorking) return
     const { parentToolCallId, toolCallId, toolName, ...patch } = report
+    fallbackToolCallIds.delete(toolCallId)
     const targetId = parentToolCallId ?? toolCallId
     const target = railFor(targetId)
     if (railsByToolCallId.has(targetId) && target !== rail) return
@@ -535,6 +553,7 @@ export default function hud(pi: ExtensionAPI): void {
     openRailEntry()
     if (parentToolCallId === undefined) target.report(toolCallId, actionPatch)
     else target.reportChild(parentToolCallId, toolCallId, actionPatch)
+    markToolReplacement(toolCallId)
     const persistedReport: RailActionReport = { ...resolved, toolCallId }
     if (parentToolCallId !== undefined) persistedReport.parentToolCallId = parentToolCallId
     if (toolName !== undefined) persistedReport.toolName = toolName
@@ -559,6 +578,12 @@ export default function hud(pi: ExtensionAPI): void {
     railTurnPending = false
     transcriptLayoutFix?.markDirty()
     pi.appendEntry(railEntryType, { turn: railTurn })
+  }
+
+  const markToolReplacement = (toolCallId: string) => {
+    if (!railEnabled || railTurnPending || railReplacementToolCallIds.has(toolCallId)) return
+    railReplacementToolCallIds.add(toolCallId)
+    pi.appendEntry(railReplacementEntryType, { toolCallId, turn: railTurn })
   }
 
   const reconcileRailVoice = () => {
@@ -592,7 +617,8 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('tool_execution_start', (event, ctx) => {
     railPendingNarration = false
-    if (railTools.has(event.toolName)) {
+    if (railEnabled) {
+      if (!railTools.has(event.toolName)) fallbackToolCallIds.add(event.toolCallId)
       const target = railFor(event.toolCallId)
       if (!target.has(event.toolCallId)) {
         target.report(
@@ -601,8 +627,10 @@ export default function hud(pi: ExtensionAPI): void {
         )
       }
       openRailEntry()
+      markToolReplacement(event.toolCallId)
       reconcileRailVoice()
       railPendingNarration = false
+      speakerSpacingFix?.markDirty()
       requestRender?.()
     }
     if (isAskTool(event.toolName)) {
@@ -655,8 +683,14 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('tool_execution_end', (event, ctx) => {
     const target = railFor(event.toolCallId)
     if (target.has(event.toolCallId)) {
-      target.report(event.toolCallId, { status: event.isError ? 'error' : 'ok' })
+      const patch: RailPatch = { status: event.isError ? 'error' : 'ok' }
+      if (fallbackToolCallIds.delete(event.toolCallId)) {
+        const output = railResultText(event.result)
+        if (output.length > 0) patch.output = output
+      }
+      target.report(event.toolCallId, patch)
     }
+    speakerSpacingFix?.markDirty()
     reconcileRailVoice()
     if (active) {
       sync(ctx)
@@ -671,6 +705,12 @@ export default function hud(pi: ExtensionAPI): void {
     if (!railTurnPending) {
       for (const action of rail.values()) persistRailAction(action)
       mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)
+    } else {
+      rail.reset()
+      railVoice.reset()
+      railPseudoIds = new Set<string>()
+      fallbackToolCallIds = new Set<string>()
+      currentHiddenNarrationBlocks = new Map()
     }
     unsubscribeAnimation?.()
     unsubscribeAnimation = undefined
@@ -691,6 +731,7 @@ export default function hud(pi: ExtensionAPI): void {
     pi.events.emit(railEnabledChannel, { enabled: railEnabled })
     applyThinkingLabel(ctx)
     reconcileRailVoice()
+    speakerSpacingFix?.markDirty()
     ctx.ui.notify(`hud: rail ${railEnabled ? 'enabled' : 'disabled'}`, 'info')
   }
 

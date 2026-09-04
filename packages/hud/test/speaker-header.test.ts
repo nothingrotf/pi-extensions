@@ -129,10 +129,10 @@ describe('SpeakerHeaderComponent', () => {
     expect(visibleWidth(settled)).toBe(40)
   })
 
-  test('adds responsive horizontal padding', () => {
+  test('keeps the header at the transcript edge', () => {
     const component = new SpeakerHeaderComponent(assistant, theme)
     const line = plain(component.render(40)[0] ?? '')
-    expect(line.startsWith(' ● Empryo')).toBe(true)
+    expect(line.startsWith('● Empryo')).toBe(true)
     expect(visibleWidth(line)).toBe(40)
   })
 

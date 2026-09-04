@@ -1,6 +1,25 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { railPatchForCall } from '../src/rail-tools.ts'
+import { railPatchForCall, railResultText } from '../src/rail-tools.ts'
+
+describe('railResultText', () => {
+  test('extracts text from a generic tool result', () => {
+    expect(
+      railResultText({
+        content: [
+          { text: 'first', type: 'text' },
+          { data: 'image', mimeType: 'image/png', type: 'image' },
+          { text: 'second', type: 'text' },
+        ],
+      }),
+    ).toBe('first\nsecond')
+  })
+
+  test('rejects malformed tool results', () => {
+    expect(railResultText({ content: [{ text: 1, type: 'text' }] })).toBe('')
+    expect(railResultText('result')).toBe('')
+  })
+})
 
 describe('railPatchForCall tense', () => {
   test('a running call reads in the present continuous', () => {

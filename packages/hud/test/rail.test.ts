@@ -11,6 +11,7 @@ import {
   type IconKey,
 } from '../src/icons.ts'
 import { railEntryType } from '../src/rail-entry.ts'
+import { railReplacementEntryType } from '../src/rail-replacement-entry.ts'
 import { railStateEntryType } from '../src/rail-state-entry.ts'
 import { mapSessionRails } from '../src/rail-tools.ts'
 import {
@@ -1006,6 +1007,12 @@ describe('mapSessionRails', () => {
     data,
     type: 'custom',
   })
+  const railReplacementEntry = (toolCallId: string, turn = 1): SessionEntry => ({
+    ...base,
+    customType: railReplacementEntryType,
+    data: { toolCallId, turn },
+    type: 'custom',
+  })
   const toolResultEntry = (id: string, text: string, isError = false): SessionEntry => ({
     ...base,
     message: {
@@ -1131,6 +1138,7 @@ describe('mapSessionRails', () => {
       }),
     ])
     expect(rails.byEntryTurn.get(1)?.groups()[0]?.actions[0]?.argGlyphs).toEqual(['\uE628'])
+    expect(rails.renderedToolCallIds).toEqual(new Set(['read-1']))
   })
 
   test('keeps reconstructed glyphs when an ASCII snapshot is empty', () => {
@@ -1193,14 +1201,21 @@ describe('mapSessionRails', () => {
   })
 
   test('keeps opening prose outside the rail and records its visual anchor', () => {
-    const rails = mapSessionRails([userEntry, railEntry, pseudoEntry()])
+    const rails = mapSessionRails([userEntry, railEntry, railReplacementEntry('k'), pseudoEntry()])
     const store = rails.byToolCallId.get('k')
     expect(store?.groups().some((group) => group.actions[0]?.kind === 'narration')).toBe(false)
     expect(rails.openingAssistantTimestamps.get(1)).toBe(2)
   })
 
   test('backfills only intermediate prose as a narration row', () => {
-    const rails = mapSessionRails([userEntry, railEntry, assistantEntry('a'), pseudoEntry()])
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      railReplacementEntry('a'),
+      railReplacementEntry('k'),
+      assistantEntry('a'),
+      pseudoEntry(),
+    ])
     const groups = rails.byToolCallId.get('k')?.groups() ?? []
     const narration = groups
       .flatMap((group) => group.actions)
@@ -1271,6 +1286,30 @@ describe('mapSessionRails', () => {
     const group = store?.groups()[0]
     expect(group === undefined ? '' : groupLabel(group)).toBe('Ran')
     expect(group === undefined ? '' : groupDetail(group)).toBe('· 2 lines')
+    expect(rails.renderedToolCallIds).toEqual(new Set())
+  })
+
+  test('tracks restored replacements per tool call', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('a', 'b'),
+      railReplacementEntry('a'),
+      toolResultEntry('a', 'one'),
+      toolResultEntry('b', 'two'),
+    ])
+    expect(rails.renderedToolCallIds).toEqual(new Set(['a']))
+    expect(
+      rails.byEntryTurn
+        .get(1)
+        ?.values()
+        .map((action) => action.toolCallId),
+    ).toEqual(['a'])
+  })
+
+  test('ignores a replacement without a matching rail entry', () => {
+    const rails = mapSessionRails([userEntry, assistantEntry('a'), railReplacementEntry('a')])
+    expect(rails.renderedToolCallIds).toEqual(new Set())
   })
 
   test('derives the backfilled duration from the message timestamps', () => {

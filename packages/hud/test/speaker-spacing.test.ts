@@ -16,11 +16,11 @@ const osc133ZoneStart = `${osc}]133;A${bell}`
 const osc133ZoneEnd = `${osc}]133;B${bell}`
 const osc133ZoneFinal = `${osc}]133;C${bell}`
 const framedAssistant = [
-  `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}    answer${' '.repeat(30)}`,
+  `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}   answer${' '.repeat(31)}`,
 ]
 const framedAssistantWithGap = [
   `${osc133ZoneStart}${' '.repeat(40)}`,
-  `${osc133ZoneEnd}${osc133ZoneFinal}    answer${' '.repeat(30)}`,
+  `${osc133ZoneEnd}${osc133ZoneFinal}   answer${' '.repeat(31)}`,
 ]
 
 class RoleEntryFixture implements Component {
@@ -57,6 +57,18 @@ class UsageEntryFixture implements Component {
 
   render(_width: number): string[] {
     return ['', 'usage']
+  }
+}
+
+class ToolExecutionFixture implements Component {
+  readonly toolName = 'custom_tool'
+
+  constructor(readonly toolCallId: string) {}
+
+  invalidate(): void {}
+
+  render(_width: number): string[] {
+    return ['', 'old tool']
   }
 }
 
@@ -143,7 +155,7 @@ describe('speaker spacing', () => {
     const { root, spacer, user } = fixture()
     sweepSpeakerSpacing(root, () => true)
     expect(spacer.render(40)).toEqual([])
-    expect(compact(user.render(40))).toEqual(['    prompt'])
+    expect(compact(user.render(40))).toEqual(['   prompt'])
   })
 
   test('reserves wide edit and copy controls for user text', () => {
@@ -156,8 +168,8 @@ describe('speaker spacing', () => {
     root.addChild(new RoleEntryFixture('assistant'))
     sweepSpeakerSpacing(root, () => true)
     expect(compact(user.render(120))).toEqual([
-      '       Read packages/hud/package.json and packages/hud/README.md as two separate read tool calls,',
-      '       then reply DONE. Do not modify files.',
+      '   Read packages/hud/package.json and packages/hud/README.md as two separate read tool calls, then reply',
+      '   DONE. Do not modify files.',
     ])
   })
 
@@ -216,7 +228,7 @@ describe('speaker spacing', () => {
     let active = true
     const { assistant, root, spacer, user } = fixture()
     sweepSpeakerSpacing(root, () => active)
-    expect(compact(user.render(40))).toEqual(['    prompt'])
+    expect(compact(user.render(40))).toEqual(['   prompt'])
     active = false
     expect(spacer.render(40)).toEqual([''])
     expect(compact(user.render(40))).toEqual(['', 'prompt', ''])
@@ -267,6 +279,24 @@ describe('speaker spacing', () => {
     expect(usage.render(40)).toEqual([])
   })
 
+  test('hides only native tools with rail replacements', () => {
+    let hideTools = true
+    const root = new Container()
+    const replaced = new ToolExecutionFixture('replaced')
+    const native = new ToolExecutionFixture('native')
+    root.addChild(replaced)
+    root.addChild(native)
+    sweepSpeakerSpacing(
+      root,
+      () => false,
+      (toolCallId) => hideTools && toolCallId === 'replaced',
+    )
+    expect(replaced.render(40)).toEqual([])
+    expect(native.render(40)).toEqual(['', 'old tool'])
+    hideTools = false
+    expect(replaced.render(40)).toEqual(['', 'old tool'])
+  })
+
   test('frames every assistant message in one turn', () => {
     const { assistant, root } = fixture()
     const later = new AssistantMessageFixture()
@@ -281,7 +311,7 @@ describe('speaker spacing', () => {
     sweepSpeakerSpacing(root, () => true)
     sweepSpeakerSpacing(root, () => true)
     expect(spacer.render(40)).toEqual([])
-    expect(compact(user.render(40))).toEqual(['    prompt'])
+    expect(compact(user.render(40))).toEqual(['   prompt'])
     expect(assistant.render(40)).toEqual(framedAssistant)
   })
 })

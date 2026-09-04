@@ -115,6 +115,11 @@ function harness() {
     emitEvent: (channel, data) => eventHandlers.get(channel)?.(data),
     mount,
     renderCount: () => renders,
+    async runCommand(name, args) {
+      const command = commands.get(name)
+      if (command === undefined) throw new Error(`Missing ${name} command`)
+      await command.handler(args, ctx)
+    },
     wasCleared: () => cleared,
     widget: (key) => widgets.get(key),
     widgetKeys: () => [...widgets.keys()],
@@ -140,6 +145,7 @@ describe('HUD lifecycle', () => {
     instance.emitEvent('hud:rail-action', report)
     expect(instance.appended().map((entry) => entry.customType)).toEqual([
       'hud-rail',
+      'hud-rail-replacement',
       'hud-rail-state',
     ])
   })
@@ -156,10 +162,60 @@ describe('HUD lifecycle', () => {
     await instance.emit('agent_end')
     expect(instance.appended().map((entry) => entry.customType)).toEqual([
       'hud-rail',
+      'hud-rail-replacement',
       'hud-rail-state',
     ])
-    expect(instance.appended()[1]?.data.report.status).toBe('ok')
-    expect(instance.appended()[1]?.data.report.durationMs).toBeTypeOf('number')
+    expect(instance.appended()[2]?.data.report.status).toBe('ok')
+    expect(instance.appended()[2]?.data.report.durationMs).toBeTypeOf('number')
+  })
+
+  test('renders an unmapped tool through the event fallback', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', {
+      args: { value: 'hello' },
+      toolCallId: 'custom-1',
+      toolName: 'custom_echo',
+    })
+    await instance.emit('tool_execution_end', {
+      isError: false,
+      result: { content: [{ text: 'echo hello', type: 'text' }] },
+      toolCallId: 'custom-1',
+      toolName: 'custom_echo',
+    })
+    await instance.emit('agent_end')
+    expect(instance.appended().map((entry) => entry.customType)).toEqual([
+      'hud-rail',
+      'hud-rail-replacement',
+      'hud-rail-state',
+    ])
+    expect(instance.appended()[2]?.data.report).toMatchObject({
+      doneLabel: 'Custom echo',
+      output: 'echo hello',
+      status: 'ok',
+      summary: 'echo hello',
+      toolCallId: 'custom-1',
+    })
+  })
+
+  test('does not add disabled-turn tools after the rail returns', async () => {
+    const instance = harness()
+    await instance.runCommand('hud', 'rail off')
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', {
+      args: { value: 'hello' },
+      toolCallId: 'custom-1',
+      toolName: 'custom_echo',
+    })
+    await instance.emit('tool_execution_end', {
+      isError: false,
+      result: { content: [{ text: 'echo hello', type: 'text' }] },
+      toolCallId: 'custom-1',
+      toolName: 'custom_echo',
+    })
+    await instance.emit('agent_end')
+    await instance.runCommand('hud', 'rail on')
+    expect(instance.appended()).toEqual([])
   })
 
   test('ignores rail reports outside an active agent turn', () => {

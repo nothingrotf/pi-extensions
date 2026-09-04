@@ -30,6 +30,7 @@ const patchedEntries = new WeakSet<Component>()
 const patchedMarkdown = new WeakSet<Component>()
 const patchedRails = new WeakSet<Component>()
 const patchedSpacers = new WeakSet<Component>()
+const patchedTools = new WeakSet<Component>()
 const patchedUsers = new WeakSet<Component>()
 
 const CustomEntrySchema = Type.Object({ entry: Type.Object({ customType: Type.String() }) })
@@ -45,11 +46,16 @@ const PaddedMessageSchema = Type.Object({
   setOutputPad: Type.Function([Type.Number()], Type.Undefined()),
 })
 const UserMessageSchema = Type.Object({ outputPad: Type.Number(), text: Type.String() })
+const ToolExecutionComponentSchema = Type.Object({
+  toolCallId: Type.String({ minLength: 1 }),
+  toolName: Type.String({ minLength: 1 }),
+})
 
 type PaddedMessage = Static<typeof PaddedMessageSchema>
 type AssistantMessageLike = Component &
   PaddedMessage & { contentContainer: object; hideThinkingBlock: boolean }
 type UserMessageLike = Component & PaddedMessage & Static<typeof UserMessageSchema>
+type ToolExecutionLike = Component & Static<typeof ToolExecutionComponentSchema>
 
 const primaryAnsi = ansiForeground(empryoTextPrimary)
 const primaryTextStyle = {
@@ -84,6 +90,10 @@ function isSpacer(component: Component): boolean {
 
 function isUserMessage(component: Component): component is UserMessageLike {
   return isPaddedMessage(component) && Value.Check(UserMessageSchema, component)
+}
+
+function isToolExecution(component: Component): component is ToolExecutionLike {
+  return Value.Check(ToolExecutionComponentSchema, component)
 }
 
 function styleMarkdown(component: Component): void {
@@ -173,6 +183,17 @@ function patchSpacer(component: Component, active: () => boolean): void {
   component.render = (width: number): string[] => (active() ? [] : original(width))
 }
 
+function patchToolExecution(
+  component: ToolExecutionLike,
+  hidden: (toolCallId: string) => boolean,
+): void {
+  if (patchedTools.has(component)) return
+  patchedTools.add(component)
+  const original = component.render.bind(component)
+  component.render = (width: number): string[] =>
+    hidden(component.toolCallId) ? [] : original(width)
+}
+
 function patchRail(
   component: Component,
   active: () => boolean,
@@ -218,7 +239,12 @@ function patchAssistant(
   }
 }
 
-export function sweepSpeakerSpacing(root: Component, active: () => boolean, depth = 0): void {
+export function sweepSpeakerSpacing(
+  root: Component,
+  active: () => boolean,
+  hideTools: (toolCallId: string) => boolean = () => active(),
+  depth = 0,
+): void {
   if (depth > maxTreeDepth) return
   placeSpeakerEntries(root)
   const children = childrenOf(root)
@@ -235,6 +261,7 @@ export function sweepSpeakerSpacing(root: Component, active: () => boolean, dept
     return false
   }
   children.forEach((child, index) => {
+    if (isToolExecution(child)) patchToolExecution(child, hideTools)
     const customType = customTypeOf(child)
     if (customType === 'hud-role' || customType === 'timestamp-pi') patchEntry(child, active)
     if (customType === 'hud-rail') {
@@ -265,7 +292,7 @@ export function sweepSpeakerSpacing(root: Component, active: () => boolean, dept
     } else if (isAssistantMessage(child)) {
       if (assistantTurn) patchAssistant(child, active, () => hasEarlierRail(child))
     }
-    sweepSpeakerSpacing(child, active, depth + 1)
+    sweepSpeakerSpacing(child, active, hideTools, depth + 1)
   })
 }
 
@@ -275,20 +302,25 @@ export type SpeakerSpacingFix = {
 }
 
 type InstalledSpacingFix = SpeakerSpacingFix & {
-  setActive: (active: () => boolean) => void
+  setSources: (active: () => boolean, hideTools: (toolCallId: string) => boolean) => void
 }
 
 const installed = new WeakMap<TUI, InstalledSpacingFix>()
 
-export function installSpeakerSpacingFix(tui: TUI, active: () => boolean): SpeakerSpacingFix {
+export function installSpeakerSpacingFix(
+  tui: TUI,
+  active: () => boolean,
+  hideTools: (toolCallId: string) => boolean = () => active(),
+): SpeakerSpacingFix {
   const current = installed.get(tui)
   if (current !== undefined) {
-    current.setActive(active)
+    current.setSources(active, hideTools)
     current.markDirty()
     return current
   }
 
   let activeSource = active
+  let hideToolsSource = hideTools
   let installedActive = true
   let dirty = true
   let deadline = Date.now() + 3000
@@ -314,8 +346,9 @@ export function installSpeakerSpacingFix(tui: TUI, active: () => boolean): Speak
       dirty = true
       retry()
     },
-    setActive: (next) => {
+    setSources: (next, nextHideTools) => {
       activeSource = next
+      hideToolsSource = nextHideTools
       installedActive = true
       deadline = Date.now() + 3000
       dirty = true
@@ -323,11 +356,12 @@ export function installSpeakerSpacingFix(tui: TUI, active: () => boolean): Speak
     },
   }
   const isActive = () => installedActive && activeSource()
+  const toolsHidden = (toolCallId: string) => installedActive && hideToolsSource(toolCallId)
   installed.set(tui, fix)
   const original = tui.requestRender.bind(tui)
   tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
     if (installedActive && dirty) {
-      sweepSpeakerSpacing(tui, isActive)
+      sweepSpeakerSpacing(tui, isActive, toolsHidden)
       if (Date.now() >= deadline) dirty = false
     }
     original(...args)

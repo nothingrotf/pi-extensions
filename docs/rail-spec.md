@@ -89,6 +89,10 @@ Rows enter the rail from three places. All three converge on `RailStore`.
 | assistant message | `message_update` and `message_end`              | live thought and narration rows                                       |
 | other extensions  | the `hud:rail-action` event                     | tool rows, and nested rows when the report carries `parentToolCallId` |
 
+Unknown tool names use a derived label and the generic tool icon. The rail hides their native tool block.
+
+Calls that start while the rail is off remain native. The rail does not backfill these calls after activation.
+
 Reopening a session rebuilds the same rows from the stored entries. Hidden state entries preserve external labels and nested rows.
 
 The rail entry opens on the first row of any kind. A turn that only thinks still
@@ -192,6 +196,8 @@ The header names the speaker:
 ```
 ● Agent · 04:31 AM
 ```
+
+Each header starts at the transcript edge. Each message body begins three columns after its header.
 
 The user header and its body occupy adjacent rows. One blank row separates the user body from the assistant header.
 

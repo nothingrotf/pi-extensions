@@ -14,13 +14,6 @@ const terminalZoneMarkers = [
   `${escape}]133;C${bell}`,
 ] as const
 
-export function transcriptOuterPadding(width: number): number {
-  if (width >= 110) return 4
-  if (width >= 80) return 3
-  if (width >= 56) return 2
-  return 1
-}
-
 export type TranscriptInsets = {
   body: number
   inner: number
@@ -29,12 +22,8 @@ export type TranscriptInsets = {
 
 export function transcriptInsets(width: number, bodyIndent = 0): TranscriptInsets {
   const safeWidth = Math.max(1, Math.floor(width))
-  const outer = Math.min(
-    transcriptOuterPadding(safeWidth),
-    Math.max(0, Math.floor((safeWidth - 1) / 2)),
-  )
-  const body = Math.min(Math.max(0, Math.floor(bodyIndent)), Math.max(0, safeWidth - outer * 2 - 1))
-  return { body, inner: Math.max(1, safeWidth - outer * 2 - body), outer }
+  const body = Math.min(Math.max(0, Math.floor(bodyIndent)), Math.max(0, safeWidth - 1))
+  return { body, inner: Math.max(1, safeWidth - body), outer: 0 }
 }
 
 function terminalAffixes(line: string): { content: string; prefix: string; suffix: string } {
