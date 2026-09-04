@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
 
 import { prettyModel } from './format.ts'
 import {
@@ -7,6 +6,7 @@ import {
   SpeakerHeaderComponent,
   type SpeakerHeaderSource,
 } from './speaker-header.ts'
+import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 
 export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
@@ -44,23 +44,22 @@ type AssistantCandidate = {
   usage?: UsageCandidate
 }
 
-function trim1(value: number): string {
-  const text = value.toFixed(1)
-  return text.endsWith('.0') ? text.slice(0, -2) : text
-}
-
 export function formatTokens(value: number): string {
   if (value < 1_000) return String(value)
-  if (value < 1_000_000) return `${trim1(value / 1_000)}k`
-  return `${trim1(value / 1_000_000)}m`
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(1)}k`
+  return `${(value / 1_000_000).toFixed(1)}M`
 }
 
 export function formatSpan(milliseconds: number): string {
-  if (milliseconds < 1_000) return `${milliseconds}ms`
-  if (milliseconds < 60_000) return `${Math.round(milliseconds / 1_000)}s`
-  const minutes = Math.floor(milliseconds / 60_000)
-  const seconds = Math.round((milliseconds % 60_000) / 1_000)
-  return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000))
+  const hours = Math.floor(totalSeconds / 3_600)
+  const minutes = Math.floor((totalSeconds % 3_600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
+  }
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${seconds}s`
 }
 
 export const formatClock = formatSpeakerClock
@@ -76,7 +75,6 @@ export function roleLabel(role: MessageRole, label: string | undefined): string 
 }
 
 export function formatCost(value: number): string {
-  if (value < 0.001) return '$<0.001'
   return `$${value < 0.1 ? value.toFixed(3) : value.toFixed(2)}`
 }
 
@@ -86,13 +84,12 @@ export function hasUsage(data: UsageEntryData): boolean {
 
 export function formatUsageRow(data: UsageEntryData): string {
   const parts: string[] = []
-  if (data.durationMs !== undefined && data.durationMs > 0) parts.push(formatSpan(data.durationMs))
-  if (data.cost > 0) parts.push(formatCost(data.cost))
+  if (data.durationMs !== undefined) parts.push(formatSpan(data.durationMs))
+  parts.push(formatCost(data.cost))
   parts.push(`${formatTokens(data.input)} in`)
   parts.push(`${formatTokens(data.output)} out`)
-  if (data.input > 0 && data.cacheRead > 0) {
-    parts.push(`⛁ ${Math.round((data.cacheRead / data.input) * 100)}% cached`)
-  }
+  const cached = data.input > 0 ? Math.min(100, Math.round((data.cacheRead / data.input) * 100)) : 0
+  parts.push(`⛁ ${cached}% cached`)
   if (data.durationMs !== undefined && data.durationMs > minimumDurationMs && data.output > 0) {
     parts.push(`⚡${((data.output / data.durationMs) * 1000).toFixed(1)}/s`)
   }
@@ -168,9 +165,8 @@ export function registerTimestamps(
 
   if (live !== undefined) {
     live.row = () => {
-      if (!enabled) return undefined
-      const entry = toUsageEntry(totals, Date.now())
-      return hasUsage(entry) ? formatUsageRow(entry) : undefined
+      if (!enabled || totals.startedAt === undefined) return undefined
+      return formatUsageRow(toUsageEntry(totals, Date.now()))
     }
   }
 
@@ -182,7 +178,7 @@ export function registerTimestamps(
 
   pi.on('turn_start', (event, ctx) => {
     if (totals.startedAt === undefined) {
-      totals = { ...totals, startedAt: event.timestamp }
+      totals = { ...totals, startedAt: Date.now() }
     }
     if (!assistantHeaderPending) return
     assistantCandidate = {
@@ -258,7 +254,9 @@ export function registerTimestamps(
     return {
       invalidate: () => undefined,
       render: (width: number): string[] =>
-        enabled ? new Text(theme.fg('dim', formatUsageRow(data)), 1, 0).render(width) : [],
+        enabled
+          ? [frameTranscriptLine(theme.fg('dim', formatUsageRow(data)), width, speakerBodyIndent)]
+          : [],
     }
   })
 

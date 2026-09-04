@@ -53,8 +53,9 @@ describe('RailComponent', () => {
     })
     stores.set(1, store)
     const lines = plain(component.render(80))
-    expect(lines[0]).toBe(' 1 action ▾')
-    expect(lines[1]).toBe(' ╰─ ✓ □ Read        a.ts')
+    expect(lines[0]?.trimEnd()).toBe('      1 action ▾')
+    expect(lines[1]?.trimEnd()).toBe('      ╰─ ✓ □ Read        a.ts')
+    expect(lines.every((line) => visibleWidth(line) === 80)).toBe(true)
   })
 
   test('hides and restores the rail through its visibility source', () => {
@@ -72,7 +73,31 @@ describe('RailComponent', () => {
     )
     expect(component.render(80)).toEqual([])
     visible = true
-    expect(plain(component.render(80))[0]).toBe(' 1 action ▾')
+    expect(plain(component.render(80))[0]?.trimEnd()).toBe('      1 action ▾')
+  })
+
+  test('switches between settled and live body colors', () => {
+    const store = new RailStore()
+    store.report('a', {
+      category: 'read',
+      doneLabel: 'Read',
+      iconKey: 'read',
+      status: 'ok',
+    })
+    let active = false
+    const component = new RailComponent(
+      () => store,
+      theme,
+      false,
+      () => false,
+      undefined,
+      undefined,
+      () => true,
+      () => active,
+    )
+    expect(component.render(40).join('\n')).toContain('\x1b[38;2;86;130;78m')
+    active = true
+    expect(component.render(40).join('\n')).toContain('\x1b[38;2;115;173;104m')
   })
 
   test('keeps a right gutter so durations clear the scrollbar', () => {
@@ -88,8 +113,11 @@ describe('RailComponent', () => {
     const component = new RailComponent(() => store, theme, false)
     const width = 40
     const lines = plain(component.render(width))
-    expect(lines[1]?.endsWith('1.5s')).toBe(true)
-    expect(lines[1]?.length).toBe(width - 2)
+    expect(lines[1]?.trimEnd().endsWith('1.5s')).toBe(true)
+    expect(lines[1]?.length).toBe(width)
+    expect(lines[1]?.endsWith(' ')).toBe(true)
+    expect(lines[1]?.indexOf('1.5s')).toBe(32)
+    expect(plain(component.render(120))[1]?.indexOf('1.5s')).toBe(103)
   })
 })
 

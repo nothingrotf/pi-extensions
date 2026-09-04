@@ -43,7 +43,8 @@ The HUD names the active model instead of the literal `Empryo` product name. The
 
 The row totals every assistant message in the run. It shows the duration, cost, token counts, cache share, and output rate.
 
-A run that reports no tokens shows no row. The row shares the column that the `outputPad` setting controls.
+An active run shows a zero-value row before token metrics arrive.
+A completed run with no tokens shows no row. Each row starts at the transcript body column.
 
 The throughput divides total output tokens by the time from the first turn through the run end.
 

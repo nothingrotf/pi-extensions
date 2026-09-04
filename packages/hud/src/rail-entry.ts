@@ -6,6 +6,12 @@ import { Value } from 'typebox/value'
 import { railPaletteFromAnsi, tint } from './colors.ts'
 import { railLines, type RailStore, type RailTheme } from './rail.ts'
 import { shimmerTextAtTick, shimmerTickMs } from './shimmer.ts'
+import {
+  frameTranscriptLine,
+  speakerBodyIndent,
+  transcriptCopyChipWidth,
+  transcriptInsets,
+} from './transcript-geometry.ts'
 
 export const railEntryType = 'hud-rail'
 
@@ -15,9 +21,6 @@ export function decodeRailEntry<Input>(data: Input): number | undefined {
   return Value.Check(RailEntrySchema, data) ? data.turn : undefined
 }
 
-const railIndent = ' '
-const railGutter = 2
-
 export type RailThemeSource = Pick<Theme, 'fg'> & Partial<Pick<Theme, 'getFgAnsi'>>
 
 export type RailUsage = {
@@ -26,10 +29,10 @@ export type RailUsage = {
   tick?: number
 }
 
-export function railTheme(theme: RailThemeSource): RailTheme {
+export function railTheme(theme: RailThemeSource, bodyOpacity = 1): RailTheme {
   return {
     fg: (color, text) => theme.fg(color, text),
-    palette: railPaletteFromAnsi(),
+    palette: railPaletteFromAnsi(bodyOpacity),
   }
 }
 
@@ -68,7 +71,8 @@ export class RailUsageLine {
 }
 
 export class RailComponent implements Component {
-  private readonly theme: RailTheme
+  private readonly liveTheme: RailTheme
+  private readonly settledTheme: RailTheme
   private readonly usageLine: RailUsageLine
 
   constructor(
@@ -79,26 +83,42 @@ export class RailComponent implements Component {
     private readonly usage: () => RailUsage = () => ({ row: undefined, shimmer: false }),
     private readonly source?: RailThemeSource,
     private readonly visible: () => boolean = () => true,
+    private readonly active: () => boolean = pending,
   ) {
-    this.theme = railTheme(theme)
+    this.liveTheme = railTheme(theme)
+    this.settledTheme = railTheme(theme, 0.75)
     this.source = source ?? theme
     this.usageLine = new RailUsageLine(theme, this.source)
   }
 
   invalidate(): void {}
 
+  needsLeadingGap(): boolean {
+    const store = this.resolve()
+    return (
+      store?.groups().some((group) => group.actions.some((action) => action.kind === 'thought')) ??
+      false
+    )
+  }
+
   render(width: number): string[] {
     if (!this.visible()) return []
     const store = this.resolve()
     if (store === undefined) return []
-    const inner = Math.max(1, width - railIndent.length - railGutter)
+    const insets = transcriptInsets(width, speakerBodyIndent)
     const usage = this.usage()
-    return railLines(store.groups(), this.theme, {
+    const pending = this.pending()
+    return railLines(store.groups(), this.active() ? this.liveTheme : this.settledTheme, {
+      copyChipWidth: transcriptCopyChipWidth(width),
       expanded: this.expanded,
-      pending: this.pending(),
+      pending,
       tick: usage.tick,
       usage: this.usageLine.render(usage) ?? '',
-      width: inner,
-    }).map((line) => (line.length === 0 ? '' : `${railIndent}${truncateToWidth(line, inner, '')}`))
+      width: insets.inner,
+    }).map((line) =>
+      line.length === 0
+        ? ''
+        : frameTranscriptLine(truncateToWidth(line, insets.inner, ''), width, speakerBodyIndent),
+    )
   }
 }

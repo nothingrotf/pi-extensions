@@ -1,8 +1,8 @@
-import { type Component, Container } from '@earendil-works/pi-tui'
+import { type Component, Container, Spacer, VStack } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import { railEntryType } from '../src/rail-entry.ts'
-import { placeRailsAfterOpening } from '../src/transcript-layout.ts'
+import { placeRailsAfterOpening, placeSpeakerEntries } from '../src/transcript-layout.ts'
 
 class RailEntry implements Component {
   readonly entry: { customType: string; data: { turn: number } }
@@ -32,6 +32,38 @@ class AssistantEntry implements Component {
   }
 }
 
+class RoleEntry implements Component {
+  readonly entry: {
+    customType: 'hud-role'
+    data: { role: 'assistant' | 'user' }
+  }
+
+  constructor(role: 'assistant' | 'user') {
+    this.entry = { customType: 'hud-role', data: { role } }
+  }
+
+  invalidate(): void {}
+
+  render(): string[] {
+    return [this.entry.data.role]
+  }
+}
+
+class UserEntry implements Component {
+  outputPad = 1
+  readonly text = 'prompt'
+
+  invalidate(): void {}
+
+  render(): string[] {
+    return [this.text]
+  }
+
+  setOutputPad(value: number): void {
+    this.outputPad = value
+  }
+}
+
 class FinalEntry implements Component {
   invalidate(): void {}
 
@@ -39,6 +71,65 @@ class FinalEntry implements Component {
     return ['final']
   }
 }
+
+describe('placeSpeakerEntries', () => {
+  test('restores each speaker header around its user message', () => {
+    const root = new Container()
+    const user = new RoleEntry('user')
+    const assistant = new RoleEntry('assistant')
+    const spacer = new Spacer(1)
+    const message = new UserEntry()
+    const final = new FinalEntry()
+    root.addChild(user)
+    root.addChild(assistant)
+    root.addChild(spacer)
+    root.addChild(message)
+    root.addChild(final)
+
+    expect(placeSpeakerEntries(root)).toBe(1)
+    expect(root.children).toEqual([user, spacer, message, assistant, final])
+  })
+
+  test('does not attach later headers to an unlabeled message', () => {
+    const root = new Container()
+    const unlabeled = new UserEntry()
+    const user = new RoleEntry('user')
+    const assistant = new RoleEntry('assistant')
+    const spacer = new Spacer(1)
+    const labeled = new UserEntry()
+    root.addChild(unlabeled)
+    root.addChild(user)
+    root.addChild(assistant)
+    root.addChild(spacer)
+    root.addChild(labeled)
+
+    expect(placeSpeakerEntries(root)).toBe(1)
+    expect(root.children).toEqual([unlabeled, user, spacer, labeled, assistant])
+  })
+
+  test('does not mutate layout containers with parallel metadata', () => {
+    const user = new RoleEntry('user')
+    const assistant = new RoleEntry('assistant')
+    const message = new UserEntry()
+    const root = new VStack([user, assistant, message])
+
+    expect(placeSpeakerEntries(root)).toBe(0)
+    expect(root.children).toEqual([user, assistant, message])
+  })
+
+  test('keeps live speaker entries in place', () => {
+    const root = new Container()
+    const user = new RoleEntry('user')
+    const message = new UserEntry()
+    const assistant = new RoleEntry('assistant')
+    root.addChild(user)
+    root.addChild(message)
+    root.addChild(assistant)
+
+    expect(placeSpeakerEntries(root)).toBe(0)
+    expect(root.children).toEqual([user, message, assistant])
+  })
+})
 
 describe('placeRailsAfterOpening', () => {
   test('moves a rail directly after its opening assistant message', () => {

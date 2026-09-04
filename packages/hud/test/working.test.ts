@@ -51,9 +51,9 @@ describe('live usage row', () => {
     expect(formatUsageRow(entry)).toContain('99% cached')
   })
 
-  test('omits the cache share when nothing was cached', () => {
+  test('reports a zero cache share when nothing was cached', () => {
     const entry = toUsageEntry(totalsWith({ input: 100, startedAt: 0 }), 1000)
-    expect(formatUsageRow(entry)).not.toContain('cached')
+    expect(formatUsageRow(entry)).toContain('0% cached')
   })
 
   test('separates every field with the same separator', () => {

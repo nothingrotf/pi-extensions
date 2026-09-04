@@ -1,5 +1,5 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
-import { type Component, Text } from '@earendil-works/pi-tui'
+import type { Component } from '@earendil-works/pi-tui'
 
 import {
   ansiForeground,
@@ -14,6 +14,7 @@ import {
 } from './colors.ts'
 import { pulseFrame } from './pulse.ts'
 import { shimmerTextAtTick } from './shimmer.ts'
+import { frameTranscriptLine } from './transcript-geometry.ts'
 
 export type SpeakerHeaderData = {
   assistant: boolean
@@ -111,6 +112,6 @@ export class SpeakerHeaderComponent implements Component {
       this.source?.(this.data.timestamp),
       this.initialTick,
     )
-    return new Text(line, 0, 0).render(width)
+    return [frameTranscriptLine(line, width)]
   }
 }

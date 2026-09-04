@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 import { animationTickMs } from './animation-clock.ts'
 import { type RailPalette, type RailTint, tint } from './colors.ts'
 import { sanitizeScalar } from './format.ts'
-import { icon, type IconKey } from './icons.ts'
+import { icon, type IconKey, usesNerdIcons } from './icons.ts'
 import type { HudTheme } from './render.ts'
 
 export type RailStatus = 'error' | 'ok' | 'pending'
@@ -19,6 +19,7 @@ export function isPseudo(kind: RailKind | undefined): boolean {
 }
 
 export type RailAction = {
+  argGlyphs: readonly string[]
   category: RailCategory
   children: readonly RailAction[] | undefined
   detail: string
@@ -52,10 +53,9 @@ export const treeBranch = '├─'
 export const treeLast = '╰─'
 export const treeSpine = '│'
 
-const detailCap = 96
+const summaryCap = 96
 const outputLineCap = 6
 const outputWidthCap = 120
-const childCap = 8
 const italicOn = '\x1b[3m'
 const italicOff = '\x1b[23m'
 const spinnerTickMs = 150
@@ -74,10 +74,14 @@ export function tintFor(key: IconKey): RailTint {
       return 'web'
     case 'todo':
       return 'native'
+    case 'grep':
+      return 'genome'
     case 'read':
+    case 'list':
     case 'search':
-    case 'find':
       return 'read'
+    case 'find':
+      return 'neutral'
     case 'edit':
     case 'shell':
       return 'shell'
@@ -97,7 +101,11 @@ function mergeMeta(groups: RailGroup[], action: RailAction): boolean {
   if (existing === undefined) return false
   existing.actions.push(action)
   existing.count += 1
-  existing.status = action.status === 'error' ? 'error' : existing.status
+  existing.status = existing.actions.some((entry) => entry.status === 'error')
+    ? 'error'
+    : existing.actions.some((entry) => entry.status === 'pending')
+      ? 'pending'
+      : 'ok'
   return true
 }
 
@@ -134,14 +142,14 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
     const joinable =
       open !== undefined &&
       open.key === action.doneLabel &&
-      open.status !== 'error' &&
-      action.status !== 'error'
+      open.status === 'ok' &&
+      action.status === 'ok'
     if (open !== undefined && joinable) {
       open.actions.push(action)
       open.count += 1
       continue
     }
-    open = {
+    const next = {
       actions: [action],
       category: action.category,
       count: 1,
@@ -150,7 +158,8 @@ export function groupActions(actions: readonly RailAction[]): RailGroup[] {
       label: action.doneLabel,
       status: action.status,
     }
-    groups.push(open)
+    groups.push(next)
+    open = action.status === 'ok' ? next : undefined
   }
   return groups
 }
@@ -172,6 +181,11 @@ export function showsPendingNarration(input: PendingNarrationInput): boolean {
 export function groupLabel(group: RailGroup): string {
   const only = group.actions[0]
   if (group.count === 1 && only !== undefined) return actionLabel(only)
+  if (group.status === 'pending') {
+    return (
+      group.actions.findLast((action) => action.status === 'pending')?.runningLabel ?? group.label
+    )
+  }
   return group.label
 }
 
@@ -200,11 +214,10 @@ export function groupParts(group: RailGroup): DetailParts {
     const only = group.actions[0]
     return only === undefined ? { arg: '', summary: '' } : actionParts(only)
   }
-  const seen: string[] = []
-  for (const action of group.actions) {
-    if (action.detail.length > 0 && !seen.includes(action.detail)) seen.push(action.detail)
-  }
-  return { arg: seen.join(separator), summary: '' }
+  const details = group.actions.map((action) => action.detail).filter((detail) => detail.length > 0)
+  const shown = details.slice(0, 3).join(separator)
+  const overflow = details.length > 3 ? ` +${String(details.length - 3)}` : ''
+  return { arg: `${shown}${overflow}`, summary: '' }
 }
 
 export function groupDetail(group: RailGroup): string {
@@ -222,9 +235,11 @@ const durationWidth = 8
 export function formatDuration(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms)) return ''
   const seconds = Math.max(0, ms) / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = Math.round(seconds - minutes * 60)
+  const roundedTenths = Number(seconds.toFixed(1))
+  if (roundedTenths < 60) return `${roundedTenths.toFixed(1)}s`
+  const roundedSeconds = Math.round(roundedTenths)
+  const minutes = Math.floor(roundedSeconds / 60)
+  const remainder = roundedSeconds % 60
   return remainder > 0 ? `${String(minutes)}m ${String(remainder)}s` : `${String(minutes)}m`
 }
 
@@ -252,11 +267,12 @@ export function railHeader(groups: readonly RailGroup[], theme: RailTheme): stri
   const failed = tools.filter((action) => action.status === 'error').length
   const edits = tools.filter((action) => action.category === 'edit').length
   const noun = total === 1 ? 'action' : 'actions'
-  const parts = [tint(theme.palette, 'head', `${total} ${noun}`)]
-  if (edits > 0)
-    parts.push(tint(theme.palette, 'head', `${edits} ${edits === 1 ? 'edit' : 'edits'}`))
-  if (failed > 0) parts.push(tint(theme.palette, 'headFail', `${failed} failed`))
-  return `${parts.join(tint(theme.palette, 'dim', separator))} ${tint(theme.palette, 'caret', '▾')}`
+  let header = tint(theme.palette, 'head', `${total} ${noun}`)
+  if (edits > 0) {
+    header += tint(theme.palette, 'head', `${separator}${edits} ${edits === 1 ? 'edit' : 'edits'}`)
+  }
+  if (failed > 0) header += tint(theme.palette, 'headFail', `${separator}${failed} failed`)
+  return `${header} ${tint(theme.palette, 'caret', '▾')}`
 }
 
 export const labelWidth = 12
@@ -272,6 +288,7 @@ function countCell(label: string, count: number): string {
 
 type RowParts = {
   arg: string
+  argGlyphs: readonly string[]
   branch: string
   count: number
   duration: number | undefined
@@ -296,8 +313,25 @@ function alignDuration(
   const budget = Math.max(1, width - durationWidth)
   const body = visibleWidth(left) > budget ? truncateToWidth(left, budget, '') : left
   const gap = Math.max(0, width - visibleWidth(body) - text.length)
-  const durationTint = duration !== undefined && duration >= 1000 ? 'duration' : 'dim'
+  const durationTint = duration !== undefined && duration >= 1000 ? 'duration' : 'faint'
   return `${body}${' '.repeat(gap)}${tint(theme.palette, durationTint, text)}`
+}
+
+function groupArgumentGlyphs(group: RailGroup): string[] {
+  const glyphs: string[] = []
+  for (const action of group.actions) {
+    for (const glyph of action.argGlyphs) {
+      if (!glyphs.includes(glyph)) glyphs.push(glyph)
+      if (glyphs.length === 3) return glyphs
+    }
+  }
+  return glyphs
+}
+
+function iconCell(key: IconKey, theme: RailTheme, tone: RailTint): string {
+  const glyph = icon(key)
+  const padding = ' '.repeat(Math.max(0, 2 - visibleWidth(glyph)))
+  return `${tint(theme.palette, tone, glyph)}${padding}`
 }
 
 function row(
@@ -310,12 +344,12 @@ function row(
   const pseudo = isPseudo(parts.kind)
   const kind = pseudo ? 'pseudo' : tintFor(parts.iconKey)
   const labelKind: RailTint = parts.status === 'pending' ? 'agent' : pseudo ? 'arg' : kind
-  const glyph = tint(theme.palette, kind, icon(parts.iconKey))
+  const glyph = iconCell(parts.iconKey, theme, kind)
   const gap = padLabel(parts.label).slice(parts.label.length)
   const label = `${tint(theme.palette, labelKind, parts.label)}${gap}`
   const count = parts.count > 1 ? tint(theme.palette, 'dim', `×${parts.count}`) : ''
   const mark = pseudo && parts.status !== 'pending' ? ' ' : statusGlyph(parts.status, theme, tick)
-  const head = `${tint(theme.palette, 'branch', parts.branch)} ${mark} ${glyph} ${label}${count}`
+  const head = `${tint(theme.palette, 'branch', parts.branch)} ${mark} ${glyph}${label}${count}`
   const pieces: string[] = []
   if (pseudo) {
     const detail = combineDetail(parts.arg, parts.summary)
@@ -326,7 +360,15 @@ function row(
       )
     }
   } else {
-    if (parts.arg.length > 0) pieces.push(tint(theme.palette, 'arg', parts.arg))
+    const argGlyphs = usesNerdIcons() ? parts.argGlyphs : []
+    if (argGlyphs.length > 0) {
+      pieces.push(`${tint(theme.palette, kind, argGlyphs.join(' '))} `)
+    }
+    if (parts.arg.length > 0) {
+      const argTone: RailTint =
+        parts.status === 'pending' ? 'text' : parts.count > 1 ? 'faint' : 'arg'
+      pieces.push(tint(theme.palette, argTone, parts.arg))
+    }
     if (parts.summary.length > 0) {
       const tone: RailTint = parts.status === 'error' ? 'fail' : 'dim'
       const lead = tint(theme.palette, 'dim', separator)
@@ -366,12 +408,7 @@ function outputLines(group: RailGroup, theme: RailTheme, indent: string): string
 }
 
 function parentParts(group: RailGroup): DetailParts {
-  const parts = groupParts(group)
-  if (group.count > 1 && visibleWidth(parts.arg) > detailCap) return { arg: '', summary: '' }
-  return {
-    arg: truncateToWidth(parts.arg, detailCap, ''),
-    summary: truncateToWidth(parts.summary, detailCap, ''),
-  }
+  return groupParts(group)
 }
 
 export function labelColumn(groups: readonly RailGroup[]): number {
@@ -390,6 +427,7 @@ export function railLines(
   groups: readonly RailGroup[],
   theme: RailTheme,
   options: {
+    copyChipWidth?: number
     expanded: boolean
     pending?: boolean
     tick?: number | undefined
@@ -399,8 +437,8 @@ export function railLines(
 ): string[] {
   if (groups.length === 0) return []
   const width = options.width ?? 120
+  const copyChipWidth = options.copyChipWidth ?? 0
   const tick = options.tick ?? 0
-  const column = labelColumn(groups)
   const lines = [railHeader(groups, theme)]
   const dropped = Math.max(0, groups.length - groupCap)
   const shownGroups = dropped > 0 ? groups.slice(dropped) : groups
@@ -414,28 +452,28 @@ export function railLines(
   const pending = options.pending === true
   shownGroups.forEach((group, index) => {
     const last = index === shownGroups.length - 1 && !pending
-    const parentCell = countCell(groupLabel(group), group.count)
-    const caret = group.count > 1 ? ` ${tint(theme.palette, 'caret', '▾')}` : ''
+    const actionWidth = Math.max(1, width - (group.count === 1 ? copyChipWidth : 0))
+    const caret =
+      group.count > 1 ? ` ${tint(theme.palette, 'groupCaret', options.expanded ? '▾' : '▸')}` : ''
     const parent = parentParts(group)
     lines.push(
       row(
         {
           arg: parent.arg,
+          argGlyphs: groupArgumentGlyphs(group),
           branch: last ? treeLast : treeBranch,
           count: group.count,
           duration: groupDuration(group),
           iconKey: group.iconKey,
           kind: group.actions[0]?.kind,
           label: groupLabel(group),
-          padding: ' '.repeat(
-            Math.max(0, column - visibleWidth(parentCell)) + (group.count > 1 ? 1 : 0),
-          ),
+          padding: group.count > 1 ? ' ' : '',
           status: group.status,
           summary: parent.summary,
         },
         theme,
         caret,
-        width,
+        actionWidth,
         tick,
       ),
     )
@@ -445,6 +483,7 @@ export function railLines(
       const nested = only?.children ?? []
       if (nested.length > 0) {
         const inner = railLines(groupActions(nested), theme, {
+          copyChipWidth,
           expanded: options.expanded,
           tick,
           width: Math.max(1, width - visibleWidth(stem)),
@@ -455,15 +494,16 @@ export function railLines(
       if (options.expanded) lines.push(...outputLines(group, theme, `${stem}   `))
       return
     }
-    const shown = group.actions.slice(0, childCap)
-    const hidden = group.actions.length - shown.length
+    if (!options.expanded) return
+    const shown = group.actions
     shown.forEach((action, childIndex) => {
-      const childLast = hidden === 0 && childIndex === shown.length - 1
+      const childLast = childIndex === shown.length - 1
       const label = actionLabel(action)
       lines.push(
         `${stem}${row(
           {
             arg: action.detail,
+            argGlyphs: action.argGlyphs,
             branch: childLast ? treeLast : treeBranch,
             count: 1,
             duration: action.durationMs,
@@ -476,23 +516,19 @@ export function railLines(
           },
           theme,
           '',
-          Math.max(1, width - visibleWidth(stem)),
+          Math.max(1, width - visibleWidth(stem) - copyChipWidth),
           tick,
         )}`,
       )
     })
-    if (hidden > 0) {
-      const branch = tint(theme.palette, 'branch', treeLast)
-      lines.push(`${stem}${branch} ${tint(theme.palette, 'dim', `+${hidden} completed`)}`)
-    }
   })
   if (pending) {
     const branch = tint(theme.palette, 'branch', treeLast)
     const status = tint(theme.palette, 'arg', actionSpinnerFrame(tick))
-    const glyph = tint(theme.palette, 'pseudo', icon('thought'))
+    const glyph = iconCell('thought', theme, 'pseudo')
     const label = tint(theme.palette, 'pseudoBody', 'Thinking')
     const dots = tint(theme.palette, 'arg', pendingDotsFrame(tick))
-    lines.push(`${branch} ${status} ${glyph} ${label}${dots}`)
+    lines.push(`${branch} ${status} ${glyph}${label}${dots}`)
   }
   const usage = options.usage
   if (usage !== undefined && usage.length > 0) {
@@ -507,15 +543,16 @@ export function summarizeOutput(text: string, status: RailStatus = 'ok'): string
   if (status === 'error') {
     const first = trimmed.split('\n').find((line) => line.trim().length > 0) ?? ''
     const single = sanitizeScalar(first)
-    return single.length === 0 ? '' : truncateToWidth(single, detailCap, '…')
+    return single.length === 0 ? '' : truncateToWidth(single, summaryCap, '…')
   }
   const lines = trimmed.split('\n')
   if (lines.length > 1) return `${lines.length} lines`
   const single = sanitizeScalar(trimmed)
-  return single.length === 0 ? '' : truncateToWidth(single, detailCap, '…')
+  return single.length === 0 ? '' : truncateToWidth(single, summaryCap, '…')
 }
 
 export type RailPatch = {
+  argGlyphs?: readonly string[]
   category?: RailCategory
   children?: readonly RailAction[]
   detail?: string
@@ -598,6 +635,7 @@ export class RailStore {
     const children = [...(parent.children ?? [])]
     const existing = children.findIndex((child) => child.toolCallId === toolCallId)
     const base: RailAction = {
+      argGlyphs: patch.argGlyphs ?? [],
       category: patch.category ?? 'other',
       children: undefined,
       detail: patch.detail ?? '',
@@ -623,6 +661,7 @@ export class RailStore {
       const status = patch.status ?? current.status
       children[existing] = {
         ...current,
+        argGlyphs: patch.argGlyphs ?? current.argGlyphs,
         category: patch.category ?? current.category,
         detail: patch.detail ?? current.detail,
         doneLabel: patch.doneLabel ?? current.doneLabel,
@@ -651,6 +690,7 @@ export class RailStore {
       const status = patch.status ?? 'pending'
       this.index.set(toolCallId, this.actions.length)
       this.actions.push({
+        argGlyphs: patch.argGlyphs ?? [],
         category: patch.category ?? 'other',
         children: patch.children,
         detail: patch.detail ?? '',
@@ -684,6 +724,7 @@ export class RailStore {
     const durationMs =
       patch.resetDerived === true ? patch.durationMs : (patch.durationMs ?? measured)
     this.actions[position] = {
+      argGlyphs: patch.argGlyphs ?? current.argGlyphs,
       category: patch.category ?? current.category,
       children: patch.children ?? current.children,
       detail: patch.detail ?? current.detail,

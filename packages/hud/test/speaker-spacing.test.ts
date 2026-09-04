@@ -15,6 +15,13 @@ const bell = String.fromCharCode(7)
 const osc133ZoneStart = `${osc}]133;A${bell}`
 const osc133ZoneEnd = `${osc}]133;B${bell}`
 const osc133ZoneFinal = `${osc}]133;C${bell}`
+const framedAssistant = [
+  `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}    answer${' '.repeat(30)}`,
+]
+const framedAssistantWithGap = [
+  `${osc133ZoneStart}${' '.repeat(40)}`,
+  `${osc133ZoneEnd}${osc133ZoneFinal}    answer${' '.repeat(30)}`,
+]
 
 class RoleEntryFixture implements Component {
   readonly entry: {
@@ -33,6 +40,16 @@ class RoleEntryFixture implements Component {
   }
 }
 
+class RailEntryFixture implements Component {
+  readonly entry = { customType: 'hud-rail' }
+
+  invalidate(): void {}
+
+  render(_width: number): string[] {
+    return ['', 'rail']
+  }
+}
+
 class UsageEntryFixture implements Component {
   readonly entry = { customType: 'timestamp-pi' }
 
@@ -44,18 +61,23 @@ class UsageEntryFixture implements Component {
 }
 
 class UserMessageFixture implements Component {
-  readonly outputPad = 3
-  readonly text = 'prompt'
+  outputPad = 3
   readonly children: Component[]
+  readonly text: string
 
-  constructor() {
+  constructor(text = 'prompt') {
+    this.text = text
     const box = new Box(0, 1)
-    box.addChild(new Text('prompt', 0, 0))
+    box.addChild(new Text(text, 0, 0))
     this.children = [box]
   }
 
   invalidate(): void {
     for (const child of this.children) child.invalidate?.()
+  }
+
+  setOutputPad(padding: number): void {
+    this.outputPad = padding
   }
 
   render(width: number): string[] {
@@ -71,11 +93,22 @@ class UserMessageFixture implements Component {
 class AssistantMessageFixture implements Component {
   readonly contentContainer = {}
   readonly hideThinkingBlock = true
+  outputPad = 1
 
   invalidate(): void {}
 
+  setOutputPad(padding: number): void {
+    this.outputPad = padding
+  }
+
   render(_width: number): string[] {
     return [osc133ZoneStart, '', `${osc133ZoneEnd}${osc133ZoneFinal}answer`]
+  }
+}
+
+class EmptyAssistantMessageFixture extends AssistantMessageFixture {
+  override render(_width: number): string[] {
+    return [osc133ZoneStart, '', `${osc133ZoneEnd}${osc133ZoneFinal}`]
   }
 }
 
@@ -110,26 +143,80 @@ describe('speaker spacing', () => {
     const { root, spacer, user } = fixture()
     sweepSpeakerSpacing(root, () => true)
     expect(spacer.render(40)).toEqual([])
-    expect(compact(user.render(40))).toEqual(['prompt'])
+    expect(compact(user.render(40))).toEqual(['    prompt'])
+  })
+
+  test('reserves wide edit and copy controls for user text', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('user'))
+    const user = new UserMessageFixture(
+      'Read packages/hud/package.json and packages/hud/README.md as two separate read tool calls, then reply DONE. Do not modify files.',
+    )
+    root.addChild(user)
+    root.addChild(new RoleEntryFixture('assistant'))
+    sweepSpeakerSpacing(root, () => true)
+    expect(compact(user.render(120))).toEqual([
+      '       Read packages/hud/package.json and packages/hud/README.md as two separate read tool calls,',
+      '       then reply DONE. Do not modify files.',
+    ])
   })
 
   test('preserves user and assistant terminal zones', () => {
     const { assistant, root, user } = fixture()
     sweepSpeakerSpacing(root, () => true)
     const userLine = user.render(40)[0] ?? ''
-    expect(userLine.startsWith(osc133ZoneStart)).toBe(true)
-    expect(userLine.endsWith(`${osc133ZoneEnd}${osc133ZoneFinal}`)).toBe(true)
+    expect(userLine.startsWith(`${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}`)).toBe(true)
     expect(stripTerminalSequences(userLine).trim()).toBe('prompt')
-    expect(assistant.render(40)).toEqual([
-      `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}answer`,
-    ])
+    expect(assistant.render(40)).toEqual(framedAssistant)
+  })
+
+  test('removes the wrapper gap before a rail without opening prose', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    const rail = new RailEntryFixture()
+    root.addChild(rail)
+    sweepSpeakerSpacing(root, () => true)
+    expect(rail.render(40)).toEqual(['rail'])
+  })
+
+  test('keeps the wrapper gap after opening prose', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    root.addChild(new AssistantMessageFixture())
+    const rail = new RailEntryFixture()
+    root.addChild(rail)
+    sweepSpeakerSpacing(root, () => true)
+    expect(rail.render(40)).toEqual(['', 'rail'])
+  })
+
+  test('keeps one gap before an answer that follows a rail', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    root.addChild(new RailEntryFixture())
+    const assistant = new AssistantMessageFixture()
+    root.addChild(assistant)
+    sweepSpeakerSpacing(root, () => true)
+    expect(assistant.render(40)).toEqual(framedAssistantWithGap)
+  })
+
+  test('removes empty assistant components between a rail and answer', () => {
+    const root = new Container()
+    root.addChild(new RoleEntryFixture('assistant'))
+    root.addChild(new RailEntryFixture())
+    const empty = new EmptyAssistantMessageFixture()
+    root.addChild(empty)
+    const assistant = new AssistantMessageFixture()
+    root.addChild(assistant)
+    sweepSpeakerSpacing(root, () => true)
+    expect(empty.render(40)).toEqual([])
+    expect(assistant.render(40)).toEqual(framedAssistantWithGap)
   })
 
   test('restores native spacing when headers are disabled', () => {
     let active = true
     const { assistant, root, spacer, user } = fixture()
     sweepSpeakerSpacing(root, () => active)
-    expect(compact(user.render(40))).toEqual(['prompt'])
+    expect(compact(user.render(40))).toEqual(['    prompt'])
     active = false
     expect(spacer.render(40)).toEqual([''])
     expect(compact(user.render(40))).toEqual(['', 'prompt', ''])
@@ -180,19 +267,13 @@ describe('speaker spacing', () => {
     expect(usage.render(40)).toEqual([])
   })
 
-  test('keeps later assistant messages unchanged', () => {
+  test('frames every assistant message in one turn', () => {
     const { assistant, root } = fixture()
     const later = new AssistantMessageFixture()
     root.addChild(later)
     sweepSpeakerSpacing(root, () => true)
-    expect(assistant.render(40)).toEqual([
-      `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}answer`,
-    ])
-    expect(later.render(40)).toEqual([
-      osc133ZoneStart,
-      '',
-      `${osc133ZoneEnd}${osc133ZoneFinal}answer`,
-    ])
+    expect(assistant.render(40)).toEqual(framedAssistant)
+    expect(later.render(40)).toEqual(framedAssistant)
   })
 
   test('patches each component once', () => {
@@ -200,9 +281,7 @@ describe('speaker spacing', () => {
     sweepSpeakerSpacing(root, () => true)
     sweepSpeakerSpacing(root, () => true)
     expect(spacer.render(40)).toEqual([])
-    expect(compact(user.render(40))).toEqual(['prompt'])
-    expect(assistant.render(40)).toEqual([
-      `${osc133ZoneStart}${osc133ZoneEnd}${osc133ZoneFinal}answer`,
-    ])
+    expect(compact(user.render(40))).toEqual(['    prompt'])
+    expect(assistant.render(40)).toEqual(framedAssistant)
   })
 })

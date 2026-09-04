@@ -194,6 +194,18 @@ describe('HUD lifecycle', () => {
     expect(instance.wasCleared()).toBe(true)
   })
 
+  test('removes the working widget when a TUI session restarts', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    instance.mount()
+    await instance.emit('turn_start')
+    expect(instance.widgetKeys()).toEqual(['hud-working'])
+    await instance.emit('session_start')
+    expect(instance.widgetKeys()).toEqual([])
+    instance.mount()
+    await instance.emit('session_shutdown')
+  })
+
   test('owns the working loader widget from turn start to agent end', async () => {
     const instance = harness()
     await instance.emit('session_start')

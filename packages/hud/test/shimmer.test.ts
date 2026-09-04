@@ -85,6 +85,16 @@ describe('shimmer wave', () => {
     expect(shimmerTickMs).toBe(70)
   })
 
+  test('uses one highlight position for a supplementary glyph', () => {
+    const colors = {
+      baseAnsi: ansiForeground(empryoTextPrimary),
+      tintAnsi: ansiForeground(empryoBrandAlt),
+    }
+    expect(shimmerTextAtTick('\u{F031B}', colors, 0)).toBe(
+      shimmerTextAtTick('\u{F031B}', colors, 13),
+    )
+  })
+
   test('matches the exact Oklab colors for the speaker name', () => {
     const painted = shimmerTextAtTick(
       ' 5.6 Sol',

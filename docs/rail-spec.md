@@ -58,6 +58,8 @@ Rule 5 is a deliberate divergence from the original. The original keeps a failed
 call inside the run, so the failure and any denial become invisible at the parent
 row. This implementation puts a failed call on its own row instead.
 
+Non-pseudo meta actions are an exception. Matching labels merge across intervening rows. Their parent status retains pending and failed states.
+
 At most five groups render. Older groups collapse into one `N completed` row at
 the top of the tree.
 
@@ -177,7 +179,9 @@ It is visible WHILE the turn runs, not only at the end. During tool activity, it
 
 When visible assistant prose starts, the row moves below that prose. It always follows the newest visible interaction content.
 
-While the turn runs, the row shimmers. When the turn settles, a static transcript entry replaces it in the dim tone.
+While the turn runs, the row shimmers. After a turn with token use settles, a dim static entry replaces the row.
+
+A settled turn with no token use shows no usage row.
 
 The cost uses three decimals below `$0.10` and two at or above it.
 
@@ -287,8 +291,8 @@ The tree sits under a one line header:
 7 actions ▾
 ```
 
-The count counts raw calls, not groups. The caret is `▾` when expanded and `▸`
-when collapsed.
+The count counts raw calls, not groups. The header caret stays `▾` while the tree is visible.
+Grouped rows use `▾` when expanded and `▸` when collapsed.
 
 ## Reference implementation
 

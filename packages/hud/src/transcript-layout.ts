@@ -1,10 +1,22 @@
-import type { Component, TUI } from '@earendil-works/pi-tui'
+import { type Component, Container, type TUI } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { childrenOf, maxTreeDepth } from './component-tree.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
 
+const RoleEntryComponentSchema = Type.Object({
+  entry: Type.Object({
+    customType: Type.Literal('hud-role'),
+    data: Type.Object({ role: Type.Union([Type.Literal('assistant'), Type.Literal('user')]) }),
+  }),
+})
+const UserMessageComponentSchema = Type.Object({
+  outputPad: Type.Number(),
+  setOutputPad: Type.Function([Type.Number()], Type.Undefined()),
+  text: Type.String(),
+})
+const SpacerComponentSchema = Type.Object({ lines: Type.Number() })
 const RailEntryComponentSchema = Type.Object({
   entry: Type.Object({ customType: Type.Literal(railEntryType), data: Type.Unknown() }),
 })
@@ -18,6 +30,18 @@ type RailPlacement = {
   unresolved: number
 }
 
+function roleOf(component: Component): 'assistant' | 'user' | undefined {
+  return Value.Check(RoleEntryComponentSchema, component) ? component.entry.data.role : undefined
+}
+
+function isUserMessage(component: Component): boolean {
+  return Value.Check(UserMessageComponentSchema, component)
+}
+
+function isSpacer(component: Component): boolean {
+  return Value.Check(SpacerComponentSchema, component)
+}
+
 function railTurn(component: Component): number | undefined {
   if (!Value.Check(RailEntryComponentSchema, component)) return undefined
   return decodeRailEntry(component.entry.data)
@@ -29,12 +53,59 @@ function assistantTimestamp(component: Component): number | undefined {
     : undefined
 }
 
+function isPlainContainer(component: Component): component is Container {
+  return component.constructor === Container
+}
+
+function moveAfter(root: Component, component: Component, anchor: Component): boolean {
+  if (!isPlainContainer(root)) return false
+  const componentIndex = root.children.indexOf(component)
+  const anchorIndex = root.children.indexOf(anchor)
+  if (componentIndex < 0 || anchorIndex < 0 || componentIndex === anchorIndex + 1) return false
+  root.children.splice(componentIndex, 1)
+  root.children.splice(root.children.indexOf(anchor) + 1, 0, component)
+  return true
+}
+
+function moveBefore(root: Component, component: Component, anchor: Component): boolean {
+  if (!isPlainContainer(root)) return false
+  const componentIndex = root.children.indexOf(component)
+  const anchorIndex = root.children.indexOf(anchor)
+  if (componentIndex < 0 || anchorIndex < 0 || componentIndex === anchorIndex - 1) return false
+  root.children.splice(componentIndex, 1)
+  root.children.splice(root.children.indexOf(anchor), 0, component)
+  return true
+}
+
+export function placeSpeakerEntries(root: Component): number {
+  if (!isPlainContainer(root)) return 0
+  const entries = childrenOf(root)
+  const userIndices = entries.flatMap((entry, index) => (roleOf(entry) === 'user' ? [index] : []))
+  let moved = 0
+  for (let index = 0; index < userIndices.length; index += 1) {
+    const start = userIndices[index]
+    const end = userIndices[index + 1] ?? entries.length
+    if (start === undefined) continue
+    const turn = entries.slice(start + 1, end)
+    const message = turn.find(isUserMessage)
+    const user = entries[start]
+    const assistant = turn.find((entry) => roleOf(entry) === 'assistant')
+    if (message === undefined || user === undefined || assistant === undefined) continue
+    if (moveAfter(root, assistant, message)) moved += 1
+    const messageIndex = root.children.indexOf(message)
+    const previous = root.children[messageIndex - 1]
+    const anchor = previous !== undefined && isSpacer(previous) ? previous : message
+    if (moveBefore(root, user, anchor)) moved += 1
+  }
+  return moved
+}
+
 function placeDirectChildren(
   root: Component,
   openingTimestamps: ReadonlyMap<number, number>,
 ): RailPlacement {
   const placement: RailPlacement = { matched: 0, moved: 0, unresolved: 0 }
-  if (!('children' in root) || !Array.isArray(root.children)) return placement
+  if (!isPlainContainer(root)) return placement
   for (const rail of childrenOf(root).filter((child) => railTurn(child) !== undefined)) {
     const turn = railTurn(rail)
     if (turn === undefined) continue

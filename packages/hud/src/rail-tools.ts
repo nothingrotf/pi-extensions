@@ -17,6 +17,7 @@ import type { Component } from '@earendil-works/pi-tui'
 import { Type, type Static, type TSchema } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { argumentGlyphs } from './arg-glyphs.ts'
 import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
 import { defaultRailIcon, defaultRailLabel, type RailActionReport } from './rail-channel.ts'
@@ -45,6 +46,10 @@ const CommandArgs = Type.Object({ command: Type.String() })
 const PatternArgs = Type.Object({ pattern: Type.String() })
 const EditArgs = Type.Object({ edits: Type.Array(Type.Unknown()), path: Type.String() })
 
+function truncateDetail(value: string, maximum: number, retained: number): string {
+  return value.length > maximum ? `${value.slice(0, retained)}...` : value
+}
+
 type BuiltInMeta = {
   category: RailCategory
   doneLabel: string
@@ -59,10 +64,10 @@ const builtInMeta = new Map<string, BuiltInMeta>([
   ['bash', { category: 'other', doneLabel: 'Ran', iconKey: 'shell', runningLabel: 'Running' }],
   [
     'grep',
-    { category: 'search', doneLabel: 'Searched', iconKey: 'search', runningLabel: 'Searching' },
+    { category: 'search', doneLabel: 'Searched', iconKey: 'grep', runningLabel: 'Searching' },
   ],
   ['find', { category: 'search', doneLabel: 'Found', iconKey: 'find', runningLabel: 'Finding' }],
-  ['ls', { category: 'search', doneLabel: 'Listed', iconKey: 'find', runningLabel: 'Listing' }],
+  ['ls', { category: 'search', doneLabel: 'Listed', iconKey: 'list', runningLabel: 'Listing' }],
 ])
 
 export type RailCallInput = {
@@ -80,10 +85,17 @@ export function railDetail(call: RailCallInput, cwd: string): string {
     case 'edit':
       return Value.Check(EditArgs, args) ? shortPath(args.path, cwd) : ''
     case 'bash':
-      return Value.Check(CommandArgs, args) ? sanitizeScalar(args.command) : ''
+      return Value.Check(CommandArgs, args)
+        ? truncateDetail(sanitizeScalar(args.command), 60, 57)
+        : ''
     case 'grep':
+      return Value.Check(PatternArgs, args)
+        ? truncateDetail(sanitizeScalar(args.pattern), 55, 52)
+        : ''
     case 'find':
-      return Value.Check(PatternArgs, args) ? sanitizeScalar(args.pattern) : ''
+      return Value.Check(PatternArgs, args)
+        ? truncateDetail(sanitizeScalar(args.pattern), 50, 47)
+        : ''
     default:
       return ''
   }
@@ -92,10 +104,16 @@ export function railDetail(call: RailCallInput, cwd: string): string {
 export function railPatchForCall(call: RailCallInput, cwd: string): RailPatch {
   const meta = builtInMeta.get(call.toolName)
   if (meta !== undefined) {
-    return { ...meta, detail: railDetail(call, cwd), status: 'pending' }
+    return {
+      ...meta,
+      argGlyphs: argumentGlyphs(call.toolName, call.arguments),
+      detail: railDetail(call, cwd),
+      status: 'pending',
+    }
   }
   const label = defaultRailLabel(call.toolName)
   return {
+    argGlyphs: argumentGlyphs(call.toolName, call.arguments),
     category: 'other',
     detail: '',
     doneLabel: label,
@@ -118,12 +136,19 @@ function applyStateReport(
   target: RailStore,
   report: RailActionReport,
   preserveSettlement = false,
+  preserveResultPayload = false,
 ): void {
   const patch: RailPatch = { ...report, measureDuration: false, resetDerived: true }
+  if (report.argGlyphs?.length === 0) delete patch.argGlyphs
   if (preserveSettlement) {
     patch.measureDuration = true
     patch.resetDerived = false
     delete patch.status
+  }
+  if (preserveResultPayload) {
+    delete patch.durationMs
+    delete patch.output
+    delete patch.summary
   }
   if (report.parentToolCallId === undefined) target.report(report.toolCallId, patch)
   else target.reportChild(report.parentToolCallId, report.toolCallId, patch)
@@ -140,7 +165,11 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   const renderedStores = new Set<RailStore>()
   const turnsByStore = new Map<RailStore, Set<number>>()
   const openingAssistantTimestamps = new Map<number, number>()
-  const deferredReports: { report: RailActionReport; target: RailStore }[] = []
+  const deferredReports: {
+    report: RailActionReport
+    settledWhenReported: boolean
+    target: RailStore
+  }[] = []
   let store = new RailStore()
   let segments: RailSegment[] = []
   let maxTurn = 0
@@ -180,8 +209,14 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       if (state === undefined) continue
       const target = byEntryTurn.get(state.turn)
       if (target === undefined) continue
-      applyStateReport(target, state.report)
-      deferredReports.push({ report: state.report, target })
+      const settledWhenReported = settledToolCallIds.has(state.report.toolCallId)
+      applyStateReport(
+        target,
+        state.report,
+        settledWhenReported,
+        settledWhenReported && state.report.status === 'pending',
+      )
+      deferredReports.push({ report: state.report, settledWhenReported, target })
       byToolCallId.set(state.report.toolCallId, target)
       if (state.report.parentToolCallId !== undefined) {
         parentByToolCallId.set(state.report.toolCallId, state.report.parentToolCallId)
@@ -227,9 +262,13 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   }
   finalize()
   for (const deferred of deferredReports) {
-    const preserveSettlement =
-      deferred.report.status === 'pending' && settledToolCallIds.has(deferred.report.toolCallId)
-    applyStateReport(deferred.target, deferred.report, preserveSettlement)
+    const settled = settledToolCallIds.has(deferred.report.toolCallId)
+    applyStateReport(
+      deferred.target,
+      deferred.report,
+      settled,
+      settled && (!deferred.settledWhenReported || deferred.report.status === 'pending'),
+    )
   }
   return {
     byEntryTurn,
@@ -273,6 +312,7 @@ export function railTool<TParams extends TSchema, TDetails, TBaseState>(
     renderCall(args, _theme, context) {
       const store = (context.state.store ??= storeFor(context.toolCallId))
       store.report(context.toolCallId, {
+        argGlyphs: argumentGlyphs(base.name, args),
         category: spec.category,
         detail: spec.detail(args),
         doneLabel: spec.doneLabel,

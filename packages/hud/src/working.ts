@@ -38,6 +38,7 @@ export class WorkingDock {
   private active = false
   private registered = false
   private initialTick: number | undefined
+  private owner: ExtensionUIContext | undefined
   private tui: TUI | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private startedAt = Date.now()
@@ -58,6 +59,7 @@ export class WorkingDock {
     this.active = true
     if (!this.registered) {
       this.registered = true
+      this.owner = ui
       ui.setWidget(widgetKey, (tui, theme) => this.mount(tui, theme), {
         placement: 'aboveEditor',
       })
@@ -75,7 +77,8 @@ export class WorkingDock {
 
   dispose(ui: ExtensionUIContext | undefined): void {
     this.stop()
-    if (this.registered) ui?.setWidget(widgetKey, undefined)
+    if (this.registered) (this.owner ?? ui)?.setWidget(widgetKey, undefined)
+    this.owner = undefined
     this.registered = false
     this.tui = undefined
   }

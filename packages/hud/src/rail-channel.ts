@@ -1,6 +1,7 @@
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { isArgumentGlyph } from './arg-glyphs.ts'
 import type { IconKey } from './icons.ts'
 import type { RailCategory, RailStatus } from './rail.ts'
 
@@ -14,6 +15,7 @@ const RailToolsSchema = Type.Object({
 
 const RailActionSchema = Type.Object({
   toolName: Type.Optional(Type.String({ minLength: 1 })),
+  argGlyphs: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 3 })),
   category: Type.Optional(
     Type.Union([
       Type.Literal('edit'),
@@ -33,6 +35,8 @@ const RailActionSchema = Type.Object({
       Type.Literal('branch'),
       Type.Literal('edit'),
       Type.Literal('find'),
+      Type.Literal('grep'),
+      Type.Literal('list'),
       Type.Literal('read'),
       Type.Literal('search'),
       Type.Literal('shell'),
@@ -54,6 +58,7 @@ export type RailAnnouncement = {
 }
 
 export type RailActionReport = {
+  argGlyphs?: string[]
   category?: RailCategory
   detail?: string
   doneLabel?: string
@@ -96,7 +101,9 @@ export function decodeRailTools<Input>(data: Input): RailAnnouncement | undefine
 }
 
 export function decodeRailAction<Input>(data: Input): RailActionReport | undefined {
-  return Value.Check(RailActionSchema, data) ? data : undefined
+  if (!Value.Check(RailActionSchema, data)) return undefined
+  if (data.argGlyphs?.some((glyph) => !isArgumentGlyph(glyph)) === true) return undefined
+  return data
 }
 
 export const builtInRailToolNames = ['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write']

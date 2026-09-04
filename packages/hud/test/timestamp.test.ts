@@ -26,13 +26,15 @@ describe('transcript rows', () => {
 
   test('formats compact tokens and spans', () => {
     expect(formatTokens(999)).toBe('999')
+    expect(formatTokens(2_000)).toBe('2.0k')
     expect(formatTokens(2_400)).toBe('2.4k')
     expect(formatTokens(43_400)).toBe('43.4k')
-    expect(formatTokens(1_500_000)).toBe('1.5m')
-    expect(formatSpan(400)).toBe('400ms')
+    expect(formatTokens(1_500_000)).toBe('1.5M')
+    expect(formatSpan(400)).toBe('0s')
     expect(formatSpan(8_200)).toBe('8s')
-    expect(formatSpan(62_000)).toBe('1m2s')
-    expect(formatSpan(120_000)).toBe('2m')
+    expect(formatSpan(62_000)).toBe('1m 02s')
+    expect(formatSpan(120_000)).toBe('2m 00s')
+    expect(formatSpan(3_661_000)).toBe('1h 01m 01s')
   })
 
   test('formats the usage row like the reference', () => {
@@ -49,12 +51,12 @@ describe('transcript rows', () => {
     ).toBe('▪ 14s · $0.036 · 70.5k in · 229 out · ⛁ 99% cached · ⚡16.4/s')
     expect(
       formatUsageRow({ cacheRead: 0, cost: 0, durationMs: 50, input: 10, output: 5, timestamp }),
-    ).toBe('▪ 50ms · 10 in · 5 out')
+    ).toBe('▪ 0s · $0.000 · 10 in · 5 out · ⛁ 0% cached')
     expect(formatCost(0.036)).toBe('$0.036')
     expect(formatCost(0.26)).toBe('$0.26')
     expect(formatCost(0.099)).toBe('$0.099')
     expect(formatCost(1.5)).toBe('$1.50')
-    expect(formatCost(0.0004)).toBe('$<0.001')
+    expect(formatCost(0.0004)).toBe('$0.000')
     expect(
       hasUsage({ cacheRead: 0, cost: 0, durationMs: 720, input: 0, output: 0, timestamp }),
     ).toBe(false)

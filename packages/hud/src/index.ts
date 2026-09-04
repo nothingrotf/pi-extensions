@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
 
 import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
@@ -45,6 +44,7 @@ import { speakerMotionEnabled } from './speaker-header.ts'
 import { installSpeakerSpacingFix, type SpeakerSpacingFix } from './speaker-spacing.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
+import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
 import { fetchUsageForProvider } from './usage.ts'
 import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
@@ -165,6 +165,7 @@ export default function hud(pi: ExtensionAPI): void {
   const persistRailAction = (action: RailAction, parentToolCallId?: string): void => {
     if (isPseudo(action.kind)) return
     const report: RailActionReport = {
+      argGlyphs: [...action.argGlyphs],
       category: action.category,
       detail: action.detail,
       doneLabel: action.doneLabel,
@@ -348,20 +349,29 @@ export default function hud(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', (_event, ctx) => {
+    stop()
+    dock.dispose(ctx.hasUI && ctx.mode === 'tui' ? ctx.ui : undefined)
+    active = false
+    if (!ctx.hasUI || ctx.mode !== 'tui') {
+      footerOwned = false
+      requestRender = undefined
+      dimEditorBorder = undefined
+      spacerFix?.dispose()
+      spacerFix = undefined
+      speakerSpacingFix?.dispose()
+      speakerSpacingFix = undefined
+      transcriptLayoutFix?.dispose()
+      transcriptLayoutFix = undefined
+    }
     restoreRails(ctx)
     applyThinkingLabel(ctx)
     if (railCwd !== ctx.cwd) {
       railCwd = ctx.cwd
       applyRailTools(pi, railFor, ctx.cwd, railEnabled)
     }
-    if (!ctx.hasUI || ctx.mode !== 'tui') {
-      return
-    }
-    stop()
-    active = true
+    if (!ctx.hasUI || ctx.mode !== 'tui') return
     generation += 1
     const life = generation
-    dock.dispose(undefined)
     ctx.ui.setWorkingVisible(false)
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
@@ -385,7 +395,9 @@ export default function hud(pi: ExtensionAPI): void {
           shimmer: true,
           tick: animationClock.tick(),
         })
-        return rendered === undefined ? [] : ['', ...new Text(rendered, 1, 0).render(width)]
+        return rendered === undefined
+          ? []
+          : ['', frameTranscriptLine(rendered, width, speakerBodyIndent)]
       }
       spacerFix = installThinkingSpacerFix(tui, thinkingQuiet, assistantVisible, assistantUsage)
       speakerSpacingFix = installSpeakerSpacingFix(tui, timestampsEnabled)
@@ -403,6 +415,7 @@ export default function hud(pi: ExtensionAPI): void {
           dimEditorBorder = undefined
           spacerFix?.dispose()
           spacerFix = undefined
+          speakerSpacingFix?.dispose()
           speakerSpacingFix = undefined
           transcriptLayoutFix?.dispose()
           transcriptLayoutFix = undefined
@@ -416,6 +429,7 @@ export default function hud(pi: ExtensionAPI): void {
         },
       }
     })
+    active = true
     start(refreshGit(ctx, life))
     refreshUsage(ctx, life)
     gitTimer = setInterval(() => start(refreshGit(ctx, life)), gitRefreshMs)
@@ -475,6 +489,7 @@ export default function hud(pi: ExtensionAPI): void {
       },
       undefined,
       () => railEnabled,
+      () => turn === railTurn && agentWorking,
     )
   })
 

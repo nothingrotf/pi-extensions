@@ -122,16 +122,18 @@ describe('SpeakerHeaderComponent', () => {
     current = frame({ active: false, tick: 11 })
     const settled = component.render(40)[0] ?? ''
 
-    expect(plain(initial).startsWith('· Empryo')).toBe(true)
+    expect(plain(initial).trimStart().startsWith('· Empryo')).toBe(true)
     expect(animated).not.toBe(initial)
-    expect(plain(settled).startsWith('● Empryo')).toBe(true)
+    expect(plain(settled).trimStart().startsWith('● Empryo')).toBe(true)
     expect(settled.split('\x1b[38;2;')).toHaveLength(4)
     expect(visibleWidth(settled)).toBe(40)
   })
 
-  test('does not add horizontal padding', () => {
+  test('adds responsive horizontal padding', () => {
     const component = new SpeakerHeaderComponent(assistant, theme)
-    expect(plain(component.render(40)[0] ?? '').startsWith('● Empryo')).toBe(true)
+    const line = plain(component.render(40)[0] ?? '')
+    expect(line.startsWith(' ● Empryo')).toBe(true)
+    expect(visibleWidth(line)).toBe(40)
   })
 
   test('can hide an existing header without remounting', () => {

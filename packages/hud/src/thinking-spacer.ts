@@ -175,7 +175,7 @@ export function installThinkingSpacerFix(
     dispose: () => {
       enabled = false
       dirty = true
-      retries = 1
+      retries = 0
       tui.requestRender()
     },
     markDirty: () => {

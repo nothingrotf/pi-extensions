@@ -49,6 +49,7 @@ beforeAll(() => {
 
 function read(overrides: Partial<RailAction> = {}): RailAction {
   return {
+    argGlyphs: [],
     category: 'read',
     children: undefined,
     detail: '',
@@ -83,11 +84,15 @@ const iconKeys: IconKey[] = [
   'edit',
   'fail',
   'find',
+  'grep',
+  'list',
   'ok',
   'pending',
   'read',
   'search',
   'shell',
+  'thought',
+  'chat',
   'todo',
   'tool',
   'web',
@@ -105,18 +110,27 @@ describe('icons', () => {
     setIconMode('ascii')
   })
 
-  test('the nerd set stays inside the safe private-use range', () => {
+  test('the nerd set stays inside a private-use range', () => {
     setIconMode('nerd')
     for (const key of iconKeys) {
       for (const char of icon(key)) {
         const point = char.codePointAt(0) ?? 0
-        const bmp = point <= 0xffff
-        const nerdBmp = point >= 0xe000 && point <= 0xf8ff
-        expect(bmp).toBe(true)
-        if (point > 0x2fff) expect(nerdBmp).toBe(true)
+        const bmp = point >= 0xe000 && point <= 0xf8ff
+        const supplementary = point >= 0xf0000 && point <= 0xffffd
+        if (point > 0x2fff) expect(bmp || supplementary).toBe(true)
       }
     }
     setIconMode('ascii')
+  })
+
+  test('hides persisted argument glyphs in ASCII mode', () => {
+    setIconMode('ascii')
+    const lines = railLines(
+      groupActions([read({ argGlyphs: ['\uE628'], detail: 'src/index.ts' })]),
+      theme,
+      { expanded: false, width: 80 },
+    )
+    expect(lines.join('\n')).not.toContain('\uE628')
   })
 
   test('recognizes nerd font capable terminals', () => {
@@ -644,13 +658,15 @@ describe('groupDetail', () => {
     expect(group === undefined ? '' : groupDetail(group)).toBe('· 4 lines')
   })
 
-  test('lists the distinct arguments for a batch', () => {
+  test('lists the first three arguments for a batch', () => {
     const group = groupActions([
       read({ detail: 'a.ts', summary: '1 line', toolCallId: 'a' }),
       read({ detail: 'b.ts', summary: '9 lines', toolCallId: 'b' }),
       read({ detail: 'b.ts', summary: '9 lines', toolCallId: 'c' }),
     ])[0]
-    expect(group === undefined ? '' : groupDetail(group)).toBe(`a.ts${separator}b.ts`)
+    expect(group === undefined ? '' : groupDetail(group)).toBe(
+      `a.ts${separator}b.ts${separator}b.ts`,
+    )
   })
 })
 
@@ -659,8 +675,10 @@ describe('formatDuration', () => {
     expect(formatDuration(1_100)).toBe('1.1s')
     expect(formatDuration(900)).toBe('0.9s')
     expect(formatDuration(55_000)).toBe('55.0s')
+    expect(formatDuration(59_960)).toBe('1m')
     expect(formatDuration(60_000)).toBe('1m')
     expect(formatDuration(90_000)).toBe('1m 30s')
+    expect(formatDuration(119_600)).toBe('2m')
   })
 
   test('returns an empty string for a missing duration', () => {
@@ -784,14 +802,14 @@ describe('railLines', () => {
     )
   })
 
-  test('drops long batch arguments from the parent row', () => {
+  test('keeps long batch arguments on the parent row', () => {
     const long = 'cd /Users/nothing/Workspaces/pi-extensions && bun run check && bun run test'
     const groups = groupActions([
       bash({ detail: `${long} 1`, toolCallId: 'a' }),
       bash({ detail: `${long} 2`, toolCallId: 'b' }),
     ])
     expect(railLines(groups, theme, { expanded: false, width: 200 })[1]).toBe(
-      '╰─ ✓ $ Ran         ×2 ▾',
+      `╰─ ✓ $ Ran         ×2 ${long} 1 · ${long} 2 ▸`,
     )
   })
 
@@ -801,28 +819,27 @@ describe('railLines', () => {
       bash({ detail: 'luna', toolCallId: 'b' }),
     ])
     expect(railLines(groups, theme, { expanded: false, width: 80 })[1]).toBe(
-      '╰─ ✓ $ Ran         ×2 luna low · luna ▾',
+      '╰─ ✓ $ Ran         ×2 luna low · luna ▸',
     )
   })
 
-  test('nests the batch children without needing the expanded flag', () => {
+  test('hides batch children while collapsed', () => {
     const groups = groupActions([
       bash({ detail: 'one', summary: '1 line', toolCallId: 'a' }),
       bash({ detail: 'two', summary: '1 line', toolCallId: 'b' }),
     ])
     const lines = railLines(groups, theme, { expanded: false, width: 60 })
-    expect(lines).toHaveLength(4)
-    expect(lines[2]).toBe('   ├─ ✓ $ Ran         one · 1 line')
-    expect(lines[3]).toBe('   ╰─ ✓ $ Ran         two · 1 line')
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toBe('╰─ ✓ $ Ran         ×2 one · two ▸')
   })
 
-  test('caps the nested children and reports the remainder', () => {
+  test('shows every batch child while expanded', () => {
     const actions = Array.from({ length: 11 }, (_value, index) =>
       bash({ detail: `cmd ${index}`, toolCallId: `c${index}` }),
     )
-    const lines = railLines(groupActions(actions), theme, { expanded: false, width: 60 })
-    expect(lines).toHaveLength(11)
-    expect(lines.at(-1)).toBe('   ╰─ +3 completed')
+    const lines = railLines(groupActions(actions), theme, { expanded: true, width: 60 })
+    expect(lines).toHaveLength(13)
+    expect(lines.at(-1)).toBe('   ╰─ ✓ $ Ran         cmd 10')
   })
 
   test('expands a batch into aligned child rows with durations', () => {
@@ -968,12 +985,16 @@ describe('mapSessionRails', () => {
   }
   type RailStateTestData = {
     report: {
+      argGlyphs?: string[]
       category?: 'meta'
       doneLabel: string
-      iconKey: 'agent' | 'todo'
+      durationMs?: number
+      iconKey: 'agent' | 'read' | 'todo'
+      output?: string
       parentToolCallId?: string
       runningLabel: string
       status: 'ok' | 'pending'
+      summary?: string
       toolCallId: string
       toolName?: string
     }
@@ -1091,6 +1112,75 @@ describe('mapSessionRails', () => {
       },
     },
     type: 'message',
+  })
+
+  test('restores persisted argument glyphs', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      railStateEntry({
+        report: {
+          argGlyphs: ['\uE628'],
+          doneLabel: 'Read',
+          iconKey: 'read',
+          runningLabel: 'Reading',
+          status: 'ok',
+          toolCallId: 'read-1',
+        },
+        turn: 1,
+      }),
+    ])
+    expect(rails.byEntryTurn.get(1)?.groups()[0]?.actions[0]?.argGlyphs).toEqual(['\uE628'])
+  })
+
+  test('keeps reconstructed glyphs when an ASCII snapshot is empty', () => {
+    setIconMode('nerd')
+    const readEntry: SessionEntry = {
+      ...base,
+      message: {
+        api: 'anthropic-messages',
+        content: [
+          {
+            arguments: { path: 'src/index.ts' },
+            id: 'read-1',
+            name: 'read',
+            type: 'toolCall',
+          },
+        ],
+        model: 'test',
+        provider: 'anthropic',
+        role: 'assistant',
+        stopReason: 'toolUse',
+        timestamp: 0,
+        usage: {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+        },
+      },
+      type: 'message',
+    }
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      readEntry,
+      railStateEntry({
+        report: {
+          argGlyphs: [],
+          doneLabel: 'Read',
+          iconKey: 'read',
+          runningLabel: 'Reading',
+          status: 'ok',
+          toolCallId: 'read-1',
+        },
+        turn: 1,
+      }),
+    ])
+    expect(rails.byEntryTurn.get(1)?.groups()[0]?.actions[0]?.argGlyphs).toEqual(['\uE628'])
+    setIconMode('ascii')
   })
 
   test('backfills a thought row from a thinking block', () => {
@@ -1266,8 +1356,8 @@ describe('mapSessionRails', () => {
     const parent = rails.byToolCallId.get('parent')?.groups()[0]?.actions[0]
     expect(parent?.doneLabel).toBe('Todo')
     expect(parent?.category).toBe('meta')
-    expect(parent?.summary).toBe('')
-    expect(parent?.durationMs).toBeUndefined()
+    expect(parent?.summary).toBe('2 lines')
+    expect(parent?.durationMs).toBe(1_500)
     expect(parent?.children?.[0]?.doneLabel).toBe('Delegated')
     expect(parent?.children?.[0]?.status).toBe('ok')
     expect(rails.byToolCallId.get('parent')?.size()).toBe(1)
@@ -1295,6 +1385,34 @@ describe('mapSessionRails', () => {
     expect(action?.doneLabel).toBe('Custom')
     expect(action?.status).toBe('ok')
     expect(action?.output).toBe('done')
+  })
+
+  test('keeps a native result after a later pending state report', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('settled'),
+      toolResultEntry('settled', 'final\nresult'),
+      railStateEntry({
+        report: {
+          doneLabel: 'Custom',
+          durationMs: 99,
+          iconKey: 'todo',
+          output: 'partial',
+          runningLabel: 'Customizing',
+          status: 'pending',
+          summary: 'partial summary',
+          toolCallId: 'settled',
+        },
+        turn: 1,
+      }),
+    ])
+    const action = rails.byToolCallId.get('settled')?.groups()[0]?.actions[0]
+    expect(action?.doneLabel).toBe('Custom')
+    expect(action?.durationMs).toBe(1_500)
+    expect(action?.output).toBe('final\nresult')
+    expect(action?.status).toBe('ok')
+    expect(action?.summary).toBe('2 lines')
   })
 
   test('labels a non built-in tool from its name', () => {
@@ -1366,6 +1484,22 @@ describe('meta actions', () => {
     ])
     const group = groups[0]
     expect(group === undefined ? '' : groupDetail(group)).toBe('last')
+  })
+
+  test('a pending meta call keeps the row pending', () => {
+    const groups = groupActions([
+      meta({ toolCallId: 'm1' }),
+      meta({ status: 'pending', toolCallId: 'm2' }),
+    ])
+    expect(groups[0]?.status).toBe('pending')
+  })
+
+  test('uses the running label of the pending meta call', () => {
+    const groups = groupActions([
+      meta({ toolCallId: 'm1' }),
+      meta({ runningLabel: 'Updating', status: 'pending', toolCallId: 'm2' }),
+    ])
+    expect(groups[0] === undefined ? '' : groupLabel(groups[0])).toBe('Updating')
   })
 
   test('an error in any meta call marks the row', () => {

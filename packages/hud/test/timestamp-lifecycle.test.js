@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'vite-plus/test'
+import { visibleWidth } from '@earendil-works/pi-tui'
+import { afterEach, describe, expect, test, vi } from 'vite-plus/test'
 
 import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/timestamp.ts'
 
-function harness(header) {
+function harness(header, live) {
   const handlers = new Map()
   const entries = []
   const renderers = new Map()
@@ -18,7 +19,7 @@ function harness(header) {
     },
   }
   const ctx = { ui: {} }
-  const controls = registerTimestamps(api, undefined, header)
+  const controls = registerTimestamps(api, live, header)
   return {
     turnStart(timestamp = Date.now()) {
       handlers.get('turn_start')({ timestamp }, ctx)
@@ -50,6 +51,8 @@ function harness(header) {
 }
 
 const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('transcript lifecycle', () => {
   test('opens the assistant header after the user message and adopts the assistant timestamp', () => {
@@ -105,6 +108,30 @@ describe('transcript lifecycle', () => {
     })
   })
 
+  test('shows a zeroed live usage row before token metrics arrive', () => {
+    const live = { row: () => undefined }
+    const instance = harness(undefined, live)
+    instance.agentStart()
+    instance.turnStart(Date.now() + 1_000)
+    expect(live.row()).toMatch(/▪ 0s · \$0\.000 · 0 in · 0 out · ⛁ 0% cached/u)
+  })
+
+  test('measures live and settled usage from the first turn receipt', () => {
+    let now = 100
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const live = { row: () => undefined }
+    const instance = harness(undefined, live)
+    instance.agentStart()
+    now = 1_000
+    instance.turnStart(99_000)
+    now = 2_400
+    expect(live.row()).toContain('1s')
+    instance.start({ role: 'assistant', timestamp: 200 })
+    instance.end({ role: 'assistant', timestamp: 200, usage })
+    instance.agentEnd()
+    expect(instance.entries.at(-1).data.durationMs).toBe(1_400)
+  })
+
   test('records one usage row per agent run', () => {
     const instance = harness()
     instance.agentStart()
@@ -148,6 +175,8 @@ describe('transcript lifecycle', () => {
     const persistedUsage = instance.render(data)
     const persistedRole = instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)
     expect(persistedUsage).toBeDefined()
+    expect(persistedUsage.render(80)[0].startsWith('      ▪')).toBe(true)
+    expect(visibleWidth(persistedUsage.render(80)[0])).toBe(80)
     expect(persistedRole).toBeDefined()
     instance.toggle()
     expect(persistedUsage.render(80)).toEqual([])

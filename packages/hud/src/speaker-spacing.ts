@@ -1,8 +1,23 @@
-import { stripTerminalSequences, type Component, type TUI } from '@earendil-works/pi-tui'
+import {
+  Box,
+  Markdown,
+  stripTerminalSequences,
+  type Component,
+  type TUI,
+} from '@earendil-works/pi-tui'
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { childrenOf, maxTreeDepth } from './component-tree.ts'
+import { ansiForeground, ansiReset, empryoTextPrimary } from './colors.ts'
+import { childrenOf, maxTreeDepth, walkComponents } from './component-tree.ts'
+import { RailComponent } from './rail-entry.ts'
+import {
+  frameTranscriptLine,
+  speakerBodyIndent,
+  transcriptCopyChipWidth,
+  transcriptInsets,
+} from './transcript-geometry.ts'
+import { placeSpeakerEntries } from './transcript-layout.ts'
 
 const osc = String.fromCharCode(27)
 const bell = String.fromCharCode(7)
@@ -12,6 +27,8 @@ const osc133ZoneFinal = `${osc}]133;C${bell}`
 
 const patchedAssistants = new WeakSet<Component>()
 const patchedEntries = new WeakSet<Component>()
+const patchedMarkdown = new WeakSet<Component>()
+const patchedRails = new WeakSet<Component>()
 const patchedSpacers = new WeakSet<Component>()
 const patchedUsers = new WeakSet<Component>()
 
@@ -23,16 +40,32 @@ const RoleEntrySchema = Type.Object({
   }),
 })
 const SpacerSchema = Type.Object({ lines: Type.Number() })
+const PaddedMessageSchema = Type.Object({
+  outputPad: Type.Number(),
+  setOutputPad: Type.Function([Type.Number()], Type.Undefined()),
+})
 const UserMessageSchema = Type.Object({ outputPad: Type.Number(), text: Type.String() })
 
-type AssistantMessageLike = Component & { contentContainer: object; hideThinkingBlock: boolean }
-type UserMessageLike = Component & Static<typeof UserMessageSchema>
+type PaddedMessage = Static<typeof PaddedMessageSchema>
+type AssistantMessageLike = Component &
+  PaddedMessage & { contentContainer: object; hideThinkingBlock: boolean }
+type UserMessageLike = Component & PaddedMessage & Static<typeof UserMessageSchema>
+
+const primaryAnsi = ansiForeground(empryoTextPrimary)
+const primaryTextStyle = {
+  color: (text: string) => `${primaryAnsi}${text}${ansiReset}`,
+}
 
 function isBlank(line: string): boolean {
   return stripTerminalSequences(line).trim().length === 0
 }
 
+function isPaddedMessage(component: Component): component is Component & PaddedMessage {
+  return Value.Check(PaddedMessageSchema, component)
+}
+
 function isAssistantMessage(component: Component): component is AssistantMessageLike {
+  if (!isPaddedMessage(component)) return false
   if (!('contentContainer' in component) || !('hideThinkingBlock' in component)) return false
   return component.hideThinkingBlock === true || component.hideThinkingBlock === false
 }
@@ -50,34 +83,79 @@ function isSpacer(component: Component): boolean {
 }
 
 function isUserMessage(component: Component): component is UserMessageLike {
-  return Value.Check(UserMessageSchema, component)
+  return isPaddedMessage(component) && Value.Check(UserMessageSchema, component)
+}
+
+function styleMarkdown(component: Component): void {
+  walkComponents(component, (child) => {
+    if (!(child instanceof Markdown) || patchedMarkdown.has(child)) return false
+    patchedMarkdown.add(child)
+    Reflect.set(child, 'defaultTextStyle', primaryTextStyle)
+    child.invalidate()
+    return true
+  })
+}
+
+function clearUserBackground(component: Component): void {
+  for (const child of childrenOf(component)) {
+    if (child instanceof Box) child.setBgFn(undefined)
+  }
+}
+
+function normalizeMessageLines(lines: readonly string[], preserveLeadingBlank = false): string[] {
+  const hasStart = lines.some((line) => line.includes(osc133ZoneStart))
+  const hasEnd = lines.some((line) => line.includes(osc133ZoneEnd))
+  const hasFinal = lines.some((line) => line.includes(osc133ZoneFinal))
+  const clean = lines.map((line) =>
+    line
+      .replaceAll(osc133ZoneStart, '')
+      .replaceAll(osc133ZoneEnd, '')
+      .replaceAll(osc133ZoneFinal, ''),
+  )
+  let first = 0
+  while (first < clean.length && isBlank(clean[first] ?? '')) first += 1
+  let last = clean.length - 1
+  while (last >= first && isBlank(clean[last] ?? '')) last -= 1
+  if (last < first) return []
+  const start = preserveLeadingBlank && first > 0 ? first - 1 : first
+  const visible = clean.slice(start, last + 1)
+  if (visible.length === 0) return visible
+  const end = visible.length - 1
+  const closing = `${hasEnd ? osc133ZoneEnd : ''}${hasFinal ? osc133ZoneFinal : ''}`
+  visible[end] = `${closing}${visible[end] ?? ''}`
+  if (hasStart) visible[0] = `${osc133ZoneStart}${visible[0] ?? ''}`
+  return visible
+}
+
+function transcriptMessageWidth(width: number, editable: boolean): number {
+  const inner = transcriptInsets(width, speakerBodyIndent).inner
+  if (!editable) return inner
+  const editChipWidth = width >= 80 ? 7 : 3
+  return Math.max(1, inner - transcriptCopyChipWidth(width) - editChipWidth)
 }
 
 function patchUser(component: UserMessageLike, active: () => boolean): void {
   if (patchedUsers.has(component)) return
   patchedUsers.add(component)
   const original = component.render.bind(component)
+  const nativeOutputPad = component.outputPad
+  let styled = false
   component.render = (width: number): string[] => {
-    const lines = original(width)
-    if (!active()) return lines
-    let first = 0
-    while (first < lines.length && isBlank(lines[first] ?? '')) first += 1
-    let last = lines.length - 1
-    while (last >= first && isBlank(lines[last] ?? '')) last -= 1
-    const visible = lines.slice(first, last + 1)
-    if (visible.length === 0) return visible
-    if (lines.slice(0, first).some((line) => line.includes(osc133ZoneStart))) {
-      visible[0] = `${osc133ZoneStart}${visible[0] ?? ''}`
+    const enabled = active()
+    if (enabled && !styled) {
+      component.setOutputPad(0)
+      styled = true
+    } else if (!enabled && styled) {
+      component.setOutputPad(nativeOutputPad)
+      styled = false
     }
-    const trailing = lines.slice(last + 1)
-    const end = visible.length - 1
-    if (trailing.some((line) => line.includes(osc133ZoneEnd))) {
-      visible[end] = `${visible[end] ?? ''}${osc133ZoneEnd}`
-    }
-    if (trailing.some((line) => line.includes(osc133ZoneFinal))) {
-      visible[end] = `${visible[end] ?? ''}${osc133ZoneFinal}`
-    }
-    return visible
+    if (!enabled) return original(width)
+    clearUserBackground(component)
+    styleMarkdown(component)
+    const inner = transcriptMessageWidth(width, true)
+    return normalizeMessageLines(original(inner)).map((line) =>
+      frameTranscriptLine(line, width, speakerBodyIndent),
+    )
   }
 }
 
@@ -95,38 +173,87 @@ function patchSpacer(component: Component, active: () => boolean): void {
   component.render = (width: number): string[] => (active() ? [] : original(width))
 }
 
-function patchAssistant(component: AssistantMessageLike, active: () => boolean): void {
-  if (patchedAssistants.has(component)) return
-  patchedAssistants.add(component)
+function patchRail(
+  component: Component,
+  active: () => boolean,
+  needsLeadingGap: () => boolean,
+): void {
+  if (patchedRails.has(component)) return
+  patchedRails.add(component)
   const original = component.render.bind(component)
   component.render = (width: number): string[] => {
     const lines = original(width)
     if (!active()) return lines
-    let first = 0
-    while (first < lines.length && isBlank(lines[first] ?? '')) first += 1
-    const visible = lines.slice(first)
-    if (visible.length === 0) return visible
-    if (lines.slice(0, first).some((line) => line.includes(osc133ZoneStart))) {
-      visible[0] = `${osc133ZoneStart}${visible[0] ?? ''}`
+    if (lines.every(isBlank)) return []
+    if (needsLeadingGap() || !isBlank(lines[0] ?? '')) return lines
+    return lines.slice(1)
+  }
+}
+
+function patchAssistant(
+  component: AssistantMessageLike,
+  active: () => boolean,
+  needsLeadingGap: () => boolean,
+): void {
+  if (patchedAssistants.has(component)) return
+  patchedAssistants.add(component)
+  const original = component.render.bind(component)
+  const nativeOutputPad = component.outputPad
+  let styled = false
+  component.render = (width: number): string[] => {
+    const enabled = active()
+    if (enabled && !styled) {
+      component.setOutputPad(0)
+      styled = true
+    } else if (!enabled && styled) {
+      component.setOutputPad(nativeOutputPad)
+      styled = false
     }
-    return visible
+    if (!enabled) return original(width)
+    styleMarkdown(component)
+    const inner = transcriptMessageWidth(width, false)
+    return normalizeMessageLines(original(inner), needsLeadingGap()).map((line) =>
+      frameTranscriptLine(line, width, speakerBodyIndent),
+    )
   }
 }
 
 export function sweepSpeakerSpacing(root: Component, active: () => boolean, depth = 0): void {
   if (depth > maxTreeDepth) return
+  placeSpeakerEntries(root)
   const children = childrenOf(root)
-  let pendingAssistant = false
+  let assistantTurn = false
   let pendingUser = false
+  const hasEarlierRail = (component: Component) => {
+    const index = childrenOf(root).indexOf(component)
+    for (let prior = index - 1; prior >= 0; prior -= 1) {
+      const candidate = childrenOf(root)[prior]
+      if (candidate === undefined) continue
+      if (customTypeOf(candidate) === 'hud-rail') return true
+      if (roleOf(candidate) !== undefined) return false
+    }
+    return false
+  }
   children.forEach((child, index) => {
     const customType = customTypeOf(child)
     if (customType === 'hud-role' || customType === 'timestamp-pi') patchEntry(child, active)
+    if (customType === 'hud-rail') {
+      patchRail(child, active, () => {
+        const current = childrenOf(root)
+        const previous = current[current.indexOf(child) - 1]
+        const component = childrenOf(child).find((entry) => entry instanceof RailComponent)
+        return (
+          (previous !== undefined && isAssistantMessage(previous)) ||
+          component?.needsLeadingGap() === true
+        )
+      })
+    }
     const role = roleOf(child)
     if (role === 'assistant') {
-      pendingAssistant = true
+      assistantTurn = true
       pendingUser = false
     } else if (role === 'user') {
-      pendingAssistant = false
+      assistantTurn = false
       pendingUser = true
     } else if (isUserMessage(child)) {
       if (pendingUser) {
@@ -136,14 +263,14 @@ export function sweepSpeakerSpacing(root: Component, active: () => boolean, dept
       }
       pendingUser = false
     } else if (isAssistantMessage(child)) {
-      if (pendingAssistant) patchAssistant(child, active)
-      pendingAssistant = false
+      if (assistantTurn) patchAssistant(child, active, () => hasEarlierRail(child))
     }
     sweepSpeakerSpacing(child, active, depth + 1)
   })
 }
 
 export type SpeakerSpacingFix = {
+  dispose: () => void
   markDirty: () => void
 }
 
@@ -162,25 +289,49 @@ export function installSpeakerSpacingFix(tui: TUI, active: () => boolean): Speak
   }
 
   let activeSource = active
+  let installedActive = true
   let dirty = true
+  let deadline = Date.now() + 3000
+  let retryVersion = 0
+  const retry = () => {
+    const version = ++retryVersion
+    const render = () => {
+      if (!installedActive || !dirty || version !== retryVersion) return
+      tui.requestRender()
+      if (dirty) setTimeout(render, 50).unref()
+    }
+    queueMicrotask(render)
+  }
   const fix: InstalledSpacingFix = {
+    dispose: () => {
+      installedActive = false
+      dirty = false
+      retryVersion += 1
+      tui.requestRender()
+    },
     markDirty: () => {
+      deadline = Date.now() + 3000
       dirty = true
+      retry()
     },
     setActive: (next) => {
       activeSource = next
+      installedActive = true
+      deadline = Date.now() + 3000
       dirty = true
+      retry()
     },
   }
-  const isActive = () => activeSource()
+  const isActive = () => installedActive && activeSource()
   installed.set(tui, fix)
   const original = tui.requestRender.bind(tui)
   tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (dirty) {
-      dirty = false
+    if (installedActive && dirty) {
       sweepSpeakerSpacing(tui, isActive)
+      if (Date.now() >= deadline) dirty = false
     }
     original(...args)
   }
+  retry()
   return fix
 }

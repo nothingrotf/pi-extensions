@@ -33,7 +33,7 @@ export function shimmerTextAtTick(text: string, colors: ShimmerColors, tick: num
   const { baseAnsi, tintAnsi } = colors
   const base = parseTrueColor(baseAnsi)
   const tint = parseTrueColor(tintAnsi)
-  const highlights = shimmerHighlights(text.length, tick)
+  const highlights = shimmerHighlights(characters.length, tick)
 
   let output = ''
   let openAnsi: string | undefined

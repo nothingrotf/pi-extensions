@@ -9,9 +9,12 @@ export type RailTint =
   | 'branch'
   | 'caret'
   | 'dim'
+  | 'faint'
   | 'duration'
   | 'fail'
   | 'head'
+  | 'genome'
+  | 'groupCaret'
   | 'headFail'
   | 'native'
   | 'neutral'
@@ -30,20 +33,18 @@ export const empryoBrandAlt: Rgb = { b: 240, g: 199, r: 167 }
 export const empryoBrandDim: Rgb = { b: 69, g: 40, r: 46 }
 export const empryoTextDim: Rgb = { b: 114, g: 88, r: 93 }
 export const empryoTextFaint: Rgb = { b: 84, g: 62, r: 66 }
+export const empryoTextMuted: Rgb = { b: 148, g: 119, r: 125 }
 export const empryoTextPrimary: Rgb = { b: 242, g: 228, r: 232 }
+export const empryoTextSecondary: Rgb = { b: 192, g: 164, r: 170 }
 
-const empryoArg: Rgb = { b: 148, g: 119, r: 125 }
-const empryoAsk: Rgb = { b: 114, g: 80, r: 123 }
-const empryoBranch: Rgb = { b: 68, g: 43, r: 48 }
-const empryoCaret: Rgb = { b: 167, g: 138, r: 123 }
-const empryoFail: Rgb = { b: 116, g: 109, r: 169 }
-const empryoHead: Rgb = { b: 192, g: 164, r: 170 }
-const empryoHeadFail: Rgb = { b: 168, g: 153, r: 207 }
-const empryoNative: Rgb = { b: 84, g: 130, r: 119 }
-const empryoOk: Rgb = { b: 131, g: 161, r: 128 }
-const empryoRead: Rgb = { b: 83, g: 129, r: 96 }
-const empryoShell: Rgb = { b: 114, g: 80, r: 123 }
+const empryoBackground: Rgb = { b: 28, g: 18, r: 20 }
+const empryoError: Rgb = { b: 154, g: 140, r: 239 }
+const empryoFile: Rgb = { b: 104, g: 173, r: 115 }
+const empryoGenome: Rgb = { b: 104, g: 173, r: 155 }
+const empryoShell: Rgb = { b: 155, g: 104, r: 173 }
+const empryoSuccess: Rgb = { b: 171, g: 216, r: 159 }
 const empryoUser: Rgb = { b: 232, g: 203, r: 151 }
+const empryoWeb: Rgb = { b: 139, g: 173, r: 104 }
 
 export function parseTrueColor(ansi: string): Rgb | undefined {
   const match = /38;2;(\d+);(\d+);(\d+)m/u.exec(ansi)
@@ -117,32 +118,47 @@ export function mixOklab(first: Rgb, second: Rgb, amount: number): Rgb {
   })
 }
 
-export function buildRailPalette(): RailPalette {
+export function applyOpacity(color: Rgb, opacity: number): Rgb {
+  const alpha = Math.max(0, Math.min(255, Math.floor(opacity * 255)))
   return {
-    agent: ansiForeground(empryoBrand),
-    arg: ansiForeground(empryoArg),
-    ask: ansiForeground(empryoAsk),
-    branch: ansiForeground(empryoBranch),
-    caret: ansiForeground(empryoCaret),
-    dim: ansiForeground(empryoTextFaint),
-    duration: ansiForeground(empryoTextDim),
-    fail: ansiForeground(empryoFail),
-    head: ansiForeground(empryoHead),
-    headFail: ansiForeground(empryoHeadFail),
-    native: ansiForeground(empryoNative),
-    neutral: ansiForeground(empryoHead),
-    ok: ansiForeground(empryoOk),
-    pseudo: ansiForeground(empryoBrandDim),
-    pseudoBody: ansiForeground(empryoTextDim),
-    read: ansiForeground(empryoRead),
-    shell: ansiForeground(empryoShell),
-    text: ansiForeground(empryoTextPrimary),
-    web: ansiForeground(empryoUser),
+    b: Math.round((color.b * alpha) / 255),
+    g: Math.round((color.g * alpha) / 255),
+    r: Math.round((color.r * alpha) / 255),
   }
 }
 
-export function railPaletteFromAnsi(): RailPalette {
-  return buildRailPalette()
+export function buildRailPalette(bodyOpacity = 1): RailPalette {
+  const body = (color: Rgb) => ansiForeground(applyOpacity(color, bodyOpacity))
+  const caret = mixOklab(empryoBrandAlt, empryoBackground, 0.3)
+  const headFail = mixOklab(empryoError, empryoTextSecondary, 0.35)
+  return {
+    agent: body(empryoBrand),
+    arg: body(empryoTextSecondary),
+    ask: body(empryoShell),
+    branch: body(empryoTextFaint),
+    caret: ansiForeground(caret),
+    dim: body(empryoTextDim),
+    duration: body(empryoTextDim),
+    fail: body(empryoError),
+    faint: body(empryoTextFaint),
+    genome: body(empryoGenome),
+    groupCaret: body(empryoTextMuted),
+    head: ansiForeground(empryoTextSecondary),
+    headFail: ansiForeground(headFail),
+    native: body(empryoFile),
+    neutral: body(empryoTextMuted),
+    ok: body(empryoSuccess),
+    pseudo: body(empryoBrandDim),
+    pseudoBody: body(empryoTextDim),
+    read: body(empryoFile),
+    shell: body(empryoShell),
+    text: body(empryoTextPrimary),
+    web: body(empryoWeb),
+  }
+}
+
+export function railPaletteFromAnsi(bodyOpacity = 1): RailPalette {
+  return buildRailPalette(bodyOpacity)
 }
 
 export function assistantAnsi(): string {

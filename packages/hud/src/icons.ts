@@ -10,6 +10,8 @@ export type IconSet = {
   edit: string
   fail: string
   find: string
+  grep: string
+  list: string
   ok: string
   pending: string
   read: string
@@ -29,14 +31,16 @@ const nerdIcons: IconSet = {
   agent: '\uF096',
   ask: '\uF059',
   branch: '\uF126',
-  chat: '\uF075',
+  chat: '\u{F0369}',
   edit: '\uF044',
   fail: '✗',
-  find: '\uF07C',
+  find: '\uF002',
+  grep: '\u{F0684}',
+  list: '\uF07C',
   ok: '✓',
   pending: '○',
-  read: '\uF15C',
-  thought: '\uF0EB',
+  read: '\u{F00CB}',
+  thought: '\u{F0626}',
   search: '\uF002',
   shell: '\uF120',
   todo: '\uF0AE',
@@ -48,14 +52,16 @@ const asciiIcons: IconSet = {
   agent: '▹',
   ask: '?',
   branch: '⑂',
-  chat: '…',
+  chat: '▸',
   edit: '✎',
   fail: '✗',
-  find: '△',
+  find: '⊙',
+  grep: '⌇',
+  list: '△',
   ok: '✓',
   pending: '○',
   read: '□',
-  thought: '◇',
+  thought: '∴',
   search: '⊙',
   shell: '$',
   todo: '▤',
