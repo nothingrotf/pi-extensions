@@ -83,15 +83,17 @@ the tool color.
 
 The rail also holds the model's own voice:
 
-- A live reasoning block creates a `Thinking` row.
+- A live reasoning block creates a `Thinking` row with a braille spinner.
 - The row becomes `Thought` when the reasoning block ends.
+- The settled `Thought` row has a blank status cell.
 - The detail uses the first heading or the first line.
 - Assistant text between tool calls becomes a `Note` row.
 - Opening text and the final answer stay as normal transcript prose.
 - Intermediate text appears only as a `Note`, not as duplicate prose.
-- A pending `Thinking` row appears after the last tool and before the answer.
+- A separate pending `Thinking...` row appears after the last tool.
+- The pending row disappears when reasoning or answer text starts.
 
-These rows carry a blank status cell. Therefore, a check or a cross always identifies a tool call.
+A check or a cross always identifies a tool call.
 
 A tool that spawns children, such as a subagent, nests them under its own row
 with the same trunk rules.
@@ -110,15 +112,15 @@ The extension hides the built-in working loader and renders its own loader as th
 
 The loader shows a braille spinner and shimmers the message with the elapsed time of the current run, for example ` ⠋ waiting for the model · 9s`.
 
-The rail ends with a live usage row that reports the turn as it runs:
+A live usage row reports the turn as it runs:
 
 ```
  ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
 ```
 
-The row is the last line of the rail, one blank line under the tree, so it stays
-visible below the block being generated. It shimmers while the turn runs and
-settles to a dim tone when the turn ends.
+During tool activity, the row is the last rail line. When answer prose starts, the row moves below that prose.
+
+The row always follows the newest visible interaction content. It shimmers while the turn runs and becomes dim when the turn ends.
 
 The shimmer is a narrow highlight that sweeps back and forth with a continuous
 color blend. Read `docs/rail-spec.md` for the exact wave.

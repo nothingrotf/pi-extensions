@@ -59,6 +59,7 @@ describe('projectRailVoice', () => {
     expect(projection.rows.map((row) => row.patch.kind)).toEqual(['thought'])
     expect(projection.order).toEqual(['thought:1:1', 'a'])
     expect(projection.hiddenMessageTimestamps).toEqual(new Set())
+    expect(projection.openingMessageTimestamp).toBe(1)
   })
 
   test('turns only intermediate prose into a Note', () => {
@@ -82,6 +83,7 @@ describe('projectRailVoice', () => {
     expect(projection.rows).toEqual([])
     expect(projection.hiddenMessageTimestamps).toEqual(new Set())
     expect(projection.hasTrailingText).toBe(true)
+    expect(projection.trailingTextMessageTimestamp).toBe(2)
   })
 
   test('keeps non-live partial final text provisional inside the rail', () => {

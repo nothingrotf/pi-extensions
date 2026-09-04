@@ -14,6 +14,7 @@ import { railEntryType } from '../src/rail-entry.ts'
 import { railStateEntryType } from '../src/rail-state-entry.ts'
 import { mapSessionRails } from '../src/rail-tools.ts'
 import {
+  actionSpinnerFrame,
   formatDuration,
   groupActions,
   groupCap,
@@ -22,6 +23,7 @@ import {
   labelColumn,
   labelWidth,
   padLabel,
+  pendingDotsFrame,
   railHeader,
   railLines,
   RailStore,
@@ -355,12 +357,34 @@ describe('pending narration row', () => {
     expect(lines[1]?.startsWith(treeBranch)).toBe(true)
   })
 
-  test('the pending row carries no status glyph', () => {
-    const last =
-      railLines(groupActions([done]), theme, { expanded: false, pending: true, width: 60 }).at(
-        -1,
-      ) ?? ''
-    expect(last).not.toContain('\u2713')
+  test('the pending row animates its status and dots', () => {
+    const first =
+      railLines(groupActions([done]), theme, {
+        expanded: false,
+        pending: true,
+        tick: 0,
+        width: 60,
+      }).at(-1) ?? ''
+    const later =
+      railLines(groupActions([done]), theme, {
+        expanded: false,
+        pending: true,
+        tick: 9,
+        width: 60,
+      }).at(-1) ?? ''
+    expect(first).toContain('⠋')
+    expect(first).toContain('Thinking.')
+    expect(later).toContain('⠼')
+    expect(later).toContain('Thinking..')
+  })
+
+  test('uses the Empryo spinner and dot cadence', () => {
+    expect(actionSpinnerFrame(0)).toBe('⠋')
+    expect(actionSpinnerFrame(3)).toBe('⠙')
+    expect(actionSpinnerFrame(9)).toBe('⠼')
+    expect(pendingDotsFrame(0)).toBe('.  ')
+    expect(pendingDotsFrame(9)).toBe('.. ')
+    expect(pendingDotsFrame(18)).toBe('...')
   })
 })
 
@@ -474,6 +498,7 @@ describe('pseudo rows', () => {
         width: 80,
       })[1] ?? ''
     expect(line).toContain('Thinking')
+    expect(line).toContain('⠋')
   })
 
   test('still groups tool rows around a thought row', () => {
@@ -1077,9 +1102,11 @@ describe('mapSessionRails', () => {
     expect(thought?.detail).toBe('Plan')
   })
 
-  test('keeps opening prose outside the rail', () => {
-    const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
+  test('keeps opening prose outside the rail and records its visual anchor', () => {
+    const rails = mapSessionRails([userEntry, railEntry, pseudoEntry()])
+    const store = rails.byToolCallId.get('k')
     expect(store?.groups().some((group) => group.actions[0]?.kind === 'narration')).toBe(false)
+    expect(rails.openingAssistantTimestamps.get(1)).toBe(2)
   })
 
   test('backfills only intermediate prose as a narration row', () => {

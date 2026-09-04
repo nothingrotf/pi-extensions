@@ -159,6 +159,35 @@ describe('sweepAssistantMessages', () => {
     expect(assistant.render()).toEqual(['Opening', 'Middle', 'Answer'])
   })
 
+  test('appends a live suffix below the selected assistant message', () => {
+    const root = new Container()
+    const previous = new FakeAssistant(['', 'opening'], 6)
+    const current = new FakeAssistant(['', 'answer'], 7)
+    root.addChild(previous)
+    root.addChild(current)
+    sweepAssistantMessages(
+      root,
+      () => true,
+      () => true,
+      (timestamp) => (timestamp === 7 ? ['', ' usage'] : []),
+    )
+    expect(trimmed(previous.render(80))).toEqual(['', 'opening'])
+    expect(trimmed(current.render(80))).toEqual(['', 'answer', '', ' usage'])
+  })
+
+  test('does not append a suffix to an empty assistant message', () => {
+    const root = new Container()
+    const assistant = new FakeAssistant([''], 7)
+    root.addChild(assistant)
+    sweepAssistantMessages(
+      root,
+      () => true,
+      undefined,
+      () => ['', ' usage'],
+    )
+    expect(assistant.render(80)).toEqual([])
+  })
+
   test('ignores components that do not look like assistant messages', () => {
     const root = new Container()
     const plain = new Text('\n\nx', 0, 0)

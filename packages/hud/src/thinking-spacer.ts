@@ -41,6 +41,7 @@ type UpdatableAssistant = AssistantMessageLike & {
 }
 
 export type AssistantVisibility = (timestamp: number | undefined, contentIndex?: number) => boolean
+export type AssistantSuffix = (timestamp: number | undefined, width: number) => readonly string[]
 
 function isAssistantMessage(component: Component): component is AssistantMessageLike {
   if (!('contentContainer' in component) || !('hideThinkingBlock' in component)) return false
@@ -79,6 +80,7 @@ function patchAssistant(
   component: AssistantMessageLike,
   active: () => boolean,
   visible: AssistantVisibility,
+  suffix: AssistantSuffix,
 ): boolean {
   if (patched.has(component)) return false
   patched.add(component)
@@ -116,7 +118,10 @@ function patchAssistant(
     refreshVisibility()
     if (!filtersContent && !visible(messageTimestamp(component))) return []
     const lines = originalRender(width)
-    return active() ? collapseLeadingBlank(lines) : lines
+    const body = active() ? collapseLeadingBlank(lines) : lines
+    return body.some((line) => !isBlankLine(line))
+      ? [...body, ...suffix(messageTimestamp(component), width)]
+      : body
   }
   return true
 }
@@ -125,22 +130,24 @@ export function sweepAssistantMessages(
   root: Component,
   active: () => boolean,
   visible: AssistantVisibility = () => true,
+  suffix: AssistantSuffix = () => [],
 ): number {
   let count = 0
   walkComponents(root, (component) => {
     if (!isAssistantMessage(component)) return false
-    if (patchAssistant(component, active, visible)) count += 1
+    if (patchAssistant(component, active, visible, suffix)) count += 1
     return true
   })
   return count
 }
 
 export type ThinkingSpacerFix = {
+  dispose: () => void
   markDirty: () => void
 }
 
 type InstalledThinkingFix = ThinkingSpacerFix & {
-  setSources: (active: () => boolean, visible: AssistantVisibility) => void
+  setSources: (active: () => boolean, visible: AssistantVisibility, suffix: AssistantSuffix) => void
 }
 
 const installed = new WeakMap<TUI, InstalledThinkingFix>()
@@ -149,38 +156,51 @@ export function installThinkingSpacerFix(
   tui: TUI,
   active: () => boolean,
   visible: AssistantVisibility = () => true,
+  suffix: AssistantSuffix = () => [],
 ): ThinkingSpacerFix {
   const current = installed.get(tui)
   if (current !== undefined) {
-    current.setSources(active, visible)
+    current.setSources(active, visible, suffix)
     current.markDirty()
     return current
   }
 
   let activeSource = active
   let visibleSource = visible
+  let suffixSource = suffix
+  let enabled = true
   let dirty = true
   let retries = 0
   const fix: InstalledThinkingFix = {
+    dispose: () => {
+      enabled = false
+      dirty = true
+      retries = 1
+      tui.requestRender()
+    },
     markDirty: () => {
       dirty = true
       retries = 1
     },
-    setSources: (nextActive, nextVisible) => {
+    setSources: (nextActive, nextVisible, nextSuffix) => {
       activeSource = nextActive
       visibleSource = nextVisible
+      suffixSource = nextSuffix
+      enabled = true
       dirty = true
       retries = 0
     },
   }
-  const isActive = () => activeSource()
+  const isActive = () => enabled && activeSource()
   const isVisible: AssistantVisibility = (timestamp, contentIndex) =>
-    visibleSource(timestamp, contentIndex)
+    !enabled || visibleSource(timestamp, contentIndex)
+  const appendSuffix: AssistantSuffix = (timestamp, width) =>
+    enabled ? suffixSource(timestamp, width) : []
   installed.set(tui, fix)
   const original = tui.requestRender.bind(tui)
   tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
     if (dirty) {
-      sweepAssistantMessages(tui, isActive, isVisible)
+      sweepAssistantMessages(tui, isActive, isVisible, appendSuffix)
       if (retries > 0) retries -= 1
       else dirty = false
     }

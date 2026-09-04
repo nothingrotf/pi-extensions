@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 
+import { animationTickMs } from './animation-clock.ts'
 import { type RailPalette, type RailTint, tint } from './colors.ts'
 import { sanitizeScalar } from './format.ts'
 import { icon, type IconKey } from './icons.ts'
@@ -57,6 +58,9 @@ const outputWidthCap = 120
 const childCap = 8
 const italicOn = '\x1b[3m'
 const italicOff = '\x1b[23m'
+const spinnerTickMs = 150
+const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const
+const dotFrames = ['.  ', '.. ', '...'] as const
 
 export const groupCap = 5
 
@@ -224,9 +228,21 @@ export function formatDuration(ms: number | undefined): string {
   return remainder > 0 ? `${String(minutes)}m ${String(remainder)}s` : `${String(minutes)}m`
 }
 
-function statusGlyph(status: RailStatus, theme: RailTheme): string {
+function empryoAnimationTick(tick: number): number {
+  return Math.floor((tick * animationTickMs) / spinnerTickMs) % spinnerFrames.length
+}
+
+export function actionSpinnerFrame(tick: number): string {
+  return spinnerFrames[empryoAnimationTick(tick)] ?? spinnerFrames[0]
+}
+
+export function pendingDotsFrame(tick: number): string {
+  return dotFrames[Math.floor(empryoAnimationTick(tick) / 4)] ?? dotFrames[0]
+}
+
+function statusGlyph(status: RailStatus, theme: RailTheme, tick: number): string {
   if (status === 'error') return tint(theme.palette, 'fail', icon('fail'))
-  if (status === 'pending') return tint(theme.palette, 'dim', icon('pending'))
+  if (status === 'pending') return tint(theme.palette, 'agent', actionSpinnerFrame(tick))
   return tint(theme.palette, 'ok', icon('ok'))
 }
 
@@ -284,14 +300,21 @@ function alignDuration(
   return `${body}${' '.repeat(gap)}${tint(theme.palette, durationTint, text)}`
 }
 
-function row(parts: RowParts, theme: RailTheme, caret: string, width: number): string {
+function row(
+  parts: RowParts,
+  theme: RailTheme,
+  caret: string,
+  width: number,
+  tick: number,
+): string {
   const pseudo = isPseudo(parts.kind)
   const kind = pseudo ? 'pseudo' : tintFor(parts.iconKey)
+  const labelKind: RailTint = parts.status === 'pending' ? 'agent' : pseudo ? 'arg' : kind
   const glyph = tint(theme.palette, kind, icon(parts.iconKey))
   const gap = padLabel(parts.label).slice(parts.label.length)
-  const label = `${tint(theme.palette, kind, parts.label)}${gap}`
+  const label = `${tint(theme.palette, labelKind, parts.label)}${gap}`
   const count = parts.count > 1 ? tint(theme.palette, 'dim', `×${parts.count}`) : ''
-  const mark = pseudo ? ' ' : statusGlyph(parts.status, theme)
+  const mark = pseudo && parts.status !== 'pending' ? ' ' : statusGlyph(parts.status, theme, tick)
   const head = `${tint(theme.palette, 'branch', parts.branch)} ${mark} ${glyph} ${label}${count}`
   const pieces: string[] = []
   if (pseudo) {
@@ -366,10 +389,17 @@ export function labelColumn(groups: readonly RailGroup[]): number {
 export function railLines(
   groups: readonly RailGroup[],
   theme: RailTheme,
-  options: { expanded: boolean; pending?: boolean; usage?: string; width?: number },
+  options: {
+    expanded: boolean
+    pending?: boolean
+    tick?: number | undefined
+    usage?: string
+    width?: number
+  },
 ): string[] {
   if (groups.length === 0) return []
   const width = options.width ?? 120
+  const tick = options.tick ?? 0
   const column = labelColumn(groups)
   const lines = [railHeader(groups, theme)]
   const dropped = Math.max(0, groups.length - groupCap)
@@ -406,6 +436,7 @@ export function railLines(
         theme,
         caret,
         width,
+        tick,
       ),
     )
     const stem = last ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `
@@ -415,6 +446,7 @@ export function railLines(
       if (nested.length > 0) {
         const inner = railLines(groupActions(nested), theme, {
           expanded: options.expanded,
+          tick,
           width: Math.max(1, width - visibleWidth(stem)),
         })
         for (const line of inner.slice(1)) lines.push(`${stem}${line}`)
@@ -445,6 +477,7 @@ export function railLines(
           theme,
           '',
           Math.max(1, width - visibleWidth(stem)),
+          tick,
         )}`,
       )
     })
@@ -455,8 +488,11 @@ export function railLines(
   })
   if (pending) {
     const branch = tint(theme.palette, 'branch', treeLast)
-    const glyph = tint(theme.palette, 'agent', icon('thought'))
-    lines.push(`${branch}   ${glyph} ${tint(theme.palette, 'dim', 'Thinking')}`)
+    const status = tint(theme.palette, 'arg', actionSpinnerFrame(tick))
+    const glyph = tint(theme.palette, 'pseudo', icon('thought'))
+    const label = tint(theme.palette, 'pseudoBody', 'Thinking')
+    const dots = tint(theme.palette, 'arg', pendingDotsFrame(tick))
+    lines.push(`${branch} ${status} ${glyph} ${label}${dots}`)
   }
   const usage = options.usage
   if (usage !== undefined && usage.length > 0) {

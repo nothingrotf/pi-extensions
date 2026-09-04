@@ -111,6 +111,7 @@ export type SessionRails = {
   hiddenAssistantTextBlocks: Map<number, Set<number>>
   hiddenAssistantTimestamps: Set<number>
   maxTurn: number
+  openingAssistantTimestamps: Map<number, number>
 }
 
 function applyStateReport(
@@ -137,6 +138,8 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   const hiddenAssistantTextBlocks = new Map<number, Set<number>>()
   const hiddenAssistantTimestamps = new Set<number>()
   const renderedStores = new Set<RailStore>()
+  const turnsByStore = new Map<RailStore, Set<number>>()
+  const openingAssistantTimestamps = new Map<number, number>()
   const deferredReports: { report: RailActionReport; target: RailStore }[] = []
   let store = new RailStore()
   let segments: RailSegment[] = []
@@ -146,6 +149,11 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
     for (const row of projection.rows) store.report(row.id, row.patch)
     store.reorder(projection.order)
     if (renderedStores.has(store)) {
+      if (projection.openingMessageTimestamp !== undefined) {
+        for (const turn of turnsByStore.get(store) ?? []) {
+          openingAssistantTimestamps.set(turn, projection.openingMessageTimestamp)
+        }
+      }
       for (const [timestamp, sourceIndices] of projection.hiddenTextBlocks) {
         const indices = hiddenAssistantTextBlocks.get(timestamp) ?? new Set<number>()
         for (const index of sourceIndices) indices.add(index)
@@ -160,6 +168,9 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       if (turn !== undefined) {
         byEntryTurn.set(turn, store)
         renderedStores.add(store)
+        const turns = turnsByStore.get(store) ?? new Set<number>()
+        turns.add(turn)
+        turnsByStore.set(store, turns)
         maxTurn = Math.max(maxTurn, turn)
       }
       continue
@@ -226,6 +237,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
     hiddenAssistantTextBlocks,
     hiddenAssistantTimestamps,
     maxTurn,
+    openingAssistantTimestamps,
   }
 }
 

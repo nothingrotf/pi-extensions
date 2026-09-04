@@ -33,9 +33,43 @@ export function railTheme(theme: RailThemeSource): RailTheme {
   }
 }
 
+export class RailUsageLine {
+  private initialTick: number | undefined
+  private readonly theme: RailTheme
+
+  constructor(
+    theme: RailThemeSource,
+    private readonly source: RailThemeSource = theme,
+  ) {
+    this.theme = railTheme(theme)
+  }
+
+  render(usage: RailUsage): string | undefined {
+    const { row, shimmer, tick } = usage
+    if (row === undefined || row.length === 0) {
+      this.initialTick = undefined
+      return undefined
+    }
+    const getFgAnsi = this.source.getFgAnsi?.bind(this.source)
+    if (!shimmer || getFgAnsi === undefined) {
+      this.initialTick = undefined
+      return tint(this.theme.palette, 'dim', row)
+    }
+    const currentTick = tick ?? Math.floor(Date.now() / shimmerTickMs)
+    if (this.initialTick === undefined) this.initialTick = currentTick
+    const baseAnsi = getFgAnsi('dim')
+    if (currentTick === this.initialTick) return `${baseAnsi}${row}\x1b[39m`
+    return shimmerTextAtTick(
+      row,
+      { baseAnsi, tintAnsi: getFgAnsi('customMessageLabel') },
+      currentTick,
+    )
+  }
+}
+
 export class RailComponent implements Component {
   private readonly theme: RailTheme
-  private usageInitialTick: number | undefined
+  private readonly usageLine: RailUsageLine
 
   constructor(
     private readonly resolve: () => RailStore | undefined,
@@ -48,28 +82,7 @@ export class RailComponent implements Component {
   ) {
     this.theme = railTheme(theme)
     this.source = source ?? theme
-  }
-
-  private usageLine(): string | undefined {
-    const { row, shimmer, tick } = this.usage()
-    if (row === undefined || row.length === 0) {
-      this.usageInitialTick = undefined
-      return undefined
-    }
-    const getFgAnsi = this.source?.getFgAnsi?.bind(this.source)
-    if (!shimmer || getFgAnsi === undefined) {
-      this.usageInitialTick = undefined
-      return tint(this.theme.palette, 'dim', row)
-    }
-    const currentTick = tick ?? Math.floor(Date.now() / shimmerTickMs)
-    if (this.usageInitialTick === undefined) this.usageInitialTick = currentTick
-    const baseAnsi = getFgAnsi('dim')
-    if (currentTick === this.usageInitialTick) return `${baseAnsi}${row}\x1b[39m`
-    return shimmerTextAtTick(
-      row,
-      { baseAnsi, tintAnsi: getFgAnsi('customMessageLabel') },
-      currentTick,
-    )
+    this.usageLine = new RailUsageLine(theme, this.source)
   }
 
   invalidate(): void {}
@@ -79,10 +92,12 @@ export class RailComponent implements Component {
     const store = this.resolve()
     if (store === undefined) return []
     const inner = Math.max(1, width - railIndent.length - railGutter)
+    const usage = this.usage()
     return railLines(store.groups(), this.theme, {
       expanded: this.expanded,
       pending: this.pending(),
-      usage: this.usageLine() ?? '',
+      tick: usage.tick,
+      usage: this.usageLine.render(usage) ?? '',
       width: inner,
     }).map((line) => (line.length === 0 ? '' : `${railIndent}${truncateToWidth(line, inner, '')}`))
   }

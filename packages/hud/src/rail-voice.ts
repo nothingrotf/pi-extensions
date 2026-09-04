@@ -54,9 +54,11 @@ export type RailVoiceProjection = {
   hasTrailingText: boolean
   hiddenMessageTimestamps: Set<number>
   hiddenTextBlocks: Map<number, Set<number>>
+  openingMessageTimestamp: number | undefined
   order: string[]
   reasoningActive: boolean
   rows: PseudoRow[]
+  trailingTextMessageTimestamp: number | undefined
 }
 
 export function projectRailVoice(
@@ -70,6 +72,19 @@ export function projectRailVoice(
   const order: string[] = []
   const hiddenTextBlocks = new Map<number, Set<number>>()
   let reasoningActive = false
+  let openingMessageTimestamp: number | undefined
+  const firstTools = segments.findIndex((segment) => segment.type === 'tools')
+  if (firstTools >= 0) {
+    for (const segment of segments.slice(0, firstTools)) {
+      if (
+        segment.type === 'text' &&
+        segment.content.trim().length > 0 &&
+        segment.messageTimestamp !== undefined
+      ) {
+        openingMessageTimestamp = segment.messageTimestamp
+      }
+    }
+  }
 
   railSegments.forEach((segment, index) => {
     if (segment.type === 'tools') {
@@ -114,17 +129,25 @@ export function projectRailVoice(
       break
     }
   }
-  const hasTrailingText = segments
-    .slice(lastTools + 1)
-    .some((segment) => segment.type === 'text' && segment.content.trim().length > 0)
+  let hasTrailingText = false
+  let trailingTextMessageTimestamp: number | undefined
+  for (const segment of segments.slice(lastTools + 1)) {
+    if (segment.type !== 'text' || segment.content.trim().length === 0) continue
+    hasTrailingText = true
+    if (segment.messageTimestamp !== undefined) {
+      trailingTextMessageTimestamp = segment.messageTimestamp
+    }
+  }
 
   return {
     hasTrailingText,
     hiddenMessageTimestamps,
     hiddenTextBlocks,
+    openingMessageTimestamp,
     order,
     reasoningActive,
     rows,
+    trailingTextMessageTimestamp,
   }
 }
 

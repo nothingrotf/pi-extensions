@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 
 import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
@@ -16,7 +17,7 @@ import {
   railEnabledChannel,
   railToolsChannel,
 } from './rail-channel.ts'
-import { decodeRailEntry, railEntryType, RailComponent } from './rail-entry.ts'
+import { decodeRailEntry, railEntryType, RailComponent, RailUsageLine } from './rail-entry.ts'
 import { railStateEntryType } from './rail-state-entry.ts'
 import { applyRailTools, mapSessionRails, railPatchForCall } from './rail-tools.ts'
 import { RailVoice } from './rail-voice.ts'
@@ -44,6 +45,7 @@ import { speakerMotionEnabled } from './speaker-header.ts'
 import { installSpeakerSpacingFix, type SpeakerSpacingFix } from './speaker-spacing.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
+import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
 import { fetchUsageForProvider } from './usage.ts'
 import { decodeWorkingMessage, WorkingDock, workingMessageChannel } from './working.ts'
 
@@ -131,9 +133,12 @@ export default function hud(pi: ExtensionAPI): void {
   let railTurnPending = false
   let railsByToolCallId = new Map<string, RailStore>()
   let railsByTurn = new Map<number, RailStore>()
+  const railOpeningAt = new Map<number, number>()
   const railFor = (toolCallId: string) => railsByToolCallId.get(toolCallId) ?? rail
   let railEnabled = true
   let railPendingNarration = false
+  let liveUsageAssistantAt: number | undefined
+  let assistantUsageLines = new Map<number, RailUsageLine>()
   let railCwd: string | undefined
   const railTools = new Set(builtInRailToolNames)
   const railVoice = new RailVoice()
@@ -177,6 +182,7 @@ export default function hud(pi: ExtensionAPI): void {
   }
   let spacerFix: ThinkingSpacerFix | undefined
   let speakerSpacingFix: SpeakerSpacingFix | undefined
+  let transcriptLayoutFix: TranscriptLayoutFix | undefined
   let dimEditorBorder: (() => void) | undefined
 
   const applyThinkingLabel = (ctx: ExtensionContext) => {
@@ -195,6 +201,10 @@ export default function hud(pi: ExtensionAPI): void {
     const session = mapSessionRails(ctx.sessionManager.getBranch(), ctx.cwd)
     railsByToolCallId = session.byToolCallId
     railsByTurn = session.byEntryTurn
+    railOpeningAt.clear()
+    for (const [turn, timestamp] of session.openingAssistantTimestamps) {
+      railOpeningAt.set(turn, timestamp)
+    }
     railTurn = session.maxTurn
     hiddenNarrationBlocks = session.hiddenAssistantTextBlocks
     currentHiddenNarrationBlocks = new Map()
@@ -356,8 +366,30 @@ export default function hud(pi: ExtensionAPI): void {
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       footerOwned = true
-      spacerFix = installThinkingSpacerFix(tui, thinkingQuiet, assistantVisible)
+      assistantUsageLines = new Map<number, RailUsageLine>()
+      const assistantUsage = (timestamp: number | undefined, width: number): readonly string[] => {
+        if (
+          !footerOwned ||
+          !agentWorking ||
+          timestamp === undefined ||
+          timestamp !== liveUsageAssistantAt
+        )
+          return []
+        let line = assistantUsageLines.get(timestamp)
+        if (line === undefined) {
+          line = new RailUsageLine(theme)
+          assistantUsageLines.set(timestamp, line)
+        }
+        const rendered = line.render({
+          row: liveUsage.row(),
+          shimmer: true,
+          tick: animationClock.tick(),
+        })
+        return rendered === undefined ? [] : ['', ...new Text(rendered, 1, 0).render(width)]
+      }
+      spacerFix = installThinkingSpacerFix(tui, thinkingQuiet, assistantVisible, assistantUsage)
       speakerSpacingFix = installSpeakerSpacingFix(tui, timestampsEnabled)
+      transcriptLayoutFix = installTranscriptLayoutFix(tui, railOpeningAt)
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
       dimEditorBorder()
@@ -369,7 +401,11 @@ export default function hud(pi: ExtensionAPI): void {
           footerOwned = false
           requestRender = undefined
           dimEditorBorder = undefined
+          spacerFix?.dispose()
+          spacerFix = undefined
           speakerSpacingFix = undefined
+          transcriptLayoutFix?.dispose()
+          transcriptLayoutFix = undefined
           unsubscribe()
           active = false
           stop()
@@ -400,6 +436,8 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('agent_start', () => {
     agentWorking = true
     railPendingNarration = false
+    liveUsageAssistantAt = undefined
+    assistantUsageLines.clear()
     dimEditorBorder?.()
     requestRender?.()
     dock.reset()
@@ -428,9 +466,10 @@ export default function hud(pi: ExtensionAPI): void {
       () => turn === railTurn && agentWorking && railPendingNarration,
       () => {
         const live = turn === railTurn && agentWorking
+        const placedInRail = live && liveUsageAssistantAt === undefined
         return {
-          row: live ? liveUsage.row() : undefined,
-          shimmer: live,
+          row: placedInRail ? liveUsage.row() : undefined,
+          shimmer: placedInRail,
           tick: animationClock.tick(),
         }
       },
@@ -442,6 +481,7 @@ export default function hud(pi: ExtensionAPI): void {
   pi.registerEntryRenderer(railStateEntryType, () => undefined)
 
   pi.on('session_tree', (_event, ctx) => {
+    transcriptLayoutFix?.markDirty()
     restoreRails(ctx)
     spacerFix?.markDirty()
     speakerSpacingFix?.markDirty()
@@ -502,11 +542,22 @@ export default function hud(pi: ExtensionAPI): void {
   const openRailEntry = () => {
     if (!railEnabled || !railTurnPending) return
     railTurnPending = false
+    transcriptLayoutFix?.markDirty()
     pi.appendEntry(railEntryType, { turn: railTurn })
   }
 
   const reconcileRailVoice = () => {
     const projection = railVoice.projection()
+    liveUsageAssistantAt = projection.hasTrailingText
+      ? projection.trailingTextMessageTimestamp
+      : undefined
+    if (
+      projection.openingMessageTimestamp !== undefined &&
+      railOpeningAt.get(railTurn) !== projection.openingMessageTimestamp
+    ) {
+      railOpeningAt.set(railTurn, projection.openingMessageTimestamp)
+      transcriptLayoutFix?.markDirty()
+    }
     currentHiddenNarrationBlocks = projection.hiddenTextBlocks
     const nextIds = new Set(projection.rows.map((row) => row.id))
     for (const id of railPseudoIds) {
@@ -600,6 +651,8 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_end', (_event, ctx) => {
     agentWorking = false
+    liveUsageAssistantAt = undefined
+    assistantUsageLines.clear()
     if (!railTurnPending) {
       for (const action of rail.values()) persistRailAction(action)
       mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)

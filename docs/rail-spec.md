@@ -65,7 +65,9 @@ the top of the tree.
 
 A thought row and a narration row are not tool calls. They render with:
 
-- A blank status cell, never a check or a cross.
+- A braille spinner while a thought is active.
+- A blank status cell after a thought settles.
+- A blank status cell for narration.
 - The thought icon or the chat icon.
 - A dim body.
 
@@ -73,7 +75,7 @@ They never join a run, and they break the run around them.
 
 A reasoning stream first renders as `Thinking`. It changes to `Thought` when the reasoning block ends.
 
-A pending thought row renders as the last row when all tools finish. It disappears when reasoning or answer text starts.
+A separate pending thought row renders after all tools finish. Its braille spinner and trailing dots animate until reasoning or answer text starts.
 
 ## Sources
 
@@ -157,6 +159,8 @@ During a live turn, trailing text renders as answer prose immediately. A later t
 
 Opening text and answer text render as normal transcript prose. Narration renders only as a `Note` row.
 
+The transcript places the rail after the opening message. The rail stays before later narration and answer messages.
+
 Visibility applies to each text block. Other prose stays visible when one assistant message contains multiple text blocks.
 
 This text transition is the only retroactive change in the tree.
@@ -169,13 +173,11 @@ The usage row reports the current turn:
 ▪ 26s · $0.26 · 85.7k in · 1.7k out · ⛁ 64% cached · ⚡65.4/s
 ```
 
-It is visible WHILE the turn runs, not only at the end. The row is the LAST line
-of the rail, separated from the tree by one blank line, so it always sits under
-the block being generated.
+It is visible WHILE the turn runs, not only at the end. During tool activity, it is the last rail line.
 
-While the turn runs the row shimmers. When the turn settles the shimmer stops
-and the row renders in the dim tone. The final figures also settle into a static
-transcript entry.
+When visible assistant prose starts, the row moves below that prose. It always follows the newest visible interaction content.
+
+While the turn runs, the row shimmers. When the turn settles, a static transcript entry replaces it in the dim tone.
 
 The cost uses three decimals below `$0.10` and two at or above it.
 
