@@ -341,13 +341,7 @@ export default function todo(pi: ExtensionAPI): void {
   const todoToolActive = () => pi.getActiveTools().includes('todo_write')
 
   const refreshStatus = (ctx: ExtensionContext) => {
-    const visible = todos.filter((todo) => todo.status !== 'cancelled')
-    if (visible.length === 0) {
-      ctx.ui.setStatus(statusKey, undefined)
-      return
-    }
-    const completed = completedTodoCount(visible)
-    ctx.ui.setStatus(statusKey, `todos ${completed}/${visible.length}`)
+    ctx.ui.setStatus(statusKey, undefined)
   }
 
   const restore = (ctx: ExtensionContext) => {
@@ -385,7 +379,7 @@ export default function todo(pi: ExtensionAPI): void {
       }
     }
     refreshStatus(ctx)
-    if (ctx.hasUI) {
+    if (ctx.mode === 'tui') {
       overlay.setUI(ctx.ui)
       overlay.reset()
       overlay.update()
@@ -526,7 +520,7 @@ export default function todo(pi: ExtensionAPI): void {
       const details: TodoWriteDetails = updateTodos(todos, params.todos, params.merge, Date.now())
       todos = cloneTodos(details.todos)
       refreshStatus(ctx)
-      if (ctx.hasUI) {
+      if (ctx.mode === 'tui') {
         overlay.setUI(ctx.ui)
         if (todos.length === 0) {
           overlay.reset()
@@ -712,7 +706,7 @@ export default function todo(pi: ExtensionAPI): void {
   ) => {
     todos = normalizeInProgress(cloneTodos(next), Date.now())
     refreshStatus(ctx)
-    if (ctx.hasUI) {
+    if (ctx.mode === 'tui') {
       overlay.setUI(ctx.ui)
       if (todos.length === 0) {
         overlay.reset()

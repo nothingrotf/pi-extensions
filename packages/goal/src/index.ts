@@ -14,6 +14,7 @@ import { Value } from 'typebox/value'
 
 import { goalSubcommands, parseBudgetInput, parseGoalSubcommand } from './commands.ts'
 import { isLoopActive } from './loop-activity.ts'
+import { GoalOverlay } from './overlay.ts'
 import {
   completionBudgetReport,
   goalToolDescription,
@@ -243,6 +244,7 @@ export default function goal(pi: ExtensionAPI): void {
   let continuationTurnInFlight = false
   let suppressNextContinuation = false
   let turnCounter = 0
+  const overlay = new GoalOverlay(() => state)
 
   const runtime = new GoalRuntime({
     getState: () => state,
@@ -276,20 +278,11 @@ export default function goal(pi: ExtensionAPI): void {
   const isPaused = () => state !== undefined && !state.enabled && state.goal.status === 'paused'
 
   const refreshStatus = () => {
-    if (context === undefined) {
-      return
-    }
-    if (state === undefined) {
-      context.ui.setStatus(statusKey, undefined)
-      return
-    }
-    const goalState = state.goal
-    const tokens =
-      goalState.tokenBudget === undefined
-        ? formatTokens(goalState.tokensUsed)
-        : `${formatTokens(goalState.tokensUsed)}/${formatTokens(goalState.tokenBudget)}`
-    const label = state.enabled ? goalState.status : 'paused'
-    context.ui.setStatus(statusKey, `Goal ${label} ${tokens}`)
+    if (context === undefined) return
+    context.ui.setStatus(statusKey, undefined)
+    if (context.mode !== 'tui') return
+    overlay.setUI(context.ui)
+    overlay.update()
   }
 
   const syncToolExposure = (exposed: boolean) => {
@@ -641,6 +634,8 @@ export default function goal(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async () => {
     cancelContinuation()
+    context = undefined
+    overlay.dispose()
     await runtime.onTaskAborted({ reason: 'internal' })
   })
 

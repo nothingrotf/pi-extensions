@@ -16,6 +16,24 @@ The package ports the goal subsystem of [oh-my-pi](https://github.com/can1357/oh
 - The `goal` tool is visible to the model only while a goal exists.
 - When `@nothingrotf/todo` is installed and `todo_write` is active, the goal context includes the persisted todo list as live progress state.
 
+## Editor panel
+
+An Empryo-style goal strip appears above the editor while a goal exists:
+
+```text
+    ╭─ ⟲ goal · active ▾ ── 1.2k/5k tokens · 1m 05s ─╮
+    │   Ship the editor dock                         │
+    ╰─ continuing toward the objective ─ /goal drop ─╯
+```
+
+The responsive side inset uses one to four columns. The panel uses a rounded border and a title chip.
+
+The border reports the goal state. The title reports token use and elapsed time.
+
+A paused goal displays `/goal resume`. A limited goal displays `token budget reached`.
+
+The footer uses `/goal drop` because this package names the discard command `drop`.
+
 ## Install
 
 ```sh

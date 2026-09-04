@@ -560,16 +560,29 @@ The result replaces the agent rows with live rows. A running row shows the tool 
 
 `TaskControl` results use the same rows for `status` and `list`, receipt lines for `steer`, `cancel`, and `join`, and the job tree for `wait` and `jobs`. Intercom messages between a child and the parent render as IRC cards with quoted bodies.
 
-The `Subagents` widget above the editor lists the running children with the same layout as the oh-my-pi HUD:
+The editor dock uses separate Empryo-style panels for foreground dispatches and background Tasks:
 
 ```text
- Subagents
-  ├─ • Ampere lane ⟦explore⟧ Read runtime.ts
-  ╰─ • Ada lane ⟦shell⟧ Bash bun run test
+    ╭─ 󰚩 dispatch · 2 ▾ ─────────────── 12s ─╮
+    │  ◉ opus                                  │
+    │  ├─ ✧ (◉‿◉) Inspect code  opus  read     │
+    │  ╰─ ❖ (◉‿◉) Run checks    opus  bash     │
+    ╰─ ↯ inspect in the panel ────── ctrl+shift+a ─╯
 ```
 
-Each row shows the bold description, the agent type badge, and the last activity in muted text.
-The widget shows at most 8 rows and renders nothing when no child runs. The widget registers on the first agent turn, after the `todo` widget, so the two keep a stable order.
+The responsive side inset uses one to four columns. Each panel uses a rounded border and a title chip.
+
+Each row can show these fields:
+
+- A role sigil and an agent face.
+- A fixed-width description and model.
+- The current tool, token count, and activity detail.
+
+The column set changes at widths of 56, 76, and 96 columns. Each panel shows at most five Tasks.
+
+Completed rows remain for 1.4 seconds. The footer reports transcript transfer during this interval.
+
+The widget registers on session start. It renders nothing when no applicable Task exists.
 
 A foreground or batch Task call streams a job tree into its tool result while the children run:
 

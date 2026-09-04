@@ -35,6 +35,7 @@ function snapshot(agentId: string, running: boolean): SubagentSnapshot {
   }
   return {
     agentId,
+    background: false,
     contextState: undefined,
     description: `${agentId} lane`,
     effort: 'high',

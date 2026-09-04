@@ -15,9 +15,9 @@ A complete `todo_write` and `todo_read` lifecycle for Pi sessions.
 - It returns complete state, readiness, transition, and reminder metadata.
 - It stores complete todo snapshots on the active Pi session branch.
 - It restores the correct list after resume, fork, or branch navigation.
-- It renders grouped statuses, progress headers, icons, colors, and strike-through text.
-- It displays a persistent tree above the editor.
-- It hides completed tree rows after one agent run.
+- It renders an Empryo-style task panel above the editor.
+- It displays a responsive frame, a progress title, state icons, and a six-row task window.
+- It hides completed panel rows after one agent run.
 - It publishes update, turn-start, and reminder events for other extensions.
 - It reminds the agent when a run stops with open todos, at most three times per prompt.
 - It nudges the agent after twelve file or shell mutations without a `todo_write` call.
@@ -118,28 +118,38 @@ Filter by status, ID, or both.
 }
 ```
 
-## Persistent tree
+## Persistent task panel
 
-The tree uses a flat version of the oh-my-pi HUD layout above the editor:
+The widget renders an Empryo-style task panel above the editor:
 
 ```text
- TODO · 1/3
-  ├─ ☑ Inspect code
-  ├─ ☐ Implement change
-  ╰─ ☐ Verify behavior
+    ╭─  Tasks 1/3 ▾ ─────────────────╮
+    │  +1 done                        │
+    │  ⠋ Implement change             │
+    │  ○ Verify behavior              │
+    ╰─────────────────────────────────╯
 ```
 
-The tree connectors form a progress path. The accent part of the path grows with the closed task count.
+The responsive side inset uses one to four columns. The panel uses a rounded border and a title chip.
 
-Rows use one color per status: success for completed, accent for in progress, dim for pending, warning for blocked, and error for cancelled. Completed and cancelled rows use strikethrough text.
+Rows use these states:
 
-The tree shows the last closed task, then the task in progress, then the next pending tasks. It shows at most 5 open rows and a `… n more todos` summary for the rest.
+- Completed tasks enter the success summary.
+- Active tasks use an animated pulse and bold text.
+- Pending tasks use a muted circle.
+- Blocked tasks use an error cross.
 
-Closed rows remain visible for one agent run. The next agent run hides those rows from the tree.
+Active tasks appear first. Pending and blocked tasks retain source order.
 
-The widget registers once at session start and renders nothing while the list is empty. This keeps its position above the editor stable.
+The panel shows at most six task rows. An additional row reports the hidden task count.
 
-The state remains available through `todo_read` after the tree hides a completed row.
+Closed rows remain visible for one agent run. The next agent run hides those rows from an open panel.
+
+An all-settled panel remains visible for three seconds.
+
+The widget registers once at session start. It renders nothing while the list is empty.
+
+The state remains available through `todo_read` after the panel hides a completed row.
 
 ## /todo command
 

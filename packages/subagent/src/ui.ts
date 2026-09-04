@@ -1,7 +1,7 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import type { TUI } from '@earendil-works/pi-tui'
 
-import { SubagentsWidget, taskLine } from './format.ts'
+import { SUBAGENT_SETTLE_LINGER_MS, SubagentsWidget, taskLine } from './format.ts'
 import { createPeekPane } from './peek.ts'
 import type { SubagentRuntime } from './runtime.ts'
 
@@ -10,6 +10,8 @@ const WIDGET_THROTTLE_MS = 160
 export class SubagentTui {
   private context: ExtensionContext | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
+  private pulseTimer: ReturnType<typeof setInterval> | undefined
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined
   private widgetTui: TUI | undefined
 
   constructor(private readonly runtime: SubagentRuntime) {
@@ -18,16 +20,25 @@ export class SubagentTui {
 
   sessionStart(ctx: ExtensionContext): void {
     this.context = ctx
+    if (ctx.mode !== 'tui') return
+    this.ensureWidget(ctx)
+    this.syncWidgetTimers()
   }
 
   agentStart(ctx: ExtensionContext): void {
     this.context = ctx
+    if (ctx.mode !== 'tui') return
     this.ensureWidget(ctx)
+    this.syncWidgetTimers()
   }
 
   sessionShutdown(ctx: ExtensionContext): void {
     if (this.timer !== undefined) clearTimeout(this.timer)
+    if (this.pulseTimer !== undefined) clearInterval(this.pulseTimer)
+    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
     this.timer = undefined
+    this.pulseTimer = undefined
+    this.expiryTimer = undefined
     this.clearWidget(ctx)
     this.context = undefined
   }
@@ -79,14 +90,15 @@ export class SubagentTui {
   }
 
   private scheduleWidget(): void {
-    if (this.timer !== undefined) return
+    if (this.context?.mode !== 'tui' || this.timer !== undefined) return
     this.timer = setTimeout(() => {
       this.timer = undefined
       const ctx = this.context
       try {
-        if (ctx?.hasUI !== true) return
+        if (ctx?.mode !== 'tui') return
         this.ensureWidget(ctx)
         this.widgetTui?.requestRender()
+        this.syncWidgetTimers()
       } catch {
         if (this.context === ctx) this.context = undefined
         this.widgetTui = undefined
@@ -94,13 +106,45 @@ export class SubagentTui {
     }, WIDGET_THROTTLE_MS)
   }
 
+  private syncWidgetTimers(): void {
+    if (this.context?.mode !== 'tui') return
+    const snapshots = this.runtime.listSnapshots()
+    const active = snapshots.some((snapshot) => snapshot.running)
+    if (active && this.pulseTimer === undefined) {
+      this.pulseTimer = setInterval(() => this.widgetTui?.requestRender(), WIDGET_THROTTLE_MS)
+      this.pulseTimer.unref?.()
+    } else if (!active && this.pulseTimer !== undefined) {
+      clearInterval(this.pulseTimer)
+      this.pulseTimer = undefined
+    }
+    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
+    const now = Date.now()
+    const expiry = snapshots
+      .filter((snapshot) => !snapshot.running && snapshot.endedAt !== undefined)
+      .map((snapshot) => (snapshot.endedAt ?? now) + SUBAGENT_SETTLE_LINGER_MS - now)
+      .filter((delay) => delay > 0)
+      .sort((left, right) => left - right)[0]
+    if (expiry === undefined) return
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = undefined
+      this.widgetTui?.requestRender()
+      this.syncWidgetTimers()
+    }, expiry)
+    this.expiryTimer.unref?.()
+  }
+
   private ensureWidget(ctx: ExtensionContext): void {
-    if (this.widgetTui !== undefined || !ctx.hasUI) return
+    if (this.widgetTui !== undefined || ctx.mode !== 'tui') return
     ctx.ui.setWidget(
       'subagents',
       (tui, theme) => {
         this.widgetTui = tui
-        return new SubagentsWidget(() => this.runtime.listSnapshots(), theme)
+        return new SubagentsWidget(
+          () => this.runtime.listSnapshots(),
+          theme,
+          () => this.context?.model?.id,
+        )
       },
       { placement: 'aboveEditor' },
     )

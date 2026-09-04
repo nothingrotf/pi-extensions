@@ -251,7 +251,7 @@ describe('todo lifecycle', () => {
         },
         { ...restoredTodos[1], status: 'in_progress', updatedAt: '100' },
       ])
-      expect(instance.statuses.get('todos')).toBe('todos 1/2')
+      expect(instance.statuses.get('todos')).toBeUndefined()
     } finally {
       vi.useRealTimers()
     }
@@ -262,7 +262,7 @@ describe('todo lifecycle', () => {
       toolResult({ todos: [restoredTodos[0]], totalCount: 1, wasMerge: true }),
     ])
     await instance.emit('session_tree')
-    expect(instance.statuses.get('todos')).toBe('todos 0/1')
+    expect(instance.statuses.get('todos')).toBeUndefined()
   })
 
   test('clears prior memory for a new empty conversation', async () => {

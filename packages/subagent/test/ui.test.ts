@@ -2,13 +2,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { visibleWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vite-plus/test'
 
 import {
   activitySnippet,
   describeCall,
   oneLineLabel,
+  renderSubagentHudLines,
   SubagentsWidget,
   type SubagentTheme,
 } from '../src/format.ts'
@@ -27,10 +28,12 @@ function snapshot(
   description: string,
   status: SubagentSnapshot['status'],
   sessionFile: string,
+  background = false,
 ): SubagentSnapshot {
   const running = status === 'running'
   return {
     agentId,
+    background,
     contextState: undefined,
     description,
     effort: 'high',
@@ -71,16 +74,84 @@ function snapshot(
 }
 
 describe('subagent TUI', () => {
-  it('renders the same compact widget shape and respects terminal width', () => {
+  it('renders the Empryo dispatch panel and respects terminal width', () => {
     const snapshots = [
       snapshot('active', 'Inspect runtime', 'running', '/tmp/active.jsonl'),
       snapshot('done', 'Review tests', 'completed', '/tmp/done.jsonl'),
     ]
-    const widget = new SubagentsWidget(() => snapshots, theme)
-    const lines = widget.render(72)
-    expect(lines).toEqual([' Subagents', '  ╰─ • Inspect runtime ⟦explore⟧ read', ''])
+    const lines = renderSubagentHudLines(snapshots, theme, 72, 2_500, 'anthropic/claude-opus-5')
+    const plainLines = lines.map(stripTerminalSequences)
+    expect(plainLines[0]).toMatch(/^  ╭─ 󰚩 dispatch · 2 ▾/)
+    expect(plainLines[1]).toContain('◉ opus')
+    expect(plainLines[2]).toContain('(◉‿◉) Inspect r…')
+    expect(plainLines[3]).toContain('(✓‿✓) Review te…')
+    expect(plainLines.at(-1)).toContain('↯ inspect in the panel')
+    expect(plainLines.at(-1)).toContain('ctrl+shift+a')
     expect(lines.every((line) => visibleWidth(line) <= 72)).toBe(true)
     expect(new SubagentsWidget(() => snapshots.slice(1), theme).render(72)).toEqual([])
+  })
+
+  it('splits background jobs into their own panel and expires settled rows', () => {
+    const foreground = snapshot('foreground', 'Explore files', 'running', '/tmp/foreground.jsonl')
+    const background = snapshot('background', 'Run tests', 'running', '/tmp/background.jsonl', true)
+    const rendered = renderSubagentHudLines([foreground, background], theme, 120, 2_500).join('\n')
+    expect(rendered).toContain('󰚩 dispatch · 1 ▾')
+    expect(rendered).toContain('◌ background · 1 ▾')
+    const settled = snapshot('done', 'Review tests', 'completed', '/tmp/done.jsonl')
+    expect(renderSubagentHudLines([settled], theme, 120, 3_399)).not.toEqual([])
+    expect(renderSubagentHudLines([settled], theme, 120, 3_400)).toEqual([])
+  })
+
+  it('animates a running thinking face', () => {
+    const thinking = snapshot('thinking', 'Reason about tests', 'running', '/tmp/thinking.jsonl')
+    thinking.lastActivity = 'Thinking'
+    const rows = [0, 480, 960, 1_440].map((now) =>
+      stripTerminalSequences(
+        renderSubagentHudLines([thinking], theme, 120, now, 'openai-codex/gpt-5.6-sol')[2] ?? '',
+      ),
+    )
+    expect(new Set(rows).size).toBe(4)
+  })
+
+  it('uses the responsive dock insets', () => {
+    const snapshots = [snapshot('foreground', 'Inspect runtime', 'running', '/tmp/one.jsonl')]
+    for (const item of [
+      { inset: 1, width: 55 },
+      { inset: 2, width: 56 },
+      { inset: 2, width: 79 },
+      { inset: 3, width: 80 },
+      { inset: 3, width: 109 },
+      { inset: 4, width: 110 },
+    ]) {
+      expect(
+        renderSubagentHudLines(snapshots, theme, item.width, 2_500)[0]?.match(/^ */)?.[0].length,
+      ).toBe(item.inset)
+    }
+  })
+
+  it('fits every responsive width', () => {
+    const snapshots = [
+      snapshot(
+        'foreground',
+        'Inspect a very long runtime description',
+        'running',
+        '/tmp/one.jsonl',
+      ),
+      snapshot(
+        'background',
+        'Run a very long background command',
+        'running',
+        '/tmp/two.jsonl',
+        true,
+      ),
+    ]
+    for (let width = 8; width <= 140; width += 1) {
+      expect(
+        renderSubagentHudLines(snapshots, theme, width, 2_500).every(
+          (line) => visibleWidth(line) <= width,
+        ),
+      ).toBe(true)
+    }
   })
 
   it('formats detailed live activity from tool arguments and assistant text', () => {

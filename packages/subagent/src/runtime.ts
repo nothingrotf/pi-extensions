@@ -164,6 +164,7 @@ export interface SubagentSnapshot {
   isolation?: IsolationReceipt | undefined
   lastActivity: string | undefined
   model: string
+  background: boolean
   output: string | undefined
   readonly: boolean
   retryFailure: RetryFailure | undefined
@@ -623,6 +624,7 @@ export class SubagentRuntime {
           isolation: active?.isolationReceipt ?? record.isolation,
           lastActivity: active?.lastActivity,
           model: record.model,
+          background: record.background,
           output: record.output,
           readonly: record.readonly,
           retryFailure: active?.retryFailure ?? record.retryFailure,

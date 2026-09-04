@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vite-plus/tes
 
 import goal from '../src/index.ts'
 
-function harness(branch = []) {
+function harness(branch = [], mode = 'tui') {
   const handlers = new Map()
   const tools = new Map()
   const commands = new Map()
@@ -12,6 +12,9 @@ function harness(branch = []) {
   const entries = []
   const notices = []
   const statuses = new Map()
+  const widgetCalls = []
+  let widget
+  const tui = { requestRender() {} }
   let activeTools = ['read', 'bash', 'goal']
   let idle = true
   let pending = false
@@ -48,7 +51,7 @@ function harness(branch = []) {
   const ctx = {
     cwd: process.cwd(),
     hasUI: true,
-    mode: 'tui',
+    mode,
     isIdle() {
       return idle
     },
@@ -61,11 +64,16 @@ function harness(branch = []) {
       },
     },
     ui: {
+      theme,
       notify(text, level) {
         notices.push({ text, level })
       },
       setStatus(key, value) {
         statuses.set(key, value)
+      },
+      setWidget(key, factory, options) {
+        widgetCalls.push({ key, factory, options })
+        widget = factory === undefined ? undefined : factory(tui, theme)
       },
       getEditorText() {
         return editorText
@@ -123,6 +131,10 @@ function harness(branch = []) {
     userMessages,
     notices,
     statuses,
+    widgetCalls,
+    renderWidget(width = 120) {
+      return widget?.render(width) ?? []
+    },
     activeTools: () => [...activeTools],
     setIdle(value) {
       idle = value
@@ -149,6 +161,9 @@ function harness(branch = []) {
 }
 
 const theme = {
+  bg(_color, text) {
+    return text
+  },
   bold(text) {
     return text
   },
@@ -255,7 +270,8 @@ describe('goal lifecycle', () => {
     })
     expect(instance.activeTools()).toContain('goal')
     expect(instance.userMessages).toEqual([{ content: 'ship the release', options: undefined }])
-    expect(instance.statuses.get('pi-goal')).toBe('Goal active 0')
+    expect(instance.statuses.get('pi-goal')).toBeUndefined()
+    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · active ▾')
     const injected = await instance.emit('before_agent_start', { systemPrompt: 'base' })
     expect(injected.message.customType).toBe('goal-mode-context')
     expect(injected.message.content).toContain('<objective>\nship the release\n</objective>')
@@ -349,7 +365,8 @@ describe('goal lifecycle', () => {
       text: 'Goal paused. Use /goal resume to continue.',
       level: 'info',
     })
-    expect(instance.statuses.get('pi-goal')).toBe('Goal paused 0')
+    expect(instance.statuses.get('pi-goal')).toBeUndefined()
+    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · paused ▾')
     expect(instance.activeTools()).toContain('goal')
   })
 
@@ -378,7 +395,8 @@ describe('goal lifecycle', () => {
       timeUsedSeconds: 3,
       status: 'active',
     })
-    expect(instance.statuses.get('pi-goal')).toBe('Goal active 6/10')
+    expect(instance.statuses.get('pi-goal')).toBeUndefined()
+    expect(instance.renderWidget().join('\n')).toContain('6/10 tokens')
 
     await instance.emit('message_end', { message: assistant({ input: 3, output: 3 }) })
     await instance.emit('tool_execution_end', {
@@ -593,6 +611,12 @@ describe('goal lifecycle', () => {
     expect(instance.messages).toHaveLength(0)
   })
 
+  test('does not register the editor panel outside TUI mode', async () => {
+    const instance = harness([], 'rpc')
+    await instance.emit('session_start', { reason: 'startup' })
+    expect(instance.widgetCalls).toEqual([])
+  })
+
   test('restores a paused goal and ignores invalid entries', async () => {
     const instance = harness([
       {
@@ -725,5 +749,6 @@ describe('goal lifecycle', () => {
       mode: 'goal',
       goal: { status: 'active', timeUsedSeconds: 4 },
     })
+    expect(instance.widgetCalls.at(-1)).toMatchObject({ key: 'goal', factory: undefined })
   })
 })
