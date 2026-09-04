@@ -9,12 +9,15 @@ export type RailTint =
   | 'branch'
   | 'caret'
   | 'dim'
+  | 'duration'
   | 'fail'
   | 'head'
   | 'headFail'
   | 'native'
   | 'neutral'
   | 'ok'
+  | 'pseudo'
+  | 'pseudoBody'
   | 'read'
   | 'shell'
   | 'text'
@@ -122,12 +125,15 @@ export function buildRailPalette(): RailPalette {
     branch: ansiForeground(empryoBranch),
     caret: ansiForeground(empryoCaret),
     dim: ansiForeground(empryoTextFaint),
+    duration: ansiForeground(empryoTextDim),
     fail: ansiForeground(empryoFail),
     head: ansiForeground(empryoHead),
     headFail: ansiForeground(empryoHeadFail),
     native: ansiForeground(empryoNative),
     neutral: ansiForeground(empryoHead),
     ok: ansiForeground(empryoOk),
+    pseudo: ansiForeground(empryoBrandDim),
+    pseudoBody: ansiForeground(empryoTextDim),
     read: ansiForeground(empryoRead),
     shell: ansiForeground(empryoShell),
     text: ansiForeground(empryoTextPrimary),

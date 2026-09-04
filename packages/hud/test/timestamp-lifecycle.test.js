@@ -4,9 +4,7 @@ import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/ti
 
 function harness(header) {
   const handlers = new Map()
-  const commands = new Map()
   const entries = []
-  const notifications = []
   const renderers = new Map()
   const api = {
     on(name, handler) {
@@ -18,18 +16,9 @@ function harness(header) {
     registerEntryRenderer(customType, value) {
       renderers.set(customType, value)
     },
-    registerCommand(name, command) {
-      commands.set(name, command)
-    },
   }
-  const ctx = {
-    ui: {
-      notify(message, level) {
-        notifications.push({ message, level })
-      },
-    },
-  }
-  registerTimestamps(api, undefined, header)
+  const ctx = { ui: {} }
+  const controls = registerTimestamps(api, undefined, header)
   return {
     turnStart(timestamp = Date.now()) {
       handlers.get('turn_start')({ timestamp }, ctx)
@@ -54,10 +43,9 @@ function harness(header) {
       )
     },
     toggle() {
-      return commands.get('hud-timestamp').handler('', ctx)
+      return controls.toggle()
     },
     entries,
-    notifications,
   }
 }
 
@@ -147,7 +135,7 @@ describe('transcript lifecycle', () => {
     expect(instance.entries).toHaveLength(3)
   })
 
-  test('toggles transcript recording and rendering', async () => {
+  test('toggles transcript recording and rendering', () => {
     const instance = harness()
     const data = {
       cacheRead: 0,
@@ -161,7 +149,7 @@ describe('transcript lifecycle', () => {
     const persistedRole = instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)
     expect(persistedUsage).toBeDefined()
     expect(persistedRole).toBeDefined()
-    await instance.toggle()
+    instance.toggle()
     expect(persistedUsage.render(80)).toEqual([])
     expect(persistedRole.render(80)).toEqual([])
     instance.agentStart()
@@ -173,8 +161,7 @@ describe('transcript lifecycle', () => {
     instance.agentEnd()
     expect(instance.entries).toEqual([])
     expect(instance.render(data).render(80)).toEqual([])
-    expect(instance.notifications).toEqual([{ message: 'hud: timestamps disabled', level: 'info' }])
-    await instance.toggle()
+    instance.toggle()
     expect(persistedUsage.render(80).length).toBeGreaterThan(0)
     expect(persistedRole.render(80).length).toBeGreaterThan(0)
     instance.agentStart()

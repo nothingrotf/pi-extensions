@@ -1,4 +1,4 @@
-import { Container, Text } from '@earendil-works/pi-tui'
+import { type Component, Container, Text } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import {
@@ -14,10 +14,39 @@ function trimmed(lines: readonly string[]): string[] {
 class FakeAssistant extends Container {
   contentContainer = new Container()
   hideThinkingBlock = false
+  lastMessage: { timestamp: number } | undefined
 
-  constructor(lines: string[]) {
+  constructor(lines: string[], timestamp?: number) {
     super()
+    this.lastMessage = timestamp === undefined ? undefined : { timestamp }
     this.addChild(new Text(lines.join('\n'), 0, 0))
+  }
+}
+
+type MessageBlock = { text?: string; type: string }
+type TestMessage = { content: MessageBlock[]; timestamp: number }
+
+class UpdatingAssistant implements Component {
+  contentContainer = {}
+  hideThinkingBlock = false
+  isStreaming = true
+  lastMessage: TestMessage
+
+  constructor(message: TestMessage) {
+    this.lastMessage = message
+  }
+
+  invalidate(): void {}
+
+  render(): string[] {
+    return this.lastMessage.content.flatMap((block) =>
+      block.type === 'text' && block.text !== undefined ? [block.text] : [],
+    )
+  }
+
+  updateContent(message: TestMessage, isStreaming = this.isStreaming): void {
+    this.lastMessage = message
+    this.isStreaming = isStreaming
   }
 }
 
@@ -89,6 +118,45 @@ describe('sweepAssistantMessages', () => {
     root.addChild(assistant)
     sweepAssistantMessages(root, () => true)
     expect(assistant.render(80)).toEqual([])
+  })
+
+  test('hides an assistant message classified as narration', () => {
+    let hidden = true
+    const root = new Container()
+    const assistant = new FakeAssistant(['', 'intermediate text', ''], 7)
+    root.addChild(assistant)
+    sweepAssistantMessages(
+      root,
+      () => true,
+      (timestamp) => timestamp !== 7 || !hidden,
+    )
+    expect(assistant.render(80)).toEqual([])
+    hidden = false
+    expect(trimmed(assistant.render(80))).toEqual(['', 'intermediate text', ''])
+  })
+
+  test('hides only the selected text block inside a mixed message', () => {
+    const root = new Container()
+    const assistant = new UpdatingAssistant({
+      content: [
+        { text: 'Opening', type: 'text' },
+        { type: 'toolCall' },
+        { text: 'Middle', type: 'text' },
+        { type: 'toolCall' },
+        { text: 'Answer', type: 'text' },
+      ],
+      timestamp: 7,
+    })
+    let hideMiddle = true
+    root.addChild(assistant)
+    sweepAssistantMessages(
+      root,
+      () => true,
+      (timestamp, contentIndex) => timestamp !== 7 || contentIndex !== 2 || !hideMiddle,
+    )
+    expect(assistant.render()).toEqual(['Opening', 'Answer'])
+    hideMiddle = false
+    expect(assistant.render()).toEqual(['Opening', 'Middle', 'Answer'])
   })
 
   test('ignores components that do not look like assistant messages', () => {

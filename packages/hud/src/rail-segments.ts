@@ -1,6 +1,24 @@
+export type RailTextLocation = {
+  contentIndex: number
+  timestamp: number
+}
+
 export type RailSegment =
-  | { content: string; type: 'reasoning' }
-  | { content: string; type: 'text' }
+  | {
+      active?: boolean
+      content: string
+      id?: string
+      messageTimestamp?: number
+      type: 'reasoning'
+    }
+  | {
+      content: string
+      id?: string
+      messageContentIndex?: number
+      messageTimestamp?: number
+      sourceLocations?: readonly RailTextLocation[]
+      type: 'text'
+    }
   | { toolCallIds: readonly string[]; type: 'tools' }
 
 export type RailZones = {
@@ -19,7 +37,32 @@ function coalesce(segments: readonly RailSegment[]): RailSegment[] {
   for (const segment of segments) {
     const previous = out.at(-1)
     if (segment.type === 'text' && previous?.type === 'text') {
-      out[out.length - 1] = { content: previous.content + segment.content, type: 'text' }
+      const sourceLocations = [
+        ...(previous.sourceLocations ??
+          (previous.messageTimestamp === undefined || previous.messageContentIndex === undefined
+            ? []
+            : [
+                {
+                  contentIndex: previous.messageContentIndex,
+                  timestamp: previous.messageTimestamp,
+                },
+              ])),
+        ...(segment.sourceLocations ??
+          (segment.messageTimestamp === undefined || segment.messageContentIndex === undefined
+            ? []
+            : [
+                {
+                  contentIndex: segment.messageContentIndex,
+                  timestamp: segment.messageTimestamp,
+                },
+              ])),
+      ]
+      const merged: Extract<RailSegment, { type: 'text' }> = {
+        ...previous,
+        content: previous.content + segment.content,
+      }
+      if (sourceLocations.length > 0) merged.sourceLocations = sourceLocations
+      out[out.length - 1] = merged
       continue
     }
     out.push(segment)

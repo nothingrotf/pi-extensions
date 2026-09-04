@@ -5,6 +5,8 @@ import hud from '../src/index.ts'
 
 function harness() {
   const handlers = new Map()
+  const commands = new Map()
+  const appended = []
   let footerFactory
   let footerComponent
   let renders = 0
@@ -16,6 +18,9 @@ function harness() {
       handlers.set(name, handler)
     },
     events: {
+      emit(channel, data) {
+        eventHandlers.get(channel)?.(data)
+      },
       on(channel, handler) {
         eventHandlers.set(channel, handler)
         return () => eventHandlers.delete(channel)
@@ -24,11 +29,15 @@ function harness() {
     getThinkingLevel() {
       return 'medium'
     },
-    registerCommand() {},
+    registerCommand(name, command) {
+      commands.set(name, command)
+    },
     registerEntryRenderer() {},
     registerMarkdownTransformer() {},
     registerTool() {},
-    appendEntry() {},
+    appendEntry(customType, data) {
+      appended.push({ customType, data })
+    },
   }
   const ctx = {
     hasUI: true,
@@ -51,9 +60,11 @@ function harness() {
         }
         footerFactory = value
       },
+      notify() {},
       onTerminalInput() {
         return () => undefined
       },
+      select() {},
       setWorkingVisible() {},
       setHiddenThinkingLabel() {},
       setWidget(key, factory) {
@@ -72,12 +83,12 @@ function harness() {
     },
   }
   hud(api)
-  const emit = async (name) => {
+  const emit = async (name, event = {}) => {
     const handler = handlers.get(name)
     if (handler === undefined) {
       throw new Error(`Missing ${name} handler`)
     }
-    await handler({}, ctx)
+    await handler(event, ctx)
   }
   const mount = () => {
     if (footerFactory === undefined) {
@@ -98,6 +109,8 @@ function harness() {
     return footerComponent
   }
   return {
+    appended: () => appended,
+    commandNames: () => [...commands.keys()],
     emit,
     emitEvent: (channel, data) => eventHandlers.get(channel)?.(data),
     mount,
@@ -111,6 +124,54 @@ function harness() {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
 
 describe('HUD lifecycle', () => {
+  test('registers one settings command', () => {
+    expect(harness().commandNames()).toEqual(['hud'])
+  })
+
+  test('opens and persists a standalone rail action', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    const report = {
+      doneLabel: 'Indexed',
+      status: 'ok',
+      toolCallId: 'external',
+    }
+    instance.emitEvent('hud:rail-action', report)
+    instance.emitEvent('hud:rail-action', report)
+    expect(instance.appended().map((entry) => entry.customType)).toEqual([
+      'hud-rail',
+      'hud-rail-state',
+    ])
+  })
+
+  test('persists a final built-in action snapshot', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', {
+      args: { path: 'package.json' },
+      toolCallId: 'read-1',
+      toolName: 'read',
+    })
+    await instance.emit('tool_execution_end', { isError: false, toolCallId: 'read-1' })
+    await instance.emit('agent_end')
+    expect(instance.appended().map((entry) => entry.customType)).toEqual([
+      'hud-rail',
+      'hud-rail-state',
+    ])
+    expect(instance.appended()[1]?.data.report.status).toBe('ok')
+    expect(instance.appended()[1]?.data.report.durationMs).toBeTypeOf('number')
+  })
+
+  test('ignores rail reports outside an active agent turn', () => {
+    const instance = harness()
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Historical',
+      status: 'ok',
+      toolCallId: 'old',
+    })
+    expect(instance.appended()).toEqual([])
+  })
+
   test('stops background updates when another footer replaces it', async () => {
     const instance = harness()
     await instance.emit('session_start')

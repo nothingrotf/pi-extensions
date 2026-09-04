@@ -57,6 +57,24 @@ describe('RailComponent', () => {
     expect(lines[1]).toBe(' ╰─ ✓ □ Read        a.ts')
   })
 
+  test('hides and restores the rail through its visibility source', () => {
+    const store = new RailStore()
+    store.report('a', { doneLabel: 'Read', status: 'ok' })
+    let visible = false
+    const component = new RailComponent(
+      () => store,
+      theme,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      () => visible,
+    )
+    expect(component.render(80)).toEqual([])
+    visible = true
+    expect(plain(component.render(80))[0]).toBe(' 1 action ▾')
+  })
+
   test('keeps a right gutter so durations clear the scrollbar', () => {
     const store = new RailStore()
     store.report('a', {

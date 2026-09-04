@@ -19,9 +19,11 @@ import { Value } from 'typebox/value'
 
 import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
-import { defaultRailIcon, defaultRailLabel } from './rail-channel.ts'
+import { defaultRailIcon, defaultRailLabel, type RailActionReport } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
-import { narrationPatch, thoughtPatch } from './rail-pseudo.ts'
+import type { RailSegment } from './rail-segments.ts'
+import { decodeRailStateEntry, railStateEntryType } from './rail-state-entry.ts'
+import { messageSegments, projectRailVoice } from './rail-voice.ts'
 import { RailStore, type RailCategory, type RailPatch, type RailStatus } from './rail.ts'
 
 type RailState = { store?: RailStore }
@@ -106,28 +108,81 @@ export function railPatchForCall(call: RailCallInput, cwd: string): RailPatch {
 export type SessionRails = {
   byEntryTurn: Map<number, RailStore>
   byToolCallId: Map<string, RailStore>
+  hiddenAssistantTextBlocks: Map<number, Set<number>>
+  hiddenAssistantTimestamps: Set<number>
   maxTurn: number
+}
+
+function applyStateReport(
+  target: RailStore,
+  report: RailActionReport,
+  preserveSettlement = false,
+): void {
+  const patch: RailPatch = { ...report, measureDuration: false, resetDerived: true }
+  if (preserveSettlement) {
+    patch.measureDuration = true
+    patch.resetDerived = false
+    delete patch.status
+  }
+  if (report.parentToolCallId === undefined) target.report(report.toolCallId, patch)
+  else target.reportChild(report.parentToolCallId, report.toolCallId, patch)
 }
 
 export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): SessionRails {
   const byEntryTurn = new Map<number, RailStore>()
   const byToolCallId = new Map<string, RailStore>()
+  const parentByToolCallId = new Map<string, string>()
+  const settledToolCallIds = new Set<string>()
   const startedAt = new Map<string, number>()
+  const hiddenAssistantTextBlocks = new Map<number, Set<number>>()
+  const hiddenAssistantTimestamps = new Set<number>()
+  const renderedStores = new Set<RailStore>()
+  const deferredReports: { report: RailActionReport; target: RailStore }[] = []
   let store = new RailStore()
+  let segments: RailSegment[] = []
   let maxTurn = 0
+  const finalize = () => {
+    const projection = projectRailVoice(segments, false)
+    for (const row of projection.rows) store.report(row.id, row.patch)
+    store.reorder(projection.order)
+    if (renderedStores.has(store)) {
+      for (const [timestamp, sourceIndices] of projection.hiddenTextBlocks) {
+        const indices = hiddenAssistantTextBlocks.get(timestamp) ?? new Set<number>()
+        for (const index of sourceIndices) indices.add(index)
+        hiddenAssistantTextBlocks.set(timestamp, indices)
+        hiddenAssistantTimestamps.add(timestamp)
+      }
+    }
+  }
   for (const entry of entries) {
     if (entry.type === 'custom' && entry.customType === railEntryType) {
       const turn = decodeRailEntry(entry.data)
       if (turn !== undefined) {
         byEntryTurn.set(turn, store)
+        renderedStores.add(store)
         maxTurn = Math.max(maxTurn, turn)
+      }
+      continue
+    }
+    if (entry.type === 'custom' && entry.customType === railStateEntryType) {
+      const state = decodeRailStateEntry(entry.data)
+      if (state === undefined) continue
+      const target = byEntryTurn.get(state.turn)
+      if (target === undefined) continue
+      applyStateReport(target, state.report)
+      deferredReports.push({ report: state.report, target })
+      byToolCallId.set(state.report.toolCallId, target)
+      if (state.report.parentToolCallId !== undefined) {
+        parentByToolCallId.set(state.report.toolCallId, state.report.parentToolCallId)
       }
       continue
     }
     if (entry.type !== 'message') continue
     const message = entry.message
     if (message.role === 'user') {
+      finalize()
       store = new RailStore()
+      segments = []
       continue
     }
     if (message.role === 'toolResult') {
@@ -141,32 +196,15 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       if (began !== undefined && message.timestamp >= began) {
         patch.durationMs = message.timestamp - began
       }
-      target.report(message.toolCallId, patch)
+      const parentToolCallId = parentByToolCallId.get(message.toolCallId)
+      if (parentToolCallId === undefined) target.report(message.toolCallId, patch)
+      else target.reportChild(parentToolCallId, message.toolCallId, patch)
+      settledToolCallIds.add(message.toolCallId)
       continue
     }
     if (message.role !== 'assistant') continue
-    let pseudoIndex = 0
+    segments.push(...messageSegments(message))
     for (const block of message.content) {
-      if (block.type === 'thinking') {
-        const text = block.thinking
-        if (text.trim().length === 0) continue
-        pseudoIndex += 1
-        store.report(
-          `thought:${String(message.timestamp)}:${String(pseudoIndex)}`,
-          thoughtPatch(text),
-        )
-        continue
-      }
-      if (block.type === 'text') {
-        const text = block.text
-        if (text.trim().length === 0) continue
-        pseudoIndex += 1
-        store.report(
-          `narration:${String(message.timestamp)}:${String(pseudoIndex)}`,
-          narrationPatch(text),
-        )
-        continue
-      }
       if (block.type !== 'toolCall') continue
       byToolCallId.set(block.id, store)
       startedAt.set(block.id, message.timestamp)
@@ -176,7 +214,19 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
       )
     }
   }
-  return { byEntryTurn, byToolCallId, maxTurn }
+  finalize()
+  for (const deferred of deferredReports) {
+    const preserveSettlement =
+      deferred.report.status === 'pending' && settledToolCallIds.has(deferred.report.toolCallId)
+    applyStateReport(deferred.target, deferred.report, preserveSettlement)
+  }
+  return {
+    byEntryTurn,
+    byToolCallId,
+    hiddenAssistantTextBlocks,
+    hiddenAssistantTimestamps,
+    maxTurn,
+  }
 }
 
 export function shortPath(value: string | undefined, cwd: string): string {

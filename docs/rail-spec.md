@@ -71,8 +71,9 @@ A thought row and a narration row are not tool calls. They render with:
 
 They never join a run, and they break the run around them.
 
-A pending thought row renders as the last row of the tree when the turn streams,
-every tool call finished, the answer has not started, and no reasoning is active.
+A reasoning stream first renders as `Thinking`. It changes to `Thought` when the reasoning block ends.
+
+A pending thought row renders as the last row when all tools finish. It disappears when reasoning or answer text starts.
 
 ## Sources
 
@@ -81,11 +82,10 @@ Rows enter the rail from three places. All three converge on `RailStore`.
 | source            | hook                                            | produces                                                              |
 | ----------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
 | tool events       | `tool_execution_start` and `tool_execution_end` | tool rows                                                             |
-| assistant message | `message_end`                                   | thought and narration rows                                            |
+| assistant message | `message_update` and `message_end`              | live thought and narration rows                                       |
 | other extensions  | the `hud:rail-action` event                     | tool rows, and nested rows when the report carries `parentToolCallId` |
 
-Reopening a session rebuilds the same rows from the stored entries, so a
-restored turn and a live turn render identically.
+Reopening a session rebuilds the same rows from the stored entries. Hidden state entries preserve external labels and nested rows.
 
 The rail entry opens on the first row of any kind. A turn that only thinks still
 shows a tree.
@@ -151,9 +151,15 @@ Assistant text splits into three zones, in `rail-segments.ts`:
 
 Adjacent text blocks merge into one. A tools or reasoning block keeps them apart.
 
-While a turn is partial and not live, trailing text stays narration. It becomes
-the answer only when the turn settles. This is the only retroactive change in the
-tree.
+While a turn is partial and not live, trailing text stays narration. It becomes the answer when the turn settles.
+
+During a live turn, trailing text renders as answer prose immediately. A later tool call can reclassify that text as narration.
+
+Opening text and answer text render as normal transcript prose. Narration renders only as a `Note` row.
+
+Visibility applies to each text block. Other prose stays visible when one assistant message contains multiple text blocks.
+
+This text transition is the only retroactive change in the tree.
 
 ## Usage row
 
@@ -227,6 +233,19 @@ The static header remains visible when motion is disabled. It uses the settled c
 The HUD uses the active model name instead of the literal `Empryo` name. The HUD uses the fixed English label `You`.
 
 The HUD does not read Empryo's `config.motion` value. Pi does not expose that configuration value to extensions.
+
+## Settings command
+
+Use `/hud` to open the settings picker.
+
+Use these subcommands for direct changes:
+
+- `/hud rail <on|off|toggle>`
+- `/hud thinking <rail|inline|toggle>`
+- `/hud timestamps <on|off|toggle>`
+- `/hud sound [sound options]`
+
+The old `hud-rail`, `hud-thinking`, `hud-timestamp`, and `hud-sound` commands do not exist.
 
 ## Shimmer
 

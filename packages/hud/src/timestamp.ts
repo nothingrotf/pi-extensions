@@ -143,11 +143,16 @@ export type LiveHeader = {
   source: SpeakerHeaderSource
 }
 
+export type TimestampControls = {
+  enabled: () => boolean
+  toggle: () => boolean
+}
+
 export function registerTimestamps(
   pi: ExtensionAPI,
   live?: LiveUsage,
   header?: LiveHeader,
-): () => boolean {
+): TimestampControls {
   let enabled = true
   let totals = emptyRunTotals()
   let assistantHeaderPending = true
@@ -257,13 +262,11 @@ export function registerTimestamps(
     }
   })
 
-  pi.registerCommand('hud-timestamp', {
-    description: 'Toggle the transcript role headers and the usage row',
-    handler: async (_args, ctx) => {
+  return {
+    enabled: () => enabled,
+    toggle: () => {
       enabled = !enabled
-      ctx.ui.notify(`hud: timestamps ${enabled ? 'enabled' : 'disabled'}`, 'info')
+      return enabled
     },
-  })
-
-  return () => enabled
+  }
 }

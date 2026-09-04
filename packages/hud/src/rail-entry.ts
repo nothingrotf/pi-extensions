@@ -44,6 +44,7 @@ export class RailComponent implements Component {
     private readonly pending: () => boolean = () => false,
     private readonly usage: () => RailUsage = () => ({ row: undefined, shimmer: false }),
     private readonly source?: RailThemeSource,
+    private readonly visible: () => boolean = () => true,
   ) {
     this.theme = railTheme(theme)
     this.source = source ?? theme
@@ -74,6 +75,7 @@ export class RailComponent implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
+    if (!this.visible()) return []
     const store = this.resolve()
     if (store === undefined) return []
     const inner = Math.max(1, width - railIndent.length - railGutter)

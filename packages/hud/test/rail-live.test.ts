@@ -3,8 +3,10 @@ import { beforeAll, describe, expect, test } from 'vite-plus/test'
 
 import { setIconMode } from '../src/icons.ts'
 import { RailComponent, type RailThemeSource } from '../src/rail-entry.ts'
-import { pseudoRows, type PseudoBlock } from '../src/rail-pseudo.ts'
+import type { PseudoBlock } from '../src/rail-pseudo.ts'
+import type { RailSegment } from '../src/rail-segments.ts'
 import { railPatchForCall } from '../src/rail-tools.ts'
+import { projectRailVoice } from '../src/rail-voice.ts'
 import { RailStore, showsPendingNarration } from '../src/rail.ts'
 
 const theme: RailThemeSource = { fg: (_color, text) => text }
@@ -23,6 +25,8 @@ class Turn {
   readonly store = new RailStore()
   private working = false
   private pending = false
+  private pseudoIds = new Set<string>()
+  private segments: RailSegment[] = []
 
   agentStart(): void {
     this.working = true
@@ -30,13 +34,36 @@ class Turn {
   }
 
   messageEnd(blocks: readonly PseudoBlock[]): void {
-    for (const row of pseudoRows(blocks, 'm1')) this.store.report(row.id, row.patch)
-    this.refresh(blocks.some((block) => block.text !== undefined))
+    for (const block of blocks) {
+      const index = this.segments.length + 1
+      if (block.thinking !== undefined) {
+        this.segments.push({
+          content: block.thinking,
+          id: `thought:${String(index)}`,
+          type: 'reasoning',
+        })
+      } else if (block.text !== undefined) {
+        this.segments.push({
+          content: block.text,
+          id: `narration:${String(index)}`,
+          type: 'text',
+        })
+      }
+    }
+    this.reconcile()
   }
 
   toolStart(toolName: string, toolCallId: string, args: ToolArgs): void {
     this.pending = false
+    this.segments.push({ toolCallIds: [toolCallId], type: 'tools' })
     this.store.report(toolCallId, railPatchForCall({ arguments: args, toolName }, ''))
+    this.reconcile()
+  }
+
+  narrateBeforeTool(text: string, toolName: string, toolCallId: string, args: ToolArgs): void {
+    const index = this.segments.length + 1
+    this.segments.push({ content: text, id: `narration:${String(index)}`, type: 'text' })
+    this.toolStart(toolName, toolCallId, args)
   }
 
   childStart(parentToolCallId: string, toolCallId: string, toolName: string, args: ToolArgs): void {
@@ -49,7 +76,7 @@ class Turn {
 
   toolEnd(toolCallId: string, output: string): void {
     this.store.report(toolCallId, { output, status: 'ok' })
-    this.refresh(false)
+    this.reconcile()
   }
 
   childEnd(parentToolCallId: string, toolCallId: string, output: string): void {
@@ -61,11 +88,19 @@ class Turn {
     this.pending = false
   }
 
-  private refresh(hasFinalText: boolean): void {
+  private reconcile(): void {
+    const projection = projectRailVoice(this.segments, false)
+    const nextIds = new Set(projection.rows.map((row) => row.id))
+    for (const id of this.pseudoIds) {
+      if (!nextIds.has(id)) this.store.remove(id)
+    }
+    for (const row of projection.rows) this.store.report(row.id, row.patch)
+    this.store.reorder(projection.order)
+    this.pseudoIds = nextIds
     this.pending = showsPendingNarration({
       actions: this.store.groups().flatMap((group) => group.actions),
-      hasFinalText,
-      reasoningActive: false,
+      hasFinalText: projection.hasTrailingText,
+      reasoningActive: projection.reasoningActive,
       streaming: this.working,
     })
   }
@@ -88,7 +123,7 @@ describe('live turn', () => {
     turn.agentStart()
     turn.messageEnd([{ thinking: '# Plan\nweigh the options' }])
     const lines = turn.render()
-    expect(lines[0]).toContain('1 action')
+    expect(lines[0]).toContain('0 actions')
     expect(lines[1]).toContain('Thought')
     expect(lines[1]).toContain('Plan')
   })
@@ -174,7 +209,7 @@ describe('live turn', () => {
     for (const line of turn.render(40)) expect(visibleWidth(line)).toBeLessThanOrEqual(40)
   })
 
-  test('the rail orders thought, tools, and narration as they arrive', () => {
+  test('keeps final prose outside the rail', () => {
     const turn = new Turn()
     turn.agentStart()
     turn.messageEnd([{ thinking: '# Plan' }])
@@ -185,6 +220,20 @@ describe('live turn', () => {
     const lines = turn.render()
     expect(lines[1]).toContain('Thought')
     expect(lines[2]).toContain('Read')
-    expect(lines[3]).toContain('Note')
+    expect(lines.some((line) => line.includes('Note'))).toBe(false)
+  })
+
+  test('orders an intermediate Note between tool calls', () => {
+    const turn = new Turn()
+    turn.agentStart()
+    turn.toolStart('read', 'a', { path: 'note.md' })
+    turn.toolEnd('a', 'hello')
+    turn.narrateBeforeTool('Found it.', 'bash', 'b', { command: 'true' })
+    turn.toolEnd('b', '')
+    turn.agentEnd()
+    const lines = turn.render()
+    expect(lines[1]).toContain('Read')
+    expect(lines[2]).toContain('Note')
+    expect(lines[3]).toContain('Ran')
   })
 })

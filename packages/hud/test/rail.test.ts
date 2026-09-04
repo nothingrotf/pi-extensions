@@ -10,6 +10,8 @@ import {
   terminalSuggestsNerdFont,
   type IconKey,
 } from '../src/icons.ts'
+import { railEntryType } from '../src/rail-entry.ts'
+import { railStateEntryType } from '../src/rail-state-entry.ts'
 import { mapSessionRails } from '../src/rail-tools.ts'
 import {
   formatDuration,
@@ -331,6 +333,17 @@ describe('pending narration row', () => {
     ).toBe(false)
   })
 
+  test('hides the row when only a completed thought exists', () => {
+    expect(
+      showsPendingNarration({
+        actions: [{ ...done, kind: 'thought', toolCallId: 'thought' }],
+        hasFinalText: false,
+        reasoningActive: false,
+        streaming: true,
+      }),
+    ).toBe(false)
+  })
+
   test('renders as the last row of the tree', () => {
     const lines = railLines(groupActions([done]), theme, {
       expanded: false,
@@ -621,6 +634,8 @@ describe('formatDuration', () => {
     expect(formatDuration(1_100)).toBe('1.1s')
     expect(formatDuration(900)).toBe('0.9s')
     expect(formatDuration(55_000)).toBe('55.0s')
+    expect(formatDuration(60_000)).toBe('1m')
+    expect(formatDuration(90_000)).toBe('1m 30s')
   })
 
   test('returns an empty string for a missing duration', () => {
@@ -636,6 +651,15 @@ describe('railHeader', () => {
   test('counts every call inside a batch', () => {
     const groups = groupActions([read({ toolCallId: 'a' }), read({ toolCallId: 'b' })])
     expect(railHeader(groups, theme)).toBe('2 actions ▾')
+  })
+
+  test('excludes thought and narration rows from the count', () => {
+    const groups = groupActions([
+      read(),
+      { ...read({ toolCallId: 'thought' }), kind: 'thought' },
+      { ...read({ toolCallId: 'note' }), kind: 'narration' },
+    ])
+    expect(railHeader(groups, theme)).toBe('1 action ▾')
   })
 
   test('counts only the failed calls', () => {
@@ -720,13 +744,12 @@ describe('railLines', () => {
     expect(line).not.toContain('…')
   })
 
-  test('hides a duration below the reference floor', () => {
+  test('shows a sub-second duration', () => {
     const fast = groupActions([read({ detail: 'a.ts', durationMs: 200 })])
-    expect(railLines(fast, theme, { expanded: false, width: 40 })[1]).toBe(
-      '╰─ ✓ □ Read        a.ts',
-    )
-    expect(formatDuration(200)).toBe('')
-    expect(formatDuration(500)).toBe('0.5s')
+    const line = railLines(fast, theme, { expanded: false, width: 40 })[1] ?? ''
+    expect(visibleWidth(line)).toBe(40)
+    expect(line.endsWith('0.2s')).toBe(true)
+    expect(formatDuration(200)).toBe('0.2s')
   })
 
   test('right-aligns the duration of a single call', () => {
@@ -876,6 +899,33 @@ describe('RailStore', () => {
     store.report('a', { status: 'ok' })
     expect(store.groups().map((group) => groupLabel(group))).toEqual(['Read', 'Ran'])
   })
+
+  test('reorders existing actions by segment order', () => {
+    const store = new RailStore()
+    store.report('tool', { doneLabel: 'Read' })
+    store.report('thought', { doneLabel: 'Thought', kind: 'thought' })
+    store.reorder(['thought', 'tool'])
+    expect(store.groups().map((group) => groupLabel(group))).toEqual(['Thought', 'Read'])
+  })
+
+  test('does not measure a pseudo action duration', () => {
+    let now = 100
+    const store = new RailStore(() => now)
+    store.report('thought', { measureDuration: false, status: 'pending' })
+    now = 500
+    store.report('thought', { measureDuration: false, status: 'ok' })
+    expect(store.groups()[0]?.actions[0]?.durationMs).toBeUndefined()
+  })
+
+  test('removes a provisional pseudo action', () => {
+    const store = new RailStore()
+    store.report('tool', { doneLabel: 'Read' })
+    store.report('note', { doneLabel: 'Note', kind: 'narration' })
+    expect(store.has('note')).toBe(true)
+    store.remove('note')
+    expect(store.has('note')).toBe(false)
+    expect(store.groups().map((group) => groupLabel(group))).toEqual(['Read'])
+  })
 })
 
 describe('mapSessionRails', () => {
@@ -885,6 +935,31 @@ describe('mapSessionRails', () => {
     message: { content: [], role: 'user', timestamp: 0 },
     type: 'message',
   }
+  const railEntry: SessionEntry = {
+    ...base,
+    customType: railEntryType,
+    data: { turn: 1 },
+    type: 'custom',
+  }
+  type RailStateTestData = {
+    report: {
+      category?: 'meta'
+      doneLabel: string
+      iconKey: 'agent' | 'todo'
+      parentToolCallId?: string
+      runningLabel: string
+      status: 'ok' | 'pending'
+      toolCallId: string
+      toolName?: string
+    }
+    turn: number
+  }
+  const railStateEntry = (data: RailStateTestData): SessionEntry => ({
+    ...base,
+    customType: railStateEntryType,
+    data,
+    type: 'custom',
+  })
   const toolResultEntry = (id: string, text: string, isError = false): SessionEntry => ({
     ...base,
     message: {
@@ -933,7 +1008,29 @@ describe('mapSessionRails', () => {
       provider: 'anthropic',
       role: 'assistant',
       stopReason: 'toolUse',
-      timestamp: 0,
+      timestamp: 2,
+      usage: {
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+      },
+    },
+    type: 'message',
+  })
+
+  const finalTextEntry = (): SessionEntry => ({
+    ...base,
+    message: {
+      api: 'anthropic-messages',
+      content: [{ text: 'final answer', type: 'text' }],
+      model: 'test',
+      provider: 'anthropic',
+      role: 'assistant',
+      stopReason: 'stop',
+      timestamp: 3,
       usage: {
         cacheRead: 0,
         cacheWrite: 0,
@@ -973,24 +1070,49 @@ describe('mapSessionRails', () => {
 
   test('backfills a thought row from a thinking block', () => {
     const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
-    const groups = store?.groups() ?? []
-    expect(groups[0]?.actions[0]?.kind).toBe('thought')
-    expect(groups[0]?.actions[0]?.detail).toBe('Plan')
+    const thought = store
+      ?.groups()
+      .flatMap((group) => group.actions)
+      .find((action) => action.kind === 'thought')
+    expect(thought?.detail).toBe('Plan')
   })
 
-  test('backfills a narration row from a text block', () => {
+  test('keeps opening prose outside the rail', () => {
     const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
-    const groups = store?.groups() ?? []
-    expect(groups[1]?.actions[0]?.kind).toBe('narration')
-    expect(groups[1]?.actions[0]?.detail).toBe('found it')
-    expect(groups[1]?.actions[0]?.summary).toBe('2 lines')
+    expect(store?.groups().some((group) => group.actions[0]?.kind === 'narration')).toBe(false)
   })
 
-  test('keeps the tool row after the pseudo rows', () => {
-    const store = mapSessionRails([userEntry, pseudoEntry()]).byToolCallId.get('k')
-    const groups = store?.groups() ?? []
-    expect(groups).toHaveLength(3)
-    expect(groups[2]?.actions[0]?.kind).toBeUndefined()
+  test('backfills only intermediate prose as a narration row', () => {
+    const rails = mapSessionRails([userEntry, railEntry, assistantEntry('a'), pseudoEntry()])
+    const groups = rails.byToolCallId.get('k')?.groups() ?? []
+    const narration = groups
+      .flatMap((group) => group.actions)
+      .find((action) => action.kind === 'narration')
+    expect(narration?.detail).toBe('found it')
+    expect(narration?.summary).toBe('2 lines')
+    expect(rails.hiddenAssistantTimestamps).toEqual(new Set([2]))
+    expect(rails.hiddenAssistantTextBlocks).toEqual(new Map([[2, new Set([1])]]))
+  })
+
+  test('keeps narration visible when its turn has no rail entry', () => {
+    const rails = mapSessionRails([userEntry, assistantEntry('a'), pseudoEntry()])
+    expect(rails.hiddenAssistantTimestamps).toEqual(new Set())
+    expect(rails.hiddenAssistantTextBlocks).toEqual(new Map())
+  })
+
+  test('preserves segment order around an intermediate Note', () => {
+    const store = mapSessionRails([userEntry, assistantEntry('a'), pseudoEntry()]).byToolCallId.get(
+      'k',
+    )
+    const kinds = (store?.groups() ?? []).map((group) => group.actions[0]?.kind ?? 'tool')
+    expect(kinds).toEqual(['tool', 'thought', 'narration', 'tool'])
+  })
+
+  test('keeps final prose outside the rail', () => {
+    const rails = mapSessionRails([userEntry, assistantEntry('a'), finalTextEntry()])
+    const store = rails.byToolCallId.get('a')
+    expect(store?.groups()).toHaveLength(1)
+    expect(rails.hiddenAssistantTimestamps).toEqual(new Set())
   })
 
   test('skips a blank thinking block', () => {
@@ -1081,6 +1203,71 @@ describe('mapSessionRails', () => {
     const group = rails.byToolCallId.get('r')?.groups()[0]
     expect(group === undefined ? '' : groupLabel(group)).toBe('Reading')
     expect(group === undefined ? '' : groupDetail(group)).toBe('src/a.ts')
+  })
+
+  test('restores custom labels and nested actions from state entries', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('parent'),
+      railStateEntry({
+        report: {
+          category: 'meta',
+          doneLabel: 'Todo',
+          iconKey: 'todo',
+          runningLabel: 'Todo',
+          status: 'ok',
+          toolCallId: 'parent',
+          toolName: 'todo_write',
+        },
+        turn: 1,
+      }),
+      toolResultEntry('parent', 'line 1\nline 2'),
+      railStateEntry({
+        report: {
+          doneLabel: 'Delegated',
+          iconKey: 'agent',
+          parentToolCallId: 'parent',
+          runningLabel: 'Delegating',
+          status: 'ok',
+          toolCallId: 'child',
+        },
+        turn: 1,
+      }),
+      toolResultEntry('child', 'child output'),
+    ])
+    const parent = rails.byToolCallId.get('parent')?.groups()[0]?.actions[0]
+    expect(parent?.doneLabel).toBe('Todo')
+    expect(parent?.category).toBe('meta')
+    expect(parent?.summary).toBe('')
+    expect(parent?.durationMs).toBeUndefined()
+    expect(parent?.children?.[0]?.doneLabel).toBe('Delegated')
+    expect(parent?.children?.[0]?.status).toBe('ok')
+    expect(rails.byToolCallId.get('parent')?.size()).toBe(1)
+    expect(rails.byToolCallId.get('child')).toBe(rails.byToolCallId.get('parent'))
+  })
+
+  test('keeps a completed result after a pending state report', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('pending'),
+      railStateEntry({
+        report: {
+          doneLabel: 'Custom',
+          iconKey: 'todo',
+          runningLabel: 'Customizing',
+          status: 'pending',
+          toolCallId: 'pending',
+        },
+        turn: 1,
+      }),
+      toolResultEntry('pending', 'done'),
+    ])
+    const action = rails.byToolCallId.get('pending')?.groups()[0]?.actions[0]
+    expect(action?.doneLabel).toBe('Custom')
+    expect(action?.status).toBe('ok')
+    expect(action?.output).toBe('done')
   })
 
   test('labels a non built-in tool from its name', () => {

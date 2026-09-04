@@ -49,7 +49,14 @@ The throughput divides total output tokens by the time from the first turn throu
 
 Headers and usage rows are active by default. They never enter the model context.
 
-Use `/hud-timestamp` to disable or enable them.
+Use `/hud` to open the settings picker. All HUD settings use this command:
+
+- `/hud rail <on|off|toggle>` controls the action rail.
+- `/hud thinking <rail|inline|toggle>` controls inline thinking text.
+- `/hud timestamps <on|off|toggle>` controls speaker headers and usage rows.
+- `/hud sound` opens the completion sound picker.
+
+The `Sound settings` menu controls both sounds, the focus policy, and the sound preview.
 
 ## Action rail
 
@@ -76,23 +83,23 @@ the tool color.
 
 The rail also holds the model's own voice:
 
-- A thinking block becomes a `Thought` row. The detail is the first heading of
-  the block, or the first line when it has no heading.
-- Assistant text between tool calls becomes a `Note` row. The detail is the
-  first line, and the full text stays available.
-- While the turn waits between the last tool and the answer, a `Thinking` row
-  sits at the end of the tree.
+- A live reasoning block creates a `Thinking` row.
+- The row becomes `Thought` when the reasoning block ends.
+- The detail uses the first heading or the first line.
+- Assistant text between tool calls becomes a `Note` row.
+- Opening text and the final answer stay as normal transcript prose.
+- Intermediate text appears only as a `Note`, not as duplicate prose.
+- A pending `Thinking` row appears after the last tool and before the answer.
 
-Both rows carry a blank status cell, so a check or a cross always means a tool
-call.
+These rows carry a blank status cell. Therefore, a check or a cross always identifies a tool call.
 
 A tool that spawns children, such as a subagent, nests them under its own row
 with the same trunk rules.
 
 At most five groups render. Older groups collapse into one `N completed` row.
 
-Use `/hud-thinking` to show the full thinking text inline as well as in the rail.
-Use `/hud-rail` to turn the rail off.
+Use `/hud thinking inline` to show the full thinking text inline.
+Use `/hud rail off` to turn the rail off.
 
 Read `docs/rail-spec.md` for the full contract, including width rules and
 grouping semantics.
@@ -128,13 +135,13 @@ The extension plays a sound when the agent ends a turn.
 It plays a second sound when an ask style tool opens and waits for your input.
 The default sounds are `fx-ok01` for completion and `fx-ack01` for awaiting input.
 
-Use `/hud-sound` to change the sounds:
+Use `/hud sound` to change the sounds:
 
-- `/hud-sound` opens the completion sound picker
-- `/hud-sound <off|bell|fx-ok01|fx-ack01|/absolute/path.wav>` sets the completion sound
-- `/hud-sound ask <sound>` sets the awaiting-input sound
-- `/hud-sound focus <always|focused|unfocused>` sets the focus policy
-- `/hud-sound test` plays the current completion sound
+- `/hud sound` opens the completion sound picker.
+- `/hud sound <off|bell|fx-ok01|fx-ack01|/absolute/path.wav>` sets the completion sound.
+- `/hud sound ask <sound>` sets the awaiting-input sound.
+- `/hud sound focus <always|focused|unfocused>` sets the focus policy.
+- `/hud sound test` plays the current completion sound.
 
 Settings persist in `hud.json` inside the Pi agent directory.
 Playback uses `afplay` on macOS, `paplay`, `aplay`, or `ffplay` on Linux, and PowerShell on Windows.

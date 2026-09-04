@@ -54,6 +54,7 @@ export function thoughtPatch(text: string, streaming = false): RailPatch {
     doneLabel: 'Thought',
     iconKey: 'thought',
     kind: 'thought',
+    measureDuration: false,
     output: text,
     runningLabel: 'Thinking',
     status: streaming ? 'pending' : 'ok',

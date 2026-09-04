@@ -4,20 +4,23 @@ import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
 import { buildContextLabel, contextPercent, prettyEffort, prettyModel } from './format.ts'
 import { emptyGitStatus, readGitStatus } from './git.ts'
+import { hudCommandCompletions, parseHudCommand, resolveToggle } from './hud-command.ts'
 import {
   builtInRailToolNames,
   decodeRailAction,
   decodeRailTools,
   defaultRailIcon,
   defaultRailLabel,
+  type RailActionReport,
   railActionChannel,
   railEnabledChannel,
   railToolsChannel,
 } from './rail-channel.ts'
 import { decodeRailEntry, railEntryType, RailComponent } from './rail-entry.ts'
-import { pseudoRows, type PseudoBlock } from './rail-pseudo.ts'
-import { applyRailTools, mapSessionRails } from './rail-tools.ts'
-import { RailStore, showsPendingNarration } from './rail.ts'
+import { railStateEntryType } from './rail-state-entry.ts'
+import { applyRailTools, mapSessionRails, railPatchForCall } from './rail-tools.ts'
+import { RailVoice } from './rail-voice.ts'
+import { isPseudo, type RailAction, RailStore, showsPendingNarration } from './rail.ts'
 import { renderHud, type HudState } from './render.ts'
 import {
   choiceValue,
@@ -33,7 +36,6 @@ import {
   previewSound,
   saveSoundSettings,
   soundChoiceRows,
-  soundCompletions,
   type SoundFocusMode,
   type SoundSettings,
   stopSoundPlayback,
@@ -50,6 +52,16 @@ const usageRefreshMs = 5 * 60_000
 
 function start(task: Promise<void>): void {
   task.catch(() => undefined)
+}
+
+type HiddenTextBlocks = Map<number, Set<number>>
+
+function mergeHiddenTextBlocks(target: HiddenTextBlocks, source: HiddenTextBlocks): void {
+  for (const [timestamp, sourceIndices] of source) {
+    const indices = target.get(timestamp) ?? new Set<number>()
+    for (const index of sourceIndices) indices.add(index)
+    target.set(timestamp, indices)
+  }
 }
 
 export default function hud(pi: ExtensionAPI): void {
@@ -85,7 +97,8 @@ export default function hud(pi: ExtensionAPI): void {
       }
     },
   }
-  const timestampsEnabled = registerTimestamps(pi, liveUsage, liveHeader)
+  const timestamps = registerTimestamps(pi, liveUsage, liveHeader)
+  const timestampsEnabled = timestamps.enabled
 
   const state: HudState = {
     cwd: process.cwd(),
@@ -123,9 +136,45 @@ export default function hud(pi: ExtensionAPI): void {
   let railPendingNarration = false
   let railCwd: string | undefined
   const railTools = new Set(builtInRailToolNames)
+  const railVoice = new RailVoice()
+  let railPseudoIds = new Set<string>()
+  let persistedRailReports = new Map<string, string>()
+  let hiddenNarrationBlocks: HiddenTextBlocks = new Map()
+  let currentHiddenNarrationBlocks: HiddenTextBlocks = new Map()
   let quietThinking = true
 
+  const assistantVisible = (timestamp: number | undefined, contentIndex?: number) => {
+    if (!railEnabled || timestamp === undefined) return true
+    const historical = hiddenNarrationBlocks.get(timestamp)
+    const current = currentHiddenNarrationBlocks.get(timestamp)
+    if (contentIndex === undefined) return historical === undefined && current === undefined
+    return historical?.has(contentIndex) !== true && current?.has(contentIndex) !== true
+  }
   const thinkingQuiet = () => quietThinking && railEnabled
+  const persistRailReport = (report: RailActionReport) => {
+    const signature = JSON.stringify(report)
+    if (persistedRailReports.get(report.toolCallId) === signature) return
+    persistedRailReports.set(report.toolCallId, signature)
+    pi.appendEntry(railStateEntryType, { report, turn: railTurn })
+  }
+  const persistRailAction = (action: RailAction, parentToolCallId?: string): void => {
+    if (isPseudo(action.kind)) return
+    const report: RailActionReport = {
+      category: action.category,
+      detail: action.detail,
+      doneLabel: action.doneLabel,
+      iconKey: action.iconKey,
+      output: action.output,
+      runningLabel: action.runningLabel,
+      status: action.status,
+      summary: action.summary,
+      toolCallId: action.toolCallId,
+    }
+    if (action.durationMs !== undefined) report.durationMs = action.durationMs
+    if (parentToolCallId !== undefined) report.parentToolCallId = parentToolCallId
+    persistRailReport(report)
+    for (const child of action.children ?? []) persistRailAction(child, action.toolCallId)
+  }
   let spacerFix: ThinkingSpacerFix | undefined
   let speakerSpacingFix: SpeakerSpacingFix | undefined
   let dimEditorBorder: (() => void) | undefined
@@ -147,7 +196,12 @@ export default function hud(pi: ExtensionAPI): void {
     railsByToolCallId = session.byToolCallId
     railsByTurn = session.byEntryTurn
     railTurn = session.maxTurn
+    hiddenNarrationBlocks = session.hiddenAssistantTextBlocks
+    currentHiddenNarrationBlocks = new Map()
     rail = new RailStore()
+    railVoice.reset()
+    railPseudoIds = new Set<string>()
+    persistedRailReports = new Map<string, string>()
     requestRender?.()
   }
 
@@ -302,7 +356,7 @@ export default function hud(pi: ExtensionAPI): void {
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       footerOwned = true
-      spacerFix = installThinkingSpacerFix(tui, thinkingQuiet)
+      spacerFix = installThinkingSpacerFix(tui, thinkingQuiet, assistantVisible)
       speakerSpacingFix = installSpeakerSpacingFix(tui, timestampsEnabled)
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
@@ -349,7 +403,14 @@ export default function hud(pi: ExtensionAPI): void {
     dimEditorBorder?.()
     requestRender?.()
     dock.reset()
+    if (!railTurnPending) {
+      mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)
+    }
     rail = new RailStore()
+    railVoice.reset()
+    railPseudoIds = new Set<string>()
+    persistedRailReports = new Map<string, string>()
+    currentHiddenNarrationBlocks = new Map()
     railTurn += 1
     railTurnPending = true
     railsByTurn.set(railTurn, rail)
@@ -373,8 +434,12 @@ export default function hud(pi: ExtensionAPI): void {
           tick: animationClock.tick(),
         }
       },
+      undefined,
+      () => railEnabled,
     )
   })
+
+  pi.registerEntryRenderer(railStateEntryType, () => undefined)
 
   pi.on('session_tree', (_event, ctx) => {
     restoreRails(ctx)
@@ -397,8 +462,13 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.events.on(railActionChannel, (data) => {
     const report = decodeRailAction(data)
-    if (report === undefined || !railEnabled) return
+    if (report === undefined || !railEnabled || !agentWorking) return
     const { parentToolCallId, toolCallId, toolName, ...patch } = report
+    const targetId = parentToolCallId ?? toolCallId
+    const target = railFor(targetId)
+    if (railsByToolCallId.has(targetId) && target !== rail) return
+    const targetStatus = target.status(toolCallId)
+    if (report.status === 'pending' && (targetStatus === 'ok' || targetStatus === 'error')) return
     const fallback = toolName === undefined ? undefined : defaultRailLabel(toolName)
     const resolved = {
       ...patch,
@@ -406,15 +476,68 @@ export default function hud(pi: ExtensionAPI): void {
       iconKey: patch.iconKey ?? (toolName === undefined ? 'tool' : defaultRailIcon(toolName)),
       runningLabel: patch.runningLabel ?? patch.doneLabel ?? fallback ?? 'Tool',
     }
-    if (parentToolCallId === undefined) railFor(toolCallId).report(toolCallId, resolved)
-    else railFor(parentToolCallId).reportChild(parentToolCallId, toolCallId, resolved)
+    const actionPatch = { ...resolved, measureDuration: false, resetDerived: true }
+    openRailEntry()
+    if (parentToolCallId === undefined) target.report(toolCallId, actionPatch)
+    else target.reportChild(parentToolCallId, toolCallId, actionPatch)
+    const persistedReport: RailActionReport = { ...resolved, toolCallId }
+    if (parentToolCallId !== undefined) persistedReport.parentToolCallId = parentToolCallId
+    if (toolName !== undefined) persistedReport.toolName = toolName
+    persistRailReport(persistedReport)
     if (toolName !== undefined) railTools.add(toolName)
+    reconcileRailVoice()
   })
+
+  const refreshPendingNarration = (hasFinalText: boolean, reasoningActive: boolean) => {
+    const actions = rail.groups().flatMap((group) => group.actions)
+    railPendingNarration = showsPendingNarration({
+      actions,
+      hasFinalText,
+      reasoningActive,
+      streaming: agentWorking,
+    })
+    requestRender?.()
+  }
+
+  const openRailEntry = () => {
+    if (!railEnabled || !railTurnPending) return
+    railTurnPending = false
+    pi.appendEntry(railEntryType, { turn: railTurn })
+  }
+
+  const reconcileRailVoice = () => {
+    const projection = railVoice.projection()
+    currentHiddenNarrationBlocks = projection.hiddenTextBlocks
+    const nextIds = new Set(projection.rows.map((row) => row.id))
+    for (const id of railPseudoIds) {
+      if (!nextIds.has(id)) rail.remove(id)
+    }
+    for (const row of projection.rows) rail.report(row.id, row.patch)
+    rail.reorder(projection.order)
+    railPseudoIds = nextIds
+    if (projection.rows.length > 0 || rail.size() > 0) openRailEntry()
+    if (!railEnabled) {
+      railPendingNarration = false
+      requestRender?.()
+      return
+    }
+    refreshPendingNarration(projection.hasTrailingText, projection.reasoningActive)
+  }
 
   pi.on('tool_execution_start', (event, ctx) => {
     railPendingNarration = false
     if (railTools.has(event.toolName)) {
+      const target = railFor(event.toolCallId)
+      if (!target.has(event.toolCallId)) {
+        target.report(
+          event.toolCallId,
+          railPatchForCall({ arguments: event.args, toolName: event.toolName }, ctx.cwd),
+        )
+      }
       openRailEntry()
+      reconcileRailVoice()
+      railPendingNarration = false
+      requestRender?.()
     }
     if (isAskTool(event.toolName)) {
       play(ctx, sound.awaitingInputSound)
@@ -436,51 +559,39 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('message_start', (event) => {
-    if (event.message.role === 'assistant') spacerFix?.markDirty()
+    if (event.message.role === 'assistant') {
+      railVoice.start(event.message)
+      spacerFix?.markDirty()
+      reconcileRailVoice()
+    }
     if (event.message.role === 'assistant' || event.message.role === 'user') {
       speakerSpacingFix?.markDirty()
     }
   })
 
-  const refreshPendingNarration = (hasFinalText: boolean) => {
-    const actions = rail.groups().flatMap((group) => group.actions)
-    railPendingNarration = showsPendingNarration({
-      actions,
-      hasFinalText,
-      reasoningActive: false,
-      streaming: agentWorking,
-    })
-    requestRender?.()
-  }
-
-  const openRailEntry = () => {
-    if (!railEnabled || !railTurnPending) return
-    railTurnPending = false
-    pi.appendEntry(railEntryType, { turn: railTurn })
-  }
+  pi.on('message_update', (event) => {
+    if (event.message.role !== 'assistant') return
+    railVoice.update(event.message, event.assistantMessageEvent)
+    reconcileRailVoice()
+  })
 
   pi.on('message_end', (event, ctx) => {
     if (event.message.role === 'user') speakerSpacingFix?.markDirty()
-    if (railEnabled && event.message.role === 'assistant') {
-      const blocks: PseudoBlock[] = []
-      for (const block of event.message.content) {
-        if (block.type === 'thinking') blocks.push({ thinking: block.thinking })
-        else if (block.type === 'text') blocks.push({ text: block.text })
-      }
-      const rows = pseudoRows(blocks, String(event.message.timestamp))
-      if (rows.length > 0) {
-        openRailEntry()
-        for (const row of rows) rail.report(row.id, row.patch)
-      }
-      refreshPendingNarration(blocks.some((block) => block.text !== undefined))
+    if (event.message.role === 'assistant') {
+      railVoice.finish(event.message)
+      reconcileRailVoice()
     }
     if (active) {
       sync(ctx)
     }
   })
 
-  pi.on('tool_execution_end', (_event, ctx) => {
-    refreshPendingNarration(false)
+  pi.on('tool_execution_end', (event, ctx) => {
+    const target = railFor(event.toolCallId)
+    if (target.has(event.toolCallId)) {
+      target.report(event.toolCallId, { status: event.isError ? 'error' : 'ok' })
+    }
+    reconcileRailVoice()
     if (active) {
       sync(ctx)
       start(refreshGit(ctx, generation))
@@ -489,6 +600,10 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_end', (_event, ctx) => {
     agentWorking = false
+    if (!railTurnPending) {
+      for (const action of rail.values()) persistRailAction(action)
+      mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)
+    }
     unsubscribeAnimation?.()
     unsubscribeAnimation = undefined
     railPendingNarration = false
@@ -502,109 +617,156 @@ export default function hud(pi: ExtensionAPI): void {
     }
   })
 
-  pi.registerCommand('hud-rail', {
-    description: 'Toggle the aggregated tool action rail',
-    handler: async (_args, ctx) => {
-      railEnabled = !railEnabled
-      rail = new RailStore()
-      applyRailTools(pi, railFor, railCwd ?? ctx.cwd, railEnabled)
-      pi.events.emit(railEnabledChannel, { enabled: railEnabled })
-      applyThinkingLabel(ctx)
-      ctx.ui.notify(`hud: rail ${railEnabled ? 'enabled' : 'disabled'}`, 'info')
-    },
-  })
+  const setRail = (enabled: boolean, ctx: ExtensionContext) => {
+    railEnabled = enabled
+    applyRailTools(pi, railFor, railCwd ?? ctx.cwd, railEnabled)
+    pi.events.emit(railEnabledChannel, { enabled: railEnabled })
+    applyThinkingLabel(ctx)
+    reconcileRailVoice()
+    ctx.ui.notify(`hud: rail ${railEnabled ? 'enabled' : 'disabled'}`, 'info')
+  }
 
-  pi.registerCommand('hud-thinking', {
-    description: 'Show the full thinking text inline as well as in the rail',
-    handler: async (_args, ctx) => {
-      quietThinking = !quietThinking
-      spacerFix?.markDirty()
-      applyThinkingLabel(ctx)
-      ctx.ui.notify(
-        `hud: thinking ${quietThinking ? 'shown in the rail only' : 'shown inline and in the rail'}`,
-        'info',
+  const setThinking = (railOnly: boolean, ctx: ExtensionContext) => {
+    quietThinking = railOnly
+    applyThinkingLabel(ctx)
+    requestRender?.()
+    ctx.ui.notify(
+      `hud: thinking ${quietThinking ? 'shown in the rail only' : 'shown inline and in the rail'}`,
+      'info',
+    )
+  }
+
+  const setTimestamps = (enabled: boolean, ctx: ExtensionContext) => {
+    if (timestamps.enabled() !== enabled) timestamps.toggle()
+    speakerSpacingFix?.markDirty()
+    requestRender?.()
+    ctx.ui.notify(`hud: timestamps ${enabled ? 'enabled' : 'disabled'}`, 'info')
+  }
+
+  const runSoundCommand = async (args: string, ctx: ExtensionContext) => {
+    const command = parseSoundCommand(args)
+    const rejectSound = () => {
+      ctx.ui.notify('hud: invalid sound, use a known id or an absolute file path', 'error')
+    }
+    const setCompletion = (raw: string) => {
+      const value = normalizeSoundValue(raw)
+      if (value === undefined) {
+        rejectSound()
+        return
+      }
+      applySoundSettings(ctx, { ...sound, completionSound: value }, `completion sound = ${value}`)
+      start(previewSound(value))
+    }
+    const setAwaiting = (raw: string) => {
+      const value = normalizeSoundValue(raw)
+      if (value === undefined) {
+        rejectSound()
+        return
+      }
+      applySoundSettings(
+        ctx,
+        { ...sound, awaitingInputSound: value },
+        `awaiting-input sound = ${value}`,
       )
-    },
-  })
-
-  pi.registerCommand('hud-sound', {
-    description:
-      'Configure sounds: <off|bell|fx-ok01|fx-ack01|/path.wav>, ask <sound>, focus <always|focused|unfocused>, or test',
-    getArgumentCompletions: (prefix) => soundCompletions(prefix),
-    async handler(args, ctx) {
-      const command = parseSoundCommand(args)
-      const rejectSound = () => {
-        ctx.ui.notify('hud: invalid sound, use a known id or an absolute file path', 'error')
-      }
-      const setCompletion = (raw: string) => {
-        const value = normalizeSoundValue(raw)
-        if (value === undefined) {
-          rejectSound()
-          return
-        }
-        applySoundSettings(ctx, { ...sound, completionSound: value }, `completion sound = ${value}`)
-        start(previewSound(value))
-      }
-      const setAwaiting = (raw: string) => {
-        const value = normalizeSoundValue(raw)
-        if (value === undefined) {
-          rejectSound()
-          return
-        }
-        applySoundSettings(
-          ctx,
-          { ...sound, awaitingInputSound: value },
-          `awaiting-input sound = ${value}`,
+      start(previewSound(value))
+    }
+    const setFocus = (mode: SoundFocusMode) => {
+      applySoundSettings(ctx, { ...sound, soundFocusMode: mode }, `sound focus mode = ${mode}`)
+    }
+    switch (command.kind) {
+      case 'preview':
+        start(previewSound(sound.completionSound))
+        ctx.ui.notify(`hud: playing ${sound.completionSound}`, 'info')
+        return
+      case 'setCompletion':
+        setCompletion(command.value)
+        return
+      case 'setAwaiting':
+        setAwaiting(command.value)
+        return
+      case 'setFocus':
+        setFocus(command.mode)
+        return
+      case 'pickCompletion': {
+        const pick = choiceValue(
+          await ctx.ui.select('Select completion sound', soundChoiceRows(sound.completionSound)),
         )
-        start(previewSound(value))
+        if (pick) setCompletion(pick)
+        return
       }
-      const setFocus = (mode: SoundFocusMode) => {
-        applySoundSettings(ctx, { ...sound, soundFocusMode: mode }, `sound focus mode = ${mode}`)
+      case 'pickAwaiting': {
+        const pick = choiceValue(
+          await ctx.ui.select(
+            'Select awaiting-input sound',
+            soundChoiceRows(sound.awaitingInputSound),
+          ),
+        )
+        if (pick) setAwaiting(pick)
+        return
       }
+      case 'pickFocus': {
+        const pick = choiceValue(
+          await ctx.ui.select('Select sound focus mode', focusChoiceRows(sound.soundFocusMode)),
+        )
+        if (isFocusMode(pick)) setFocus(pick)
+        return
+      }
+    }
+  }
+
+  const pickSoundSetting = async (ctx: ExtensionContext) => {
+    const pick = choiceValue(
+      await ctx.ui.select('Sound settings', [
+        `completion - Completion sound (${sound.completionSound})`,
+        `ask - Awaiting-input sound (${sound.awaitingInputSound})`,
+        `focus - Focus policy (${sound.soundFocusMode})`,
+        'test - Preview the completion sound',
+      ]),
+    )
+    if (pick === 'completion') await runSoundCommand('', ctx)
+    else if (pick === 'ask') await runSoundCommand('ask', ctx)
+    else if (pick === 'focus') await runSoundCommand('focus', ctx)
+    else if (pick === 'test') await runSoundCommand('test', ctx)
+  }
+
+  const pickHudSetting = async (ctx: ExtensionContext) => {
+    const pick = choiceValue(
+      await ctx.ui.select('HUD settings', [
+        `rail - Action rail (${railEnabled ? 'enabled' : 'disabled'})`,
+        `thinking - Thinking text (${quietThinking ? 'rail only' : 'inline'})`,
+        `timestamps - Speaker headers (${timestamps.enabled() ? 'enabled' : 'disabled'})`,
+        'sound - Sound settings',
+      ]),
+    )
+    if (pick === 'rail') setRail(!railEnabled, ctx)
+    else if (pick === 'thinking') setThinking(!quietThinking, ctx)
+    else if (pick === 'timestamps') setTimestamps(!timestamps.enabled(), ctx)
+    else if (pick === 'sound') await pickSoundSetting(ctx)
+  }
+
+  pi.registerCommand('hud', {
+    description: 'Configure the action rail, thinking text, speaker headers, and sounds',
+    getArgumentCompletions: hudCommandCompletions,
+    async handler(args, ctx) {
+      const command = parseHudCommand(args)
       switch (command.kind) {
-        case 'preview':
-          start(previewSound(sound.completionSound))
-          ctx.ui.notify(`hud: playing ${sound.completionSound}`, 'info')
+        case 'pick':
+          await pickHudSetting(ctx)
           return
-        case 'setCompletion':
-          setCompletion(command.value)
+        case 'rail':
+          setRail(resolveToggle(railEnabled, command.mode), ctx)
           return
-        case 'setAwaiting':
-          setAwaiting(command.value)
+        case 'thinking':
+          setThinking(command.mode === 'toggle' ? !quietThinking : command.mode === 'rail', ctx)
           return
-        case 'setFocus':
-          setFocus(command.mode)
+        case 'timestamps':
+          setTimestamps(resolveToggle(timestamps.enabled(), command.mode), ctx)
           return
-        case 'pickCompletion': {
-          const pick = choiceValue(
-            await ctx.ui.select('Select completion sound', soundChoiceRows(sound.completionSound)),
-          )
-          if (pick) {
-            setCompletion(pick)
-          }
+        case 'sound':
+          await runSoundCommand(command.args, ctx)
           return
-        }
-        case 'pickAwaiting': {
-          const pick = choiceValue(
-            await ctx.ui.select(
-              'Select awaiting-input sound',
-              soundChoiceRows(sound.awaitingInputSound),
-            ),
-          )
-          if (pick) {
-            setAwaiting(pick)
-          }
-          return
-        }
-        case 'pickFocus': {
-          const pick = choiceValue(
-            await ctx.ui.select('Select sound focus mode', focusChoiceRows(sound.soundFocusMode)),
-          )
-          if (isFocusMode(pick)) {
-            setFocus(pick)
-          }
-          return
-        }
+        case 'invalid':
+          ctx.ui.notify('hud: use rail, thinking, timestamps, or sound', 'error')
       }
     },
   })

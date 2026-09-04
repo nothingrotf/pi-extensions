@@ -55,6 +55,8 @@ const detailCap = 96
 const outputLineCap = 6
 const outputWidthCap = 120
 const childCap = 8
+const italicOn = '\x1b[3m'
+const italicOff = '\x1b[23m'
 
 export const groupCap = 5
 
@@ -158,8 +160,9 @@ export type PendingNarrationInput = {
 
 export function showsPendingNarration(input: PendingNarrationInput): boolean {
   if (!input.streaming || input.hasFinalText || input.reasoningActive) return false
-  if (input.actions.length === 0) return false
-  return input.actions.every((action) => action.status !== 'pending')
+  const tools = input.actions.filter((action) => !isPseudo(action.kind))
+  if (tools.length === 0) return false
+  return tools.every((action) => action.status !== 'pending')
 }
 
 export function groupLabel(group: RailGroup): string {
@@ -210,12 +213,15 @@ function groupDuration(group: RailGroup): number | undefined {
   return group.actions[0]?.durationMs
 }
 
-const durationFloorMs = 500
-const durationGap = 4
+const durationWidth = 8
 
 export function formatDuration(ms: number | undefined): string {
-  if (ms === undefined || !Number.isFinite(ms) || ms < durationFloorMs) return ''
-  return `${(ms / 1000).toFixed(1)}s`
+  if (ms === undefined || !Number.isFinite(ms)) return ''
+  const seconds = Math.max(0, ms) / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = Math.round(seconds - minutes * 60)
+  return remainder > 0 ? `${String(minutes)}m ${String(remainder)}s` : `${String(minutes)}m`
 }
 
 function statusGlyph(status: RailStatus, theme: RailTheme): string {
@@ -225,15 +231,10 @@ function statusGlyph(status: RailStatus, theme: RailTheme): string {
 }
 
 export function railHeader(groups: readonly RailGroup[], theme: RailTheme): string {
-  const total = groups.reduce((sum, group) => sum + group.count, 0)
-  const failed = groups.reduce(
-    (sum, group) => sum + (group.status === 'error' ? group.count : 0),
-    0,
-  )
-  const edits = groups.reduce(
-    (sum, group) => sum + (group.category === 'edit' ? group.count : 0),
-    0,
-  )
+  const tools = groups.flatMap((group) => group.actions).filter((action) => !isPseudo(action.kind))
+  const total = tools.length
+  const failed = tools.filter((action) => action.status === 'error').length
+  const edits = tools.filter((action) => action.category === 'edit').length
   const noun = total === 1 ? 'action' : 'actions'
   const parts = [tint(theme.palette, 'head', `${total} ${noun}`)]
   if (edits > 0)
@@ -276,26 +277,38 @@ function alignDuration(
   if (text.length === 0) {
     return visibleWidth(left) > width ? truncateToWidth(left, width, '') : left
   }
-  const budget = Math.max(1, width - text.length - durationGap)
+  const budget = Math.max(1, width - durationWidth)
   const body = visibleWidth(left) > budget ? truncateToWidth(left, budget, '') : left
-  const gap = Math.max(durationGap, width - visibleWidth(body) - text.length)
-  return `${body}${' '.repeat(gap)}${tint(theme.palette, 'dim', text)}`
+  const gap = Math.max(0, width - visibleWidth(body) - text.length)
+  const durationTint = duration !== undefined && duration >= 1000 ? 'duration' : 'dim'
+  return `${body}${' '.repeat(gap)}${tint(theme.palette, durationTint, text)}`
 }
 
 function row(parts: RowParts, theme: RailTheme, caret: string, width: number): string {
-  const kind = tintFor(parts.iconKey)
+  const pseudo = isPseudo(parts.kind)
+  const kind = pseudo ? 'pseudo' : tintFor(parts.iconKey)
   const glyph = tint(theme.palette, kind, icon(parts.iconKey))
   const gap = padLabel(parts.label).slice(parts.label.length)
   const label = `${tint(theme.palette, kind, parts.label)}${gap}`
   const count = parts.count > 1 ? tint(theme.palette, 'dim', `×${parts.count}`) : ''
-  const mark = isPseudo(parts.kind) ? ' ' : statusGlyph(parts.status, theme)
+  const mark = pseudo ? ' ' : statusGlyph(parts.status, theme)
   const head = `${tint(theme.palette, 'branch', parts.branch)} ${mark} ${glyph} ${label}${count}`
   const pieces: string[] = []
-  if (parts.arg.length > 0) pieces.push(tint(theme.palette, 'arg', parts.arg))
-  if (parts.summary.length > 0) {
-    const tone: RailTint = parts.status === 'error' ? 'fail' : 'dim'
-    const lead = tint(theme.palette, 'dim', separator)
-    pieces.push(`${lead}${tint(theme.palette, tone, parts.summary)}`)
+  if (pseudo) {
+    const detail = combineDetail(parts.arg, parts.summary)
+    if (detail.length > 0) {
+      const colored = tint(theme.palette, 'pseudoBody', detail)
+      pieces.push(
+        theme.palette.pseudoBody.length === 0 ? colored : `${italicOn}${colored}${italicOff}`,
+      )
+    }
+  } else {
+    if (parts.arg.length > 0) pieces.push(tint(theme.palette, 'arg', parts.arg))
+    if (parts.summary.length > 0) {
+      const tone: RailTint = parts.status === 'error' ? 'fail' : 'dim'
+      const lead = tint(theme.palette, 'dim', separator)
+      pieces.push(`${lead}${tint(theme.palette, tone, parts.summary)}`)
+    }
   }
   const body = pieces.join('')
   const gutter =
@@ -474,7 +487,9 @@ export type RailPatch = {
   durationMs?: number
   iconKey?: IconKey
   kind?: RailKind
+  measureDuration?: boolean
   output?: string
+  resetDerived?: boolean
   runningLabel?: string
   status?: RailStatus
   summary?: string
@@ -486,9 +501,54 @@ export class RailStore {
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
+  private rebuildIndex(): void {
+    this.index.clear()
+    this.actions.forEach((action, index) => this.index.set(action.toolCallId, index))
+  }
+
   reset(): void {
     this.actions = []
     this.index.clear()
+  }
+
+  has(toolCallId: string): boolean {
+    return this.index.has(toolCallId)
+  }
+
+  status(toolCallId: string): RailStatus | undefined {
+    const position = this.index.get(toolCallId)
+    if (position !== undefined) return this.actions[position]?.status
+    for (const action of this.actions) {
+      const child = action.children?.find((candidate) => candidate.toolCallId === toolCallId)
+      if (child !== undefined) return child.status
+    }
+    return undefined
+  }
+
+  remove(toolCallId: string): void {
+    const position = this.index.get(toolCallId)
+    if (position === undefined) return
+    this.actions.splice(position, 1)
+    this.rebuildIndex()
+  }
+
+  reorder(toolCallIds: readonly string[]): void {
+    const byId = new Map(this.actions.map((action) => [action.toolCallId, action]))
+    const seen = new Set<string>()
+    const ordered: RailAction[] = []
+    for (const toolCallId of toolCallIds) {
+      const action = byId.get(toolCallId)
+      if (action === undefined || seen.has(toolCallId)) continue
+      seen.add(toolCallId)
+      ordered.push(action)
+    }
+    for (const action of this.actions) {
+      if (seen.has(action.toolCallId)) continue
+      seen.add(action.toolCallId)
+      ordered.push(action)
+    }
+    this.actions = ordered
+    this.rebuildIndex()
   }
 
   reportChild(parentToolCallId: string, toolCallId: string, patch: RailPatch): void {
@@ -527,14 +587,23 @@ export class RailStore {
       const status = patch.status ?? current.status
       children[existing] = {
         ...current,
+        category: patch.category ?? current.category,
         detail: patch.detail ?? current.detail,
         doneLabel: patch.doneLabel ?? current.doneLabel,
-        durationMs: patch.durationMs ?? current.durationMs,
+        durationMs:
+          patch.resetDerived === true ? patch.durationMs : (patch.durationMs ?? current.durationMs),
+        iconKey: patch.iconKey ?? current.iconKey,
+        kind: patch.kind ?? current.kind,
         output: patch.output ?? current.output,
+        runningLabel: patch.runningLabel ?? current.runningLabel,
         status,
         summary:
           patch.summary ??
-          (patch.output === undefined ? current.summary : summarizeOutput(patch.output, status)),
+          (patch.output === undefined
+            ? patch.resetDerived === true
+              ? ''
+              : current.summary
+            : summarizeOutput(patch.output, status)),
       }
     }
     this.actions[position] = { ...parent, children }
@@ -569,10 +638,15 @@ export class RailStore {
     const status = patch.status ?? current.status
     const settled = status === 'ok' || status === 'error'
     const measured =
-      settled && current.durationMs === undefined && current.startedAt !== undefined
+      patch.measureDuration !== false &&
+      patch.resetDerived !== true &&
+      settled &&
+      current.durationMs === undefined &&
+      current.startedAt !== undefined
         ? Math.max(0, this.now() - current.startedAt)
         : current.durationMs
-    const durationMs = patch.durationMs ?? measured
+    const durationMs =
+      patch.resetDerived === true ? patch.durationMs : (patch.durationMs ?? measured)
     this.actions[position] = {
       category: patch.category ?? current.category,
       children: patch.children ?? current.children,
@@ -587,7 +661,11 @@ export class RailStore {
       status,
       summary:
         patch.summary ??
-        (patch.output === undefined ? current.summary : summarizeOutput(patch.output, status)),
+        (patch.output === undefined
+          ? patch.resetDerived === true
+            ? ''
+            : current.summary
+          : summarizeOutput(patch.output, status)),
       toolCallId,
     }
   }
@@ -598,5 +676,9 @@ export class RailStore {
 
   size(): number {
     return this.actions.length
+  }
+
+  values(): readonly RailAction[] {
+    return this.actions
   }
 }

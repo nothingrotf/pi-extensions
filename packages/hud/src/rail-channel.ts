@@ -25,6 +25,7 @@ const RailActionSchema = Type.Object({
   ),
   detail: Type.Optional(Type.String()),
   doneLabel: Type.Optional(Type.String({ minLength: 1 })),
+  durationMs: Type.Optional(Type.Number({ minimum: 0 })),
   iconKey: Type.Optional(
     Type.Union([
       Type.Literal('agent'),
@@ -56,6 +57,7 @@ export type RailActionReport = {
   category?: RailCategory
   detail?: string
   doneLabel?: string
+  durationMs?: number
   iconKey?: IconKey
   output?: string
   parentToolCallId?: string
