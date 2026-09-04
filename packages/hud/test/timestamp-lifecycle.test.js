@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vite-plus/test'
 
 import { registerTimestamps, roleEntryType, timestampEntryType } from '../src/timestamp.ts'
 
-function harness() {
+function harness(header) {
   const handlers = new Map()
   const commands = new Map()
   const entries = []
@@ -29,10 +29,10 @@ function harness() {
       },
     },
   }
-  registerTimestamps(api)
+  registerTimestamps(api, undefined, header)
   return {
-    turnStart() {
-      handlers.get('turn_start')({}, ctx)
+    turnStart(timestamp = Date.now()) {
+      handlers.get('turn_start')({ timestamp }, ctx)
     },
     agentStart() {
       handlers.get('agent_start')({}, ctx)
@@ -64,10 +64,63 @@ function harness() {
 const usage = { cacheRead: 0, cacheWrite: 0, cost: { total: 0 }, input: 1, output: 2 }
 
 describe('transcript lifecycle', () => {
+  test('opens the assistant header after the user message and adopts the assistant timestamp', () => {
+    let closed = 0
+    const opened = []
+    const messages = []
+    const instance = harness({
+      onClose: () => {
+        closed += 1
+      },
+      onMessage: (timestamp) => messages.push(timestamp),
+      onOpen: (timestamp) => opened.push(timestamp),
+      source: (timestamp) => ({
+        active: true,
+        motion: true,
+        tick: 0,
+        timestamp,
+      }),
+    })
+    instance.agentStart()
+    instance.turnStart(150)
+    expect(instance.entries).toEqual([])
+    expect(opened).toEqual([])
+
+    instance.start({ role: 'user', timestamp: 100 })
+    instance.end({ role: 'user', timestamp: 100 })
+    expect(instance.entries).toEqual([
+      { customType: roleEntryType, data: { role: 'user', timestamp: 100 } },
+      {
+        customType: roleEntryType,
+        data: { label: 'no-model', role: 'assistant', timestamp: 150 },
+      },
+    ])
+    expect(opened).toEqual([150])
+    expect(messages).toEqual([])
+
+    instance.start({ role: 'assistant', timestamp: 200 })
+    expect(messages).toEqual([200])
+    instance.turnStart(300)
+    instance.start({ role: 'assistant', timestamp: 400 })
+    expect(opened).toEqual([150])
+    expect(messages).toEqual([200, 400])
+    instance.agentEnd()
+    expect(closed).toBe(1)
+  })
+
+  test('records the source timestamp for a user header', () => {
+    const instance = harness()
+    instance.start({ role: 'user', timestamp: 123 })
+    expect(instance.entries[0]).toEqual({
+      customType: roleEntryType,
+      data: { role: 'user', timestamp: 123 },
+    })
+  })
+
   test('records one usage row per agent run', () => {
     const instance = harness()
     instance.agentStart()
-    instance.turnStart()
+    instance.turnStart(150)
     instance.start({ role: 'user', timestamp: 100 })
     instance.end({ role: 'user', timestamp: 100 })
     instance.start({ role: 'assistant', timestamp: 200 })
@@ -104,23 +157,36 @@ describe('transcript lifecycle', () => {
       output: 2,
       timestamp: Date.now(),
     }
-    expect(instance.render(data)).toBeDefined()
-    expect(instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)).toBeDefined()
+    const persistedUsage = instance.render(data)
+    const persistedRole = instance.render({ role: 'user', timestamp: Date.now() }, roleEntryType)
+    expect(persistedUsage).toBeDefined()
+    expect(persistedRole).toBeDefined()
     await instance.toggle()
+    expect(persistedUsage.render(80)).toEqual([])
+    expect(persistedRole.render(80)).toEqual([])
     instance.agentStart()
-    instance.start({ role: 'user', timestamp: 1 })
     instance.turnStart()
+    instance.start({ role: 'user', timestamp: 1 })
+    instance.end({ role: 'user', timestamp: 1 })
+    instance.start({ role: 'assistant', timestamp: 1 })
     instance.end({ role: 'assistant', timestamp: 1, usage })
     instance.agentEnd()
     expect(instance.entries).toEqual([])
-    expect(instance.render(data)).toBeUndefined()
+    expect(instance.render(data).render(80)).toEqual([])
     expect(instance.notifications).toEqual([{ message: 'hud: timestamps disabled', level: 'info' }])
     await instance.toggle()
+    expect(persistedUsage.render(80).length).toBeGreaterThan(0)
+    expect(persistedRole.render(80).length).toBeGreaterThan(0)
     instance.agentStart()
     instance.turnStart()
+    instance.start({ role: 'assistant', timestamp: 1 })
     instance.end({ role: 'assistant', timestamp: 1, usage })
     instance.agentEnd()
-    expect(instance.entries).toHaveLength(1)
+    expect(instance.entries).toHaveLength(2)
+    expect(instance.entries.map((entry) => entry.customType)).toEqual([
+      roleEntryType,
+      timestampEntryType,
+    ])
     expect(instance.render(data)).toBeDefined()
   })
 })

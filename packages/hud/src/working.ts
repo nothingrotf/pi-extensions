@@ -3,7 +3,7 @@ import { truncateToWidth, type TUI } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { shimmerText } from './shimmer.ts'
+import { shimmerTextAtTick, shimmerTickMs } from './shimmer.ts'
 
 export const workingMessageChannel = 'hud:working-message'
 const widgetKey = 'hud-working'
@@ -37,9 +37,12 @@ export class WorkingDock {
   private message: string | undefined
   private active = false
   private registered = false
+  private initialTick: number | undefined
   private tui: TUI | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private startedAt = Date.now()
+
+  constructor(private readonly tick: () => number = () => Math.floor(Date.now() / shimmerTickMs)) {}
 
   setMessage(message: string | undefined): void {
     this.message = message
@@ -51,6 +54,7 @@ export class WorkingDock {
   }
 
   start(ui: ExtensionUIContext): void {
+    if (!this.active) this.initialTick = this.tick()
     this.active = true
     if (!this.registered) {
       this.registered = true
@@ -64,6 +68,7 @@ export class WorkingDock {
 
   stop(): void {
     this.active = false
+    this.initialTick = undefined
     this.stopTicking()
     this.tui?.requestRender()
   }
@@ -99,7 +104,16 @@ export class WorkingDock {
         if (!this.active) return []
         const now = Date.now()
         const text = `${this.text()} · ${formatElapsed(now - this.startedAt)}`
-        const line = ` ${theme.fg('accent', spinnerFrame(now))} ${shimmerText(text, theme)}`
+        const currentTick = this.tick()
+        const shimmer =
+          currentTick === this.initialTick
+            ? theme.fg('dim', text)
+            : shimmerTextAtTick(
+                text,
+                { baseAnsi: theme.getFgAnsi('dim'), tintAnsi: theme.getFgAnsi('accent') },
+                currentTick,
+              )
+        const line = ` ${theme.fg('accent', spinnerFrame(now))} ${shimmer}`
         return [truncateToWidth(line, width, '…'), '']
       },
     }

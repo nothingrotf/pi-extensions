@@ -16,7 +16,7 @@ import {
 
 describe('transcript rows', () => {
   test('formats a twelve hour clock and the role labels', () => {
-    expect(formatClock(new Date(2026, 0, 15, 9, 5, 3).getTime())).toBe('9:05 AM')
+    expect(formatClock(new Date(2026, 0, 15, 9, 5, 3).getTime())).toBe('09:05 AM')
     expect(formatClock(new Date(2026, 0, 15, 22, 11, 0).getTime())).toBe('10:11 PM')
     expect(formatClock(new Date(2026, 0, 15, 0, 4, 0).getTime())).toBe('12:04 AM')
     expect(`${roleGlyph('user')} ${roleLabel('user', 'GLM 5.3')}`).toBe('◆ You')

@@ -5,7 +5,7 @@ import { Value } from 'typebox/value'
 
 import { railPaletteFromAnsi, tint } from './colors.ts'
 import { railLines, type RailStore, type RailTheme } from './rail.ts'
-import { shimmerText, type ShimmerTheme } from './shimmer.ts'
+import { shimmerTextAtTick, shimmerTickMs } from './shimmer.ts'
 
 export const railEntryType = 'hud-rail'
 
@@ -23,6 +23,7 @@ export type RailThemeSource = Pick<Theme, 'fg'> & Partial<Pick<Theme, 'getFgAnsi
 export type RailUsage = {
   row: string | undefined
   shimmer: boolean
+  tick?: number
 }
 
 export function railTheme(theme: RailThemeSource): RailTheme {
@@ -34,6 +35,7 @@ export function railTheme(theme: RailThemeSource): RailTheme {
 
 export class RailComponent implements Component {
   private readonly theme: RailTheme
+  private usageInitialTick: number | undefined
 
   constructor(
     private readonly resolve: () => RailStore | undefined,
@@ -48,12 +50,25 @@ export class RailComponent implements Component {
   }
 
   private usageLine(): string | undefined {
-    const { row, shimmer } = this.usage()
-    if (row === undefined || row.length === 0) return undefined
-    const getFgAnsi = this.source?.getFgAnsi
-    if (!shimmer || getFgAnsi === undefined) return tint(this.theme.palette, 'dim', row)
-    const shimmerTheme: ShimmerTheme = { getFgAnsi: (color) => getFgAnsi(color) }
-    return shimmerText(row, shimmerTheme)
+    const { row, shimmer, tick } = this.usage()
+    if (row === undefined || row.length === 0) {
+      this.usageInitialTick = undefined
+      return undefined
+    }
+    const getFgAnsi = this.source?.getFgAnsi?.bind(this.source)
+    if (!shimmer || getFgAnsi === undefined) {
+      this.usageInitialTick = undefined
+      return tint(this.theme.palette, 'dim', row)
+    }
+    const currentTick = tick ?? Math.floor(Date.now() / shimmerTickMs)
+    if (this.usageInitialTick === undefined) this.usageInitialTick = currentTick
+    const baseAnsi = getFgAnsi('dim')
+    if (currentTick === this.usageInitialTick) return `${baseAnsi}${row}\x1b[39m`
+    return shimmerTextAtTick(
+      row,
+      { baseAnsi, tintAnsi: getFgAnsi('customMessageLabel') },
+      currentTick,
+    )
   }
 
   invalidate(): void {}

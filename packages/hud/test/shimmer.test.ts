@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { shimmerHighlights, shimmerPeriodMs, shimmerTickMs } from '../src/shimmer.ts'
+import { ansiForeground, empryoBrandAlt, empryoTextPrimary } from '../src/colors.ts'
+import {
+  shimmerHighlights,
+  shimmerPeriodMs,
+  shimmerTextAtTick,
+  shimmerTickMs,
+} from '../src/shimmer.ts'
 
 describe('shimmer wave', () => {
   test('returns one value per character', () => {
@@ -77,5 +83,27 @@ describe('shimmer wave', () => {
 
   test('advances every tick interval', () => {
     expect(shimmerTickMs).toBe(70)
+  })
+
+  test('matches the exact Oklab colors for the speaker name', () => {
+    const painted = shimmerTextAtTick(
+      ' 5.6 Sol',
+      {
+        baseAnsi: ansiForeground(empryoTextPrimary),
+        tintAnsi: ansiForeground(empryoBrandAlt),
+      },
+      1,
+    )
+    const colorPattern = new RegExp(`${String.fromCharCode(27)}\\[38;2;(\\d+;\\d+;\\d+)m`, 'gu')
+    const colors = Array.from(painted.matchAll(colorPattern), (match) => match[1])
+    expect(colors).toEqual([
+      '232;228;242',
+      '208;218;242',
+      '192;210;241',
+      '179;204;241',
+      '195;212;241',
+      '211;219;242',
+      '232;228;242',
+    ])
   })
 })

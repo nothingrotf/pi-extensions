@@ -1,3 +1,4 @@
+import type { ThemeColor } from '@earendil-works/pi-coding-agent'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { beforeAll, describe, expect, test } from 'vite-plus/test'
 
@@ -110,7 +111,12 @@ describe('RailComponent pending row', () => {
 describe('RailComponent usage row', () => {
   const themeWithAnsi: RailThemeSource = {
     fg: (_color, text) => text,
-    getFgAnsi: (color) => (color === 'accent' ? '\x1b[38;2;170;164;192m' : '\x1b[38;2;66;62;84m'),
+    getFgAnsi: (color) =>
+      color === 'customMessageLabel'
+        ? '\x1b[38;2;167;199;240m'
+        : color === 'accent'
+          ? '\x1b[38;2;128;105;172m'
+          : '\x1b[38;2;93;88;114m',
   }
 
   function store(): RailStore {
@@ -156,6 +162,7 @@ describe('RailComponent usage row', () => {
   })
 
   test('shimmers the row while the turn runs', () => {
+    let tick = 5
     const component = new RailComponent(
       store,
       themeWithAnsi,
@@ -164,10 +171,41 @@ describe('RailComponent usage row', () => {
       () => ({
         row: bar,
         shimmer: true,
+        tick,
       }),
     )
-    const raw = component.render(60).at(-1) ?? ''
-    expect(raw.split('\x1b[38;2;').length).toBeGreaterThan(3)
+    const initial = component.render(60).at(-1) ?? ''
+    tick += 1
+    const animated = component.render(60).at(-1) ?? ''
+    expect(initial.split('\x1b[38;2;')).toHaveLength(2)
+    expect(animated.split('\x1b[38;2;').length).toBeGreaterThan(3)
+  })
+
+  test('keeps the theme receiver while the row shimmers', () => {
+    class StatefulTheme {
+      private readonly colors = new Map<ThemeColor, string>([
+        ['accent', '\x1b[38;2;128;105;172m'],
+        ['customMessageLabel', '\x1b[38;2;167;199;240m'],
+        ['dim', '\x1b[38;2;93;88;114m'],
+      ])
+
+      fg(_color: ThemeColor, text: string): string {
+        return text
+      }
+
+      getFgAnsi(color: ThemeColor): string {
+        return this.colors.get(color) ?? ''
+      }
+    }
+
+    const component = new RailComponent(
+      store,
+      new StatefulTheme(),
+      false,
+      () => false,
+      () => ({ row: bar, shimmer: true }),
+    )
+    expect(plain(component.render(60)).at(-1)).toContain('26s')
   })
 
   test('stops shimmering once the turn settles', () => {

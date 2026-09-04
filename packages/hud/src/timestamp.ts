@@ -1,10 +1,12 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 
-import { ansiReset, assistantAnsi, userAnsi } from './colors.ts'
 import { prettyModel } from './format.ts'
-import { pulseGlyph } from './pulse.ts'
-import { shimmerText } from './shimmer.ts'
+import {
+  formatSpeakerClock,
+  SpeakerHeaderComponent,
+  type SpeakerHeaderSource,
+} from './speaker-header.ts'
 
 export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
@@ -61,15 +63,9 @@ export function formatSpan(milliseconds: number): string {
   return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
 }
 
-export function formatClock(timestamp: number): string {
-  const date = new Date(timestamp)
-  const hours = date.getHours()
-  const suffix = hours < 12 ? 'AM' : 'PM'
-  const hour = hours % 12 === 0 ? 12 : hours % 12
-  return `${hour}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`
-}
+export const formatClock = formatSpeakerClock
 
-export function roleGlyph(role: MessageRole): string {
+export function roleGlyph(role: MessageRole): '◆' | '●' {
   return role === 'user' ? '◆' : '●'
 }
 
@@ -141,14 +137,29 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
 export type LiveUsage = { row: () => string | undefined }
 
 export type LiveHeader = {
-  active: (timestamp: number) => boolean
+  onClose: () => void
+  onMessage: (timestamp: number) => void
   onOpen: (timestamp: number) => void
+  source: SpeakerHeaderSource
 }
 
-export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage, header?: LiveHeader): void {
+export function registerTimestamps(
+  pi: ExtensionAPI,
+  live?: LiveUsage,
+  header?: LiveHeader,
+): () => boolean {
   let enabled = true
   let totals = emptyRunTotals()
   let assistantHeaderPending = true
+  let assistantCandidate: RoleEntryData | undefined
+
+  const openAssistant = (data: RoleEntryData) => {
+    if (!enabled || !assistantHeaderPending) return
+    assistantHeaderPending = false
+    assistantCandidate = undefined
+    header?.onOpen(data.timestamp)
+    pi.appendEntry<RoleEntryData>(roleEntryType, data)
+  }
 
   if (live !== undefined) {
     live.row = () => {
@@ -161,42 +172,59 @@ export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage, header?: 
   pi.on('agent_start', () => {
     totals = emptyRunTotals()
     assistantHeaderPending = true
+    assistantCandidate = undefined
+  })
+
+  pi.on('turn_start', (event, ctx) => {
+    if (totals.startedAt === undefined) {
+      totals = { ...totals, startedAt: event.timestamp }
+    }
+    if (!assistantHeaderPending) return
+    assistantCandidate = {
+      label: prettyModel(ctx.model?.id),
+      role: 'assistant',
+      timestamp: event.timestamp,
+    }
   })
 
   pi.on('message_start', (event, ctx) => {
     const role = event.message.role
-    if (!enabled || (role !== 'assistant' && role !== 'user')) {
+    if (role === 'user') {
+      if (enabled) {
+        pi.appendEntry<RoleEntryData>(roleEntryType, {
+          role,
+          timestamp: event.message.timestamp,
+        })
+      }
       return
     }
-    if (role === 'assistant') {
-      if (!assistantHeaderPending) {
-        return
-      }
-      assistantHeaderPending = false
+    if (role !== 'assistant') return
+    if (assistantHeaderPending) {
+      openAssistant(
+        assistantCandidate ?? {
+          label: prettyModel(ctx.model?.id),
+          role,
+          timestamp: event.message.timestamp,
+        },
+      )
     }
-    const data: RoleEntryData = { role, timestamp: Date.now() }
-    if (role === 'assistant') {
-      data.label = prettyModel(ctx.model?.id)
-      header?.onOpen(data.timestamp)
-    }
-    pi.appendEntry<RoleEntryData>(roleEntryType, data)
-  })
-
-  pi.on('turn_start', () => {
-    if (totals.startedAt === undefined) {
-      totals = { ...totals, startedAt: Date.now() }
-    }
+    header?.onMessage(event.message.timestamp)
   })
 
   pi.on('message_end', (event) => {
+    if (event.message.role === 'user' && assistantCandidate !== undefined) {
+      openAssistant(assistantCandidate)
+    }
     if (event.message.role === 'assistant') {
       totals = addMessageUsage(totals, event.message)
     }
   })
 
   pi.on('agent_end', () => {
+    header?.onClose()
     const run = totals
     totals = emptyRunTotals()
+    assistantCandidate = undefined
     const entry = toUsageEntry(run, Date.now())
     if (enabled && hasUsage(entry)) {
       pi.appendEntry<UsageEntryData>(timestampEntryType, entry)
@@ -204,28 +232,29 @@ export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage, header?: 
   })
 
   pi.registerEntryRenderer<RoleEntryData>(roleEntryType, (entry, _options, theme) => {
-    if (!enabled || entry.data === undefined) {
-      return undefined
-    }
+    if (entry.data === undefined) return undefined
     const { label, role, timestamp } = entry.data
-    const accent = role === 'user' ? userAnsi() : assistantAnsi()
-    const clock = theme.fg('dim', `· ${formatClock(timestamp)}`)
-    const text = roleLabel(role, label)
-    if (role === 'assistant' && header?.active(timestamp) === true) {
-      const now = Date.now()
-      const beat = `${accent}${pulseGlyph(now)}${ansiReset}`
-      return new Text(`${beat} ${shimmerText(text, theme, now)} ${clock}`, 1, 0)
-    }
-    const glyph = `${accent}${roleGlyph(role)}${ansiReset}`
-    const name = theme.bold(theme.fg('text', text))
-    return new Text(`${glyph} ${name} ${clock}`, 1, 0)
+    return new SpeakerHeaderComponent(
+      {
+        assistant: role === 'assistant',
+        glyph: roleGlyph(role),
+        label: roleLabel(role, label),
+        timestamp,
+      },
+      theme,
+      role === 'assistant' ? header?.source : undefined,
+      () => enabled,
+    )
   })
 
   pi.registerEntryRenderer<UsageEntryData>(timestampEntryType, (entry, _options, theme) => {
-    if (!enabled || entry.data === undefined || !hasUsage(entry.data)) {
-      return undefined
+    const data = entry.data
+    if (data === undefined || !hasUsage(data)) return undefined
+    return {
+      invalidate: () => undefined,
+      render: (width: number): string[] =>
+        enabled ? new Text(theme.fg('dim', formatUsageRow(data)), 1, 0).render(width) : [],
     }
-    return new Text(theme.fg('dim', formatUsageRow(entry.data)), 1, 0)
   })
 
   pi.registerCommand('hud-timestamp', {
@@ -235,4 +264,6 @@ export function registerTimestamps(pi: ExtensionAPI, live?: LiveUsage, header?: 
       ctx.ui.notify(`hud: timestamps ${enabled ? 'enabled' : 'disabled'}`, 'info')
     },
   })
+
+  return () => enabled
 }

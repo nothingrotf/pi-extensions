@@ -1,7 +1,7 @@
 # @nothingrotf/hud
 
 A compact one-line footer for [Pi](https://github.com/earendil-works/pi).
-It replaces the default footer without changing the editor, theme, transcript, or notification behavior.
+It replaces the default footer and adds speaker headers, an action rail, a loader, usage rows, and completion sounds.
 
 The left side shows:
 
@@ -17,25 +17,38 @@ The transcript labels each message author and closes each agent run with one usa
 
 ```text
 ◆ You · 10:11 PM
-
 can you render a todo list?
 
 ● GLM 5.3 · 10:12 PM
-
 Yes. The harness registers todo_write and todo_read.
 
 ▪ 5s · $0.299 · 576.6k in · 278 out · ⛁ 100% cached · ⚡58.6/s
 ```
 
-A user message always carries a `◆ You` header. An assistant header names the active model and appears once per run, before the first assistant message, so turns inside a run stay unlabelled.
+A user message always carries a `◆ You` header. Its body starts on the next row.
 
-The row totals every assistant message in the run. It shows the run duration, the cost, the input tokens including cache, the output tokens, the share of input served from cache, and the output tokens per second. A run that reports no tokens shows no row.
+The assistant header appears after the user body and before the first assistant content. It appears once per agent run.
 
-The row shares the column that the `outputPad` setting controls.
-The throughput divides the total output tokens by the time from the first turn to the end of the run.
-While a turn runs, the assistant header animates: the glyph beats like a heart between `·` and `●`, and the name shimmers. It settles to a static glyph and a bold name when the turn ends.
+The active header starts with a `·` glyph in `brandDim`. Its bold name starts in `textPrimary`.
 
-Headers and usage rows are active by default and never enter the model context.
+The glyph follows a double pulse and blends toward `brand`. The name shimmers from `textPrimary` toward `brandAlt`.
+
+Both effects share one subscriber-owned 70 ms clock. The header settles before the final usage row appears.
+
+The clock uses the system locale with two-digit hours and minutes. The settled glyph and name stay bold and static.
+
+Set `NO_MOTION` to any value to disable the header animation. `EMPRYO_NO_MOTION=1` also disables it.
+
+The HUD names the active model instead of the literal `Empryo` product name. The user label stays `You`.
+
+The row totals every assistant message in the run. It shows the duration, cost, token counts, cache share, and output rate.
+
+A run that reports no tokens shows no row. The row shares the column that the `outputPad` setting controls.
+
+The throughput divides total output tokens by the time from the first turn through the run end.
+
+Headers and usage rows are active by default. They never enter the model context.
+
 Use `/hud-timestamp` to disable or enable them.
 
 ## Action rail
@@ -101,7 +114,7 @@ visible below the block being generated. It shimmers while the turn runs and
 settles to a dim tone when the turn ends.
 
 The shimmer is a narrow highlight that sweeps back and forth with a continuous
-colour blend. Read `docs/rail-spec.md` for the exact wave.
+color blend. Read `docs/rail-spec.md` for the exact wave.
 
 Other extensions set the loader text through the `hud:working-message` event. Emit a string to set the text. Emit `null` to restore `waiting for the model`. The `@nothingrotf/subagent` package emits `Waiting on N jobs` while a Task call waits on children.
 

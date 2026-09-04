@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
+import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
 import { buildContextLabel, contextPercent, prettyEffort, prettyModel } from './format.ts'
 import { emptyGitStatus, readGitStatus } from './git.ts'
@@ -37,6 +38,8 @@ import {
   type SoundSettings,
   stopSoundPlayback,
 } from './sound.ts'
+import { speakerMotionEnabled } from './speaker-header.ts'
+import { installSpeakerSpacingFix, type SpeakerSpacingFix } from './speaker-spacing.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { fetchUsageForProvider } from './usage.ts'
@@ -50,15 +53,39 @@ function start(task: Promise<void>): void {
 }
 
 export default function hud(pi: ExtensionAPI): void {
+  const animationClock = new AnimationClock()
   const liveUsage: LiveUsage = { row: () => undefined }
+  let agentWorking = false
   let liveHeaderAt: number | undefined
+  let liveHeaderMessageAt: number | undefined
+  let liveHeaderClosed = true
   const liveHeader: LiveHeader = {
-    active: (timestamp) => agentWorking && timestamp === liveHeaderAt,
+    onClose: () => {
+      liveHeaderClosed = true
+    },
+    onMessage: (timestamp) => {
+      if (liveHeaderAt !== undefined && liveHeaderMessageAt === undefined) {
+        liveHeaderMessageAt = timestamp
+      }
+    },
     onOpen: (timestamp) => {
       liveHeaderAt = timestamp
+      liveHeaderMessageAt = undefined
+      liveHeaderClosed = false
+    },
+    source: (timestamp) => {
+      const current = timestamp === liveHeaderAt
+      return {
+        active: current && agentWorking && !liveHeaderClosed,
+        motion: speakerMotionEnabled(),
+        tick: animationClock.tick(),
+        timestamp: current
+          ? (liveHeaderMessageAt ?? (agentWorking ? Date.now() : timestamp))
+          : timestamp,
+      }
     },
   }
-  registerTimestamps(pi, liveUsage, liveHeader)
+  const timestampsEnabled = registerTimestamps(pi, liveUsage, liveHeader)
 
   const state: HudState = {
     cwd: process.cwd(),
@@ -82,9 +109,10 @@ export default function hud(pi: ExtensionAPI): void {
   let gitController: AbortController | undefined
   let usageController: AbortController | undefined
   let sound: SoundSettings = { ...defaultSoundSettings }
+  let unsubscribeAnimation: (() => void) | undefined
   let unsubscribeInput: (() => void) | undefined
   const focus = new FocusTracker()
-  const dock = new WorkingDock()
+  const dock = new WorkingDock(() => animationClock.tick())
   let rail = new RailStore()
   let railTurn = 0
   let railTurnPending = false
@@ -99,7 +127,7 @@ export default function hud(pi: ExtensionAPI): void {
 
   const thinkingQuiet = () => quietThinking && railEnabled
   let spacerFix: ThinkingSpacerFix | undefined
-  let agentWorking = false
+  let speakerSpacingFix: SpeakerSpacingFix | undefined
   let dimEditorBorder: (() => void) | undefined
 
   const applyThinkingLabel = (ctx: ExtensionContext) => {
@@ -247,6 +275,8 @@ export default function hud(pi: ExtensionAPI): void {
     usageController = undefined
     gitRevision += 1
     usageRevision += 1
+    unsubscribeAnimation?.()
+    unsubscribeAnimation = undefined
     unsubscribeInput?.()
     unsubscribeInput = undefined
     focus.disable()
@@ -273,6 +303,7 @@ export default function hud(pi: ExtensionAPI): void {
     ctx.ui.setFooter((tui, theme, footerData) => {
       footerOwned = true
       spacerFix = installThinkingSpacerFix(tui, thinkingQuiet)
+      speakerSpacingFix = installSpeakerSpacingFix(tui, timestampsEnabled)
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
       dimEditorBorder()
@@ -284,6 +315,7 @@ export default function hud(pi: ExtensionAPI): void {
           footerOwned = false
           requestRender = undefined
           dimEditorBorder = undefined
+          speakerSpacingFix = undefined
           unsubscribe()
           active = false
           stop()
@@ -335,17 +367,25 @@ export default function hud(pi: ExtensionAPI): void {
       () => turn === railTurn && agentWorking && railPendingNarration,
       () => {
         const live = turn === railTurn && agentWorking
-        return { row: live ? liveUsage.row() : undefined, shimmer: live }
+        return {
+          row: live ? liveUsage.row() : undefined,
+          shimmer: live,
+          tick: animationClock.tick(),
+        }
       },
     )
   })
 
   pi.on('session_tree', (_event, ctx) => {
     restoreRails(ctx)
+    spacerFix?.markDirty()
+    speakerSpacingFix?.markDirty()
   })
 
   pi.on('turn_start', (_event, ctx) => {
-    if (active && ctx.hasUI && ctx.mode === 'tui') dock.start(ctx.ui)
+    if (!active || !ctx.hasUI || ctx.mode !== 'tui') return
+    unsubscribeAnimation ??= animationClock.subscribe(() => requestRender?.())
+    dock.start(ctx.ui)
   })
 
   pi.events.on(railToolsChannel, (data) => {
@@ -397,6 +437,9 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('message_start', (event) => {
     if (event.message.role === 'assistant') spacerFix?.markDirty()
+    if (event.message.role === 'assistant' || event.message.role === 'user') {
+      speakerSpacingFix?.markDirty()
+    }
   })
 
   const refreshPendingNarration = (hasFinalText: boolean) => {
@@ -417,6 +460,7 @@ export default function hud(pi: ExtensionAPI): void {
   }
 
   pi.on('message_end', (event, ctx) => {
+    if (event.message.role === 'user') speakerSpacingFix?.markDirty()
     if (railEnabled && event.message.role === 'assistant') {
       const blocks: PseudoBlock[] = []
       for (const block of event.message.content) {
@@ -445,7 +489,10 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_end', (_event, ctx) => {
     agentWorking = false
+    unsubscribeAnimation?.()
+    unsubscribeAnimation = undefined
     railPendingNarration = false
+    speakerSpacingFix?.markDirty()
     requestRender?.()
     dock.stop()
     if (active) {

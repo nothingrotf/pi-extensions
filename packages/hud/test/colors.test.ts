@@ -4,6 +4,13 @@ import {
   ansiForeground,
   assistantAnsi,
   buildRailPalette,
+  empryoBrand,
+  empryoBrandAlt,
+  empryoBrandDim,
+  empryoTextDim,
+  empryoTextFaint,
+  empryoTextPrimary,
+  mixOklab,
   parseTrueColor,
   railPaletteFromAnsi,
   tint,
@@ -60,6 +67,32 @@ describe('role accents', () => {
   test('matches accentAssistant and accentUser from empryo-dark', () => {
     expect(parseTrueColor(assistantAnsi())).toEqual({ b: 172, g: 105, r: 128 })
     expect(parseTrueColor(userAnsi())).toEqual({ b: 232, g: 203, r: 151 })
+  })
+
+  test('exposes the exact speaker animation colors', () => {
+    expect(empryoBrand).toEqual({ b: 172, g: 105, r: 128 })
+    expect(empryoBrandAlt).toEqual({ b: 240, g: 199, r: 167 })
+    expect(empryoBrandDim).toEqual({ b: 69, g: 40, r: 46 })
+    expect(empryoTextDim).toEqual({ b: 114, g: 88, r: 93 })
+    expect(empryoTextFaint).toEqual({ b: 84, g: 62, r: 66 })
+    expect(empryoTextPrimary).toEqual({ b: 242, g: 228, r: 232 })
+  })
+})
+
+describe('mixOklab', () => {
+  test('matches the empryo culori interpolation', () => {
+    expect(mixOklab(empryoTextDim, empryoBrandAlt, 0.22)).toEqual({ b: 140, g: 111, r: 109 })
+    expect(mixOklab(empryoTextPrimary, empryoBrandAlt, 0.55)).toEqual({
+      b: 241,
+      g: 212,
+      r: 196,
+    })
+    expect(mixOklab(empryoBrandDim, empryoBrand, 0.45)).toEqual({ b: 113, g: 68, r: 81 })
+  })
+
+  test('clamps both ends', () => {
+    expect(mixOklab(empryoBrandDim, empryoBrand, -1)).toEqual(empryoBrandDim)
+    expect(mixOklab(empryoBrandDim, empryoBrand, 2)).toEqual(empryoBrand)
   })
 })
 

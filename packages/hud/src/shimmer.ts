@@ -1,10 +1,16 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
 
-import { ansiForeground, ansiReset, parseTrueColor, type Rgb } from './colors.ts'
+import { animationTickMs } from './animation-clock.ts'
+import { ansiForeground, ansiReset, mixOklab, parseTrueColor } from './colors.ts'
 
 export type ShimmerTheme = Pick<Theme, 'getFgAnsi'>
 
-export const shimmerTickMs = 70
+export type ShimmerColors = {
+  baseAnsi: string
+  tintAnsi: string
+}
+
+export const shimmerTickMs = animationTickMs
 
 const waveSpeed = 0.12
 const bandHalfWidth = 2.5
@@ -21,48 +27,26 @@ export function shimmerHighlights(length: number, tick: number): number[] {
   )
 }
 
-function mix(base: Rgb, tint: Rgb, amount: number): Rgb {
-  const clamped = Math.max(0, Math.min(1, amount))
-  return {
-    b: Math.round(base.b + (tint.b - base.b) * clamped),
-    g: Math.round(base.g + (tint.g - base.g) * clamped),
-    r: Math.round(base.r + (tint.r - base.r) * clamped),
-  }
-}
-
-export function shimmerText(text: string, theme: ShimmerTheme, time = Date.now()): string {
+export function shimmerTextAtTick(text: string, colors: ShimmerColors, tick: number): string {
   const characters = Array.from(text)
   if (characters.length === 0) return ''
-  const baseAnsi = theme.getFgAnsi('dim')
-  const tintAnsi = theme.getFgAnsi('accent')
+  const { baseAnsi, tintAnsi } = colors
   const base = parseTrueColor(baseAnsi)
   const tint = parseTrueColor(tintAnsi)
-  const tick = Math.floor(time / shimmerTickMs)
-  const highlights = shimmerHighlights(characters.length, tick)
-
-  if (base === undefined || tint === undefined) {
-    let output = ''
-    let openAnsi: string | undefined
-    characters.forEach((character, index) => {
-      const wanted = (highlights[index] ?? 0) > 0 ? tintAnsi : baseAnsi
-      if (wanted !== openAnsi) {
-        if (openAnsi !== undefined) output += ansiReset
-        output += wanted
-        openAnsi = wanted
-      }
-      output += character
-    })
-    return openAnsi === undefined ? output : `${output}${ansiReset}`
-  }
+  const highlights = shimmerHighlights(text.length, tick)
 
   let output = ''
   let openAnsi: string | undefined
   characters.forEach((character, index) => {
     const highlight = highlights[index] ?? 0
     const wanted =
-      highlight <= 0
-        ? baseAnsi
-        : ansiForeground(mix(base, tint, blendFloor + blendRange * highlight))
+      base === undefined || tint === undefined
+        ? highlight > 0
+          ? tintAnsi
+          : baseAnsi
+        : highlight <= 0
+          ? baseAnsi
+          : ansiForeground(mixOklab(base, tint, blendFloor + blendRange * highlight))
     if (wanted !== openAnsi) {
       if (openAnsi !== undefined) output += ansiReset
       output += wanted
@@ -71,4 +55,12 @@ export function shimmerText(text: string, theme: ShimmerTheme, time = Date.now()
     output += character
   })
   return openAnsi === undefined ? output : `${output}${ansiReset}`
+}
+
+export function shimmerText(text: string, theme: ShimmerTheme, time = Date.now()): string {
+  return shimmerTextAtTick(
+    text,
+    { baseAnsi: theme.getFgAnsi('dim'), tintAnsi: theme.getFgAnsi('accent') },
+    Math.floor(time / shimmerTickMs),
+  )
 }

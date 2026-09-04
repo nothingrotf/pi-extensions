@@ -42,26 +42,44 @@ export function sweepAssistantMessages(root: Component, active: () => boolean): 
   })
 }
 
-const hooked = new WeakSet<TUI>()
-
 export type ThinkingSpacerFix = {
   markDirty: () => void
 }
 
+type InstalledThinkingFix = ThinkingSpacerFix & {
+  setActive: (active: () => boolean) => void
+}
+
+const installed = new WeakMap<TUI, InstalledThinkingFix>()
+
 export function installThinkingSpacerFix(tui: TUI, active: () => boolean): ThinkingSpacerFix {
-  const markDirty = () => {
-    dirty = true
+  const current = installed.get(tui)
+  if (current !== undefined) {
+    current.setActive(active)
+    current.markDirty()
+    return current
   }
+
+  let activeSource = active
   let dirty = true
-  if (hooked.has(tui)) return { markDirty }
-  hooked.add(tui)
+  const fix: InstalledThinkingFix = {
+    markDirty: () => {
+      dirty = true
+    },
+    setActive: (next) => {
+      activeSource = next
+      dirty = true
+    },
+  }
+  const isActive = () => activeSource()
+  installed.set(tui, fix)
   const original = tui.requestRender.bind(tui)
   tui.requestRender = (...args: Parameters<TUI['requestRender']>): void => {
-    if (dirty && active()) {
+    if (dirty && isActive()) {
       dirty = false
-      sweepAssistantMessages(tui, active)
+      sweepAssistantMessages(tui, isActive)
     }
     original(...args)
   }
-  return { markDirty }
+  return fix
 }

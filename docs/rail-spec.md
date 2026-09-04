@@ -181,14 +181,23 @@ The header names the speaker:
 ● Agent · 04:31 AM
 ```
 
-While the turn runs, the assistant header animates in two ways at once:
+The user header and its body occupy adjacent rows. One blank row separates the user body from the assistant header.
 
-1. The glyph beats between `·` and `●`.
-2. The name shimmers in bold.
+The assistant header appears after the user message ends. It exists before the first assistant message starts.
 
-When the turn ends the header settles to a static glyph and a bold name.
+The assistant header and its first visible content occupy adjacent rows. The header appears once during each agent run.
 
-The beat is a double pulse over a period of 2600 ms:
+The first active frame uses a `·` glyph in `brandDim`. The name uses `textPrimary` and bold style.
+
+The space before the name belongs to the bold shimmer span. It does not belong to the glyph span.
+
+| part       | base color              | tint color           | settled color           |
+| ---------- | ----------------------- | -------------------- | ----------------------- |
+| glyph      | `brandDim` `#2e2845`    | `brand` `#8069ac`    | `brand` `#8069ac`       |
+| model name | `textPrimary` `#e8e4f2` | `brandAlt` `#a7c7f0` | `textPrimary` `#e8e4f2` |
+| clock      | `textFaint` `#423e54`   | none                 | `textFaint` `#423e54`   |
+
+The glyph follows a double pulse over a period of 2600 ms:
 
 | beat   | phase | time   | weight |
 | ------ | ----- | ------ | ------ |
@@ -196,13 +205,28 @@ The beat is a double pulse over a period of 2600 ms:
 | second | 0.3   | 780 ms | 0.55   |
 
 ```
-intensity = exp(-(p - 0.1)^2 / 0.0016) + 0.55 * exp(-(p - 0.3)^2 / 0.0024)
+intensity = min(1, exp(-(p - 0.1)^2 / 0.0016) + 0.55 * exp(-(p - 0.3)^2 / 0.0024))
 glyph     = intensity > 0.45 ? "●" : "·"
+color     = mixOklab(brandDim, brand, intensity)
 ```
 
-The rest of the period is quiet. The two beats read as a heartbeat, not as a
-blink. The beat period and the shimmer period differ on purpose, so the two
-effects never lock into one rhythm.
+The rest of the period is quiet. The two beats form a heartbeat instead of a blink.
+
+The pulse and shimmer use one global 70 ms tick. The ticker starts with its first subscriber.
+
+The ticker stops after its last subscriber leaves. Its phase continues when a later run starts.
+
+When the run ends, the header settles before the final usage row appears. The settled name remains bold.
+
+The clock uses `toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })`. The assistant clock adopts the first assistant message timestamp.
+
+`NO_MOTION` with any value disables the header animation. `EMPRYO_NO_MOTION=1` also disables it.
+
+The static header remains visible when motion is disabled. It uses the settled colors and the `●` glyph.
+
+The HUD uses the active model name instead of the literal `Empryo` name. The HUD uses the fixed English label `You`.
+
+The HUD does not read Empryo's `config.motion` value. Pi does not expose that configuration value to extensions.
 
 ## Shimmer
 
@@ -222,14 +246,17 @@ For tick `t` and a string of length `n`:
 ```
 centre    = (sin(t * 0.12) * 0.5 + 0.5) * (n - 1)
 highlight = max(0, 1 - |index - centre| / 2.5)
-colour    = highlight <= 0 ? base : mix(base, tint, 0.22 + 0.62 * highlight)
+color     = highlight <= 0 ? base : mixOklab(base, tint, 0.22 + 0.62 * highlight)
 ```
 
 The centre moves sinusoidally, so the highlight eases at both ends and reverses
 instead of jumping back. One full sweep takes about 3.7 seconds.
 
-The colour is a continuous blend. Do not quantise it into tiers, and do not bold
-the peak. Both produce visible banding that the original does not have.
+The color uses the exact Culori Oklab conversion and eight-bit channel rounding.
+
+Do not quantize the color into tiers. Do not add bold style only at the peak.
+
+Both changes cause visible bands that the original does not have.
 
 ## Header
 

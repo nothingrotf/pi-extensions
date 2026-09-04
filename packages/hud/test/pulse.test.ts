@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { pulseFaint, pulseGlyph, pulseIntensity, pulsePeriodMs, pulseSolid } from '../src/pulse.ts'
+import { empryoBrand, empryoBrandDim } from '../src/colors.ts'
+import {
+  pulseFaint,
+  pulseFrame,
+  pulseGlyph,
+  pulseIntensity,
+  pulsePeriodMs,
+  pulseSolid,
+} from '../src/pulse.ts'
 import { shimmerPeriodMs, shimmerText } from '../src/shimmer.ts'
 
 describe('pulse', () => {
@@ -26,6 +34,12 @@ describe('pulse', () => {
       previous = value
     }
     expect(peaks).toHaveLength(2)
+  })
+
+  test('matches the exact extracted curve samples', () => {
+    expect(pulseIntensity(0)).toBeCloseTo(0.001930454136227736, 12)
+    expect(pulseIntensity(260)).toBe(1)
+    expect(pulseIntensity(780)).toBeCloseTo(0.5500000000138879, 12)
   })
 
   test('places the first beat near a tenth of the period', () => {
@@ -69,7 +83,14 @@ describe('pulse', () => {
     for (let time = 0; time < pulsePeriodMs; time += 10) {
       if (pulseGlyph(time) === pulseSolid) solid += 1
     }
-    expect(solid / (pulsePeriodMs / 10)).toBeLessThan(0.2)
+    expect(solid / (pulsePeriodMs / 10)).toBeCloseTo(0.12, 1)
+  })
+
+  test('mixes the pulse color in Oklab', () => {
+    expect(pulseFrame(1, empryoBrandDim, empryoBrand)).toMatchObject({
+      color: { b: 72, g: 42, r: 49 },
+      glyph: pulseFaint,
+    })
   })
 })
 
