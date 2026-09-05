@@ -59,7 +59,7 @@ export default defineConfig({
     '*.{css,html,json,jsonc,md,mdx,toml,yaml,yml}': 'vp fmt --write',
   },
   test: {
-    exclude: ['**/node_modules/**'],
+    exclude: ['**/node_modules/**', '**/.git/**'],
   },
   run: {
     cache: {
