@@ -238,13 +238,11 @@ When the run ends, the header settles before the final usage row appears. The se
 
 The clock uses `toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })`. The assistant clock adopts the first assistant message timestamp.
 
-`NO_MOTION` with any value disables the header animation. `EMPRYO_NO_MOTION=1` also disables it.
+Set `NO_MOTION=1` to disable the header animation.
 
 The static header remains visible when motion is disabled. It uses the settled colors and the `●` glyph.
 
-The HUD uses the active model name instead of the literal `Empryo` name. The HUD uses the fixed English label `You`.
-
-The HUD does not read Empryo's `config.motion` value. Pi does not expose that configuration value to extensions.
+The HUD displays the active model name. The HUD uses the fixed English label `You`.
 
 ## Settings command
 
