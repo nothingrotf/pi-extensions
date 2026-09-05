@@ -32,7 +32,8 @@ function state(overrides: Partial<GoalModeState['goal']> = {}): GoalModeState {
 describe('goal editor panel', () => {
   test('renders the Empryo goal strip geometry', () => {
     const lines = renderGoalHudLines(state(), theme, 120)
-    expect(lines).toHaveLength(3)
+    expect(lines).toHaveLength(4)
+    expect(lines.at(-1)).toBe('')
     expect(lines[0]).toMatch(/^   ⟲ goal · coding 1\/5 ▾ +1\.2k\/5k tokens · 1m 05s$/)
     expect(lines[1]).toContain('Ship the editor dock')
     expect(lines[2]).toContain('working toward reviewer PASS')

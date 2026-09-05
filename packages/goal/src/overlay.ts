@@ -9,7 +9,7 @@ const widgetKey = 'goal'
 export type GoalOverlayTheme = Pick<Theme, 'bg' | 'bold' | 'fg'> & Partial<Pick<Theme, 'getBgAnsi'>>
 
 function dockInset(width: number): number {
-  return Math.min(3, Math.max(0, Math.floor(width) - 1))
+  return Math.min(3, Math.max(0, Math.floor((Math.floor(width) - 1) / 2)))
 }
 
 function oneLine(value: string): string {
@@ -89,7 +89,7 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const innerWidth = safeWidth - inset
+  const innerWidth = safeWidth - inset * 2
   const outer = ' '.repeat(inset)
   const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
   const columns = (left: string, right: string) => {
@@ -101,7 +101,7 @@ function renderPanel(
   }
   const top = columns(theme.bold(theme.fg(tone, title)), theme.fg('dim', titleRight))
   const bottom = columns(theme.fg('dim', oneLine(footer)), theme.fg('dim', '/goal drop'))
-  return [top, line(theme.fg('muted', oneLine(body))), bottom]
+  return [top, line(theme.fg('muted', oneLine(body))), bottom, '']
 }
 
 export function renderGoalHudLines(

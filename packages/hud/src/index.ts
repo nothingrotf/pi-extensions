@@ -521,15 +521,15 @@ export default function hud(pi: ExtensionAPI): void {
       runningLabel: patch.runningLabel ?? patch.doneLabel ?? fallback ?? 'Tool',
     }
     const resolved = { ...base, ...normalizeAskPatch(base) }
-    const actionPatch = { ...resolved, measureDuration: false, resetDerived: true }
+    const actionPatch = { ...resolved, measureDuration: false }
     openRailEntry()
     if (parentToolCallId === undefined) target.report(toolCallId, actionPatch)
     else target.reportChild(parentToolCallId, toolCallId, actionPatch)
     markToolReplacement(toolCallId)
-    const persistedReport: RailActionReport = { ...resolved, toolCallId }
-    if (parentToolCallId !== undefined) persistedReport.parentToolCallId = parentToolCallId
-    if (toolName !== undefined) persistedReport.toolName = toolName
-    persistRailReport(persistedReport)
+    const action = target
+      .values()
+      .find((item) => item.toolCallId === targetId || item.toolCallId === toolCallId)
+    if (action !== undefined) persistRailAction(action)
     if (toolName !== undefined) railTools.add(toolName)
     reconcileRailVoice()
   })

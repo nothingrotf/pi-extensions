@@ -8,7 +8,7 @@ A complete `todo_write` and `todo_read` lifecycle for Pi sessions.
 - It registers `todo_read` with status and ID filters.
 - It supports replacement, merge, status updates, cancellation, blocking, dependencies, and clear.
 - It auto-promotes the first ready `pending` task to `in_progress` and keeps one task in progress.
-- It rejects a call with duplicate ids, blank content, or unknown dependencies, and keeps the list unchanged.
+- It rejects duplicate ids, blank content, unknown dependencies, and dependency cycles. The list stays unchanged.
 - It registers `/todo` for the user: show, edit, export, import, append, start, done, drop, block, unblock, rm, eager.
 - It records user edits on the session branch and tells the model that the user changed the list.
 - It can inject an eager planning prelude on the first prompt of a session.
@@ -19,8 +19,8 @@ A complete `todo_write` and `todo_read` lifecycle for Pi sessions.
 - It displays a responsive frame, a progress title, state icons, and a six-row task window.
 - It hides completed panel rows after one agent run.
 - It publishes update, turn-start, and reminder events for other extensions.
-- It reminds the agent when a run stops with open todos, at most three times per prompt.
-- It nudges the agent after twelve file or shell mutations without a `todo_write` call.
+- It reminds the agent after a settled run with actionable todos, at most three times per user message.
+- It nudges the agent after twelve successful file edits or writes without a successful todo update.
 
 ## Install
 
@@ -92,7 +92,13 @@ After each successful `todo_write` call:
 - If several tasks are `in_progress`, only the earliest stays. The others return to `pending`.
 - `blocked` tasks never auto-promote.
 
-The result text lists the remaining items, the closed counts, and the blocked items. Errors reject the whole call:
+The result text lists the remaining items, the closed counts, and the blocked items.
+
+Validation checks the complete dependency graph after the proposed merge or replacement. It rejects self-dependencies, unknown dependencies, and cycles.
+
+Validation errors throw an exception. Pi records `isError: true`, and the list stays unchanged. Rejected calls do not reset the nudge counter.
+
+A validation error contains the current list:
 
 ```text
 Errors: Duplicate id "x" in todos
@@ -135,7 +141,8 @@ The responsive side inset uses one to four columns. The panel uses a rounded bor
 Rows use these states:
 
 - Completed tasks enter the success summary.
-- Active tasks use an animated pulse and bold text.
+- Tasks in progress use a spinner and bold text only during agent execution.
+- Idle sessions show a static circle without a timer. Task status stays unchanged.
 - Pending tasks use a muted circle.
 - Blocked tasks use an error cross.
 
@@ -188,11 +195,15 @@ Markers: `[ ]` pending, `[/]` in progress, `[x]` completed, `[-]` cancelled, `[!
 
 ## Eager prelude
 
-The extension injects a hidden planning reminder on the first user prompt of a session when no todos exist and the prompt does not end with `?` or `!`. `preferred` suggests the list. `always` tells the model that it must create the list first. `off` disables the prelude. The mode persists on the session branch. Default: `preferred`.
+The extension can inject a hidden planning reminder on the first user prompt. The list must be empty, and the prompt must not end with `?` or `!`.
+
+The `preferred` mode suggests a list. The `always` mode requires a list. The `off` mode disables only this prelude, not stop reminders or mid-run nudges.
+
+The mode persists on the session branch. The default is `preferred`. Extension-generated prompts do not receive the eager prelude.
 
 ## Events
 
-The extension publishes `todo_update` after each `todo_write` call.
+The extension publishes `todo_update` after each successful `todo_write` call.
 
 ```json
 {
@@ -214,17 +225,31 @@ The extension publishes `todo_turn_start_ids` when an agent run starts.
 
 ## Stop reminder
 
-When an agent run ends with a text-only assistant message and open todos exist, the extension sends a hidden `todo-reminder` message and triggers a new turn.
+The extension captures the last assistant response at `agent_end`. It evaluates the response at `agent_settled`, after automatic retries and queued continuations finish.
+
+An eligible stop produces a visible `todo-reminder` message and a new agent run. The extension awaits this continuation before the original prompt returns.
+
+Each accepted user message resets the reminder cycle at `message_start`. This includes queued user messages. Custom reminder continuations do not reset the cycle or emit `before_agent_start`.
 
 The reminder does not fire when:
 
-- one of the last 12 non-empty lines of the assistant message is a question or a response cue
-- the last assistant message called tools, was aborted, or errored
-- a previous reminder still waits for progress. A `todo_write` call alone does not count as progress
-- three reminders already fired for the current prompt
-- only `blocked` todos remain
-- `todo_write` is not an active tool
-- other messages are pending
+- one of the last 12 non-empty prose lines is a question or a recognized response request
+- the last assistant response is empty, contains tool calls, or has a stop reason other than `stop`
+- a previous reminder still waits for progress
+- three reminders already fired for the current user message
+- no actionable tasks remain
+- `todo_write` is inactive
+- another run is active or user messages remain queued
+
+The detector uses Markdown structure and ignores quoted examples, code, tables, images, and HTML. It handles multiline quotes, multiline code spans, emphasis, headings, and questions regardless of ASCII characters.
+
+Response requests without a question mark support English and Portuguese. These rules are conservative heuristics, not a semantic check of user intent.
+
+Actionable tasks include pending and active tasks whose dependency chains can complete without external input. Blocked, cancelled, missing, and cyclic dependencies exclude dependent tasks from reminders.
+
+Progress means a successful `edit` or `write`, or resolution of a previously open task. Resolution includes completion, cancellation, removal, or an explicit blocked status.
+
+Read-only tools, shell calls, failed tools, label changes, and no-op todo updates do not count as progress. Status changes alone do not prove that work finished.
 
 The extension publishes `todo_reminder` before each reminder.
 
@@ -238,8 +263,20 @@ The extension publishes `todo_reminder` before each reminder.
 
 ## Mid-run nudge
 
-After twelve successful `bash`, `edit`, or `write` calls without a `todo_write` call, the extension steers a hidden `todo-mid-run-nudge` message into the current run. At most two nudges fire per prompt. A `todo_write` call resets the count.
+The extension counts successful `edit` and `write` calls at `tool_execution_end`. It checks the threshold after the full tool batch at `turn_end`.
+
+After twelve calls without a successful todo update, it queues a hidden `todo-mid-run-nudge` as steering input. The next model request in the current run receives the nudge.
+
+At most two nudges fire per user message. A successful `todo_write` or manual todo edit resets the call counter, but not the two-nudge limit.
+
+Shell calls do not count because their results do not establish whether files changed. Failed calls do not count or reset the counter.
 
 ## Reminder metadata
 
 The details object records reminder metadata fields for compatibility. The stop reminder and the mid-run nudge do not read these fields.
+
+The `shouldShowTodoWriteReminder` and `todoReminderType` fields do not enable, disable, or schedule reminders.
+
+## Tests
+
+The integration tests use real `AgentSession` instances with a local scripted provider. They check lifecycle events, model context, error results, and continuation limits without external requests.

@@ -1,4 +1,4 @@
-import type { Todo, TodoStatus } from './domain.ts'
+import { validateTodoWrite, type Todo, type TodoStatus } from './domain.ts'
 
 function statusToMarker(status: TodoStatus): string {
   switch (status) {
@@ -168,12 +168,6 @@ export function markdownToTodos(
     }
     todos.push(todo)
   }
-  for (const todo of todos) {
-    for (const dependency of todo.dependencies) {
-      if (!taken.has(dependency)) {
-        errors.push(`Todo "${todo.id}" depends on unknown id "${dependency}"`)
-      }
-    }
-  }
+  errors.push(...validateTodoWrite([], todos, false))
   return { todos, errors }
 }

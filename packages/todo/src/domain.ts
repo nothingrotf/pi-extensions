@@ -164,6 +164,39 @@ function toProtocolItems(todos: readonly Todo[]): TodoProtocolItem[] {
   return todos.map(toProtocolItem)
 }
 
+function resolvedDependencyIds(
+  todos: readonly Todo[],
+  satisfied: readonly string[] = [],
+): Set<string> {
+  const resolved = new Set(satisfied)
+  const remaining = new Map<string, number>()
+  const dependents = new Map<string, string[]>()
+  const ready: string[] = []
+  for (const todo of todos) {
+    const unmet = todo.dependencies.filter((id) => !resolved.has(id))
+    remaining.set(todo.id, unmet.length)
+    if (unmet.length === 0) {
+      ready.push(todo.id)
+    }
+    for (const dependency of unmet) {
+      const waiting = dependents.get(dependency) ?? []
+      waiting.push(todo.id)
+      dependents.set(dependency, waiting)
+    }
+  }
+  for (const id of ready) {
+    resolved.add(id)
+    for (const dependent of dependents.get(id) ?? []) {
+      const count = (remaining.get(dependent) ?? 0) - 1
+      remaining.set(dependent, count)
+      if (count === 0) {
+        ready.push(dependent)
+      }
+    }
+  }
+  return resolved
+}
+
 export function readyTaskIds(todos: readonly Todo[]): string[] {
   const completedIds = new Set(
     todos.filter((todo) => todo.status === 'completed').map((todo) => todo.id),
@@ -321,18 +354,19 @@ export function validateTodoWrite(
     }
     seen.add(todo.id)
   }
-  const known = new Set(merge ? current.map((todo) => todo.id) : [])
-  for (const id of seen) {
-    known.add(id)
-  }
-  for (const todo of incoming) {
-    for (const dependency of todo.dependencies ?? []) {
+  const effective = mergedTodos(current, incoming, merge, 0)
+  const known = new Set(effective.map((todo) => todo.id))
+  for (const todo of effective) {
+    for (const dependency of todo.dependencies) {
       if (dependency === todo.id) {
         errors.push(`Todo "${todo.id}" depends on itself`)
       } else if (!known.has(dependency)) {
         errors.push(`Todo "${todo.id}" depends on unknown id "${dependency}"`)
       }
     }
+  }
+  if (errors.length === 0 && resolvedDependencyIds(effective).size !== effective.length) {
+    errors.push('Todo dependency graph contains a cycle')
   }
   return errors
 }
@@ -457,6 +491,15 @@ export function activeTodoCount(todos: readonly Todo[]): number {
 
 export function remindableTodos(todos: readonly Todo[]): Todo[] {
   return todos.filter((todo) => isRemindableStatus(todo.status))
+}
+
+export function actionableTodos(todos: readonly Todo[]): Todo[] {
+  const satisfied = todos.filter((todo) => todo.status === 'completed').map((todo) => todo.id)
+  const reachable = resolvedDependencyIds(
+    todos.filter((todo) => isRemindableStatus(todo.status)),
+    satisfied,
+  )
+  return todos.filter((todo) => isRemindableStatus(todo.status) && reachable.has(todo.id))
 }
 
 export function completedTodoCount(todos: readonly Todo[]): number {

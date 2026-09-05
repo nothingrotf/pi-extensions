@@ -76,6 +76,20 @@ describe('todo markdown', () => {
     expect(parsed.todos[4]?.dependencies).toEqual(['b', 'c'])
   })
 
+  test('rejects circular and self dependencies in imported or edited markdown', () => {
+    const circular = todos.slice(0, 2).map((todo) => ({
+      ...todo,
+      dependencies: [todo.id === 'a' ? 'b' : 'a'],
+    }))
+    expect(markdownToTodos(todosToMarkdown(circular), todos, 99).errors).toEqual([
+      'Todo dependency graph contains a cycle',
+    ])
+    const selfDependent = todos.slice(0, 1).map((todo) => ({ ...todo, dependencies: [todo.id] }))
+    expect(markdownToTodos(todosToMarkdown(selfDependent), todos, 99).errors).toEqual([
+      'Todo "a" depends on itself',
+    ])
+  })
+
   test('accepts escaped brackets, missing ids, and reports bad lines', () => {
     const parsed = markdownToTodos(
       [

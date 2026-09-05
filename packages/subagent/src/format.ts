@@ -122,7 +122,7 @@ export function taskLine(snapshot: SubagentSnapshot): string {
 const widgetVisibleLimit = 5
 
 function dockInset(width: number): number {
-  return Math.min(3, Math.max(0, Math.floor(width) - 1))
+  return Math.min(3, Math.max(0, Math.floor((Math.floor(width) - 1) / 2)))
 }
 
 function fitLine(line: string, width: number): string {
@@ -260,7 +260,7 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const innerWidth = safeWidth - inset
+  const innerWidth = safeWidth - inset * 2
   const outer = ' '.repeat(inset)
   const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
   const columns = (left: string, right: string) => {
@@ -272,7 +272,7 @@ function renderPanel(
   }
   const top = columns(theme.bold(theme.fg(tone, title)), theme.fg('dim', titleRight))
   const bottom = columns(theme.fg('dim', footer), theme.fg('dim', footerRight))
-  return [top, ...rows.map(line), bottom]
+  return [top, ...rows.map(line), bottom, '']
 }
 
 function groupLines(
@@ -285,7 +285,7 @@ function groupLines(
 ): string[] {
   const visible = snapshots.slice(0, widgetVisibleLimit)
   const inset = dockInset(width)
-  const panelWidth = Math.max(1, width - inset)
+  const panelWidth = Math.max(1, Math.floor(width) - inset * 2)
   const rows: string[] = []
   if (!background && parentModel !== undefined && panelWidth >= 56) {
     rows.push(`${theme.fg('accent', '◉')} ${theme.fg('muted', modelName(parentModel))}`)

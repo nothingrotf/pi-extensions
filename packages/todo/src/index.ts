@@ -35,7 +35,6 @@ import {
   formatTodoWriteResult,
   normalizeInProgress,
   readTodos,
-  snapshotTodoDetails,
   type Todo,
   TodoInputSchema,
   type TodoReadDetails,
@@ -65,6 +64,7 @@ import {
   formatStopReminder,
   maximumStopReminders,
   recordToolResult,
+  recordTodoUpdate,
 } from './reminders.ts'
 
 export const TodoWriteSchema = Type.Object(
@@ -333,7 +333,8 @@ export default function todo(pi: ExtensionAPI): void {
   const overlay = new TodoOverlay(() => todos)
   const statusKey = 'todos'
   let cycle = createReminderCycle()
-  let reminderTurnPending = false
+  let stoppedAssistant: AssistantSummary | null = null
+  let reminderCompletion: (() => void) | undefined
   const defaultEagerMode: EagerMode = 'preferred'
   let eagerMode: EagerMode = defaultEagerMode
   let userPromptPending = false
@@ -345,6 +346,11 @@ export default function todo(pi: ExtensionAPI): void {
   }
 
   const restore = (ctx: ExtensionContext) => {
+    cycle = createReminderCycle()
+    stoppedAssistant = null
+    reminderCompletion?.()
+    reminderCompletion = undefined
+    userPromptPending = false
     todos = []
     eagerMode = defaultEagerMode
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -381,6 +387,7 @@ export default function todo(pi: ExtensionAPI): void {
     refreshStatus(ctx)
     if (ctx.mode === 'tui') {
       overlay.setUI(ctx.ui)
+      overlay.setWorking(!ctx.isIdle())
       overlay.reset()
       overlay.update()
     }
@@ -395,6 +402,9 @@ export default function todo(pi: ExtensionAPI): void {
   })
 
   pi.on('session_shutdown', () => {
+    stoppedAssistant = null
+    reminderCompletion?.()
+    reminderCompletion = undefined
     overlay.dispose()
   })
 
@@ -405,17 +415,16 @@ export default function todo(pi: ExtensionAPI): void {
 
   pi.on('input', (event) => {
     const text = event.text.trim()
-    userPromptPending = text.length > 0 && !text.startsWith('/')
+    userPromptPending = event.source !== 'extension' && text.length > 0 && !text.startsWith('/')
+  })
+
+  pi.on('message_start', (event) => {
+    if (event.message.role === 'user') cycle = createReminderCycle()
   })
 
   pi.on('before_agent_start', (event, ctx) => {
     const fromUserPrompt = userPromptPending
     userPromptPending = false
-    if (reminderTurnPending) {
-      reminderTurnPending = false
-      return
-    }
-    cycle = createReminderCycle()
     if (!fromUserPrompt || eagerMode === 'off' || todos.length > 0 || !todoToolActive()) {
       return
     }
@@ -434,6 +443,9 @@ export default function todo(pi: ExtensionAPI): void {
 
   pi.on('tool_execution_end', (event) => {
     cycle = recordToolResult(cycle, event.toolName, event.isError)
+  })
+
+  pi.on('turn_end', () => {
     if (!todoToolActive()) {
       return
     }
@@ -448,49 +460,60 @@ export default function todo(pi: ExtensionAPI): void {
         content: formatMidRunNudge(decision.incompleteCount),
         display: false,
       },
-      { triggerTurn: false, deliverAs: 'steer' },
+      { triggerTurn: true, deliverAs: 'steer' },
     )
   })
 
-  pi.on('agent_end', (event, ctx) => {
-    if (!todoToolActive() || ctx.hasPendingMessages()) {
-      return
+  pi.on('agent_end', (event) => {
+    overlay.setWorking(false)
+    stoppedAssistant = lastAssistant(event.messages)
+  })
+
+  pi.on('agent_settled', async (_event, ctx) => {
+    overlay.setWorking(false)
+    const previousCompletion = reminderCompletion
+    reminderCompletion = undefined
+    const assistant = stoppedAssistant
+    stoppedAssistant = null
+    try {
+      if (assistant === null || !ctx.isIdle() || !todoToolActive() || ctx.hasPendingMessages())
+        return
+      const decision = decideStopReminder(cycle, todos, assistant)
+      if (decision.kind === 'silent') return
+      cycle = decision.cycle
+      pi.events.emit('todo_reminder', {
+        todos: decision.todos.map((todo) => ({
+          id: todo.id,
+          content: todo.content,
+          status: todo.status,
+        })),
+        attempt: decision.attempt,
+        maxAttempts: maximumStopReminders,
+      })
+      await new Promise<void>((resolve) => {
+        reminderCompletion = resolve
+        pi.sendMessage(
+          {
+            customType: 'todo-reminder',
+            content: formatStopReminder(decision.todos, decision.attempt),
+            display: true,
+            details: {
+              attempt: decision.attempt,
+              maxAttempts: maximumStopReminders,
+              todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
+            },
+          },
+          { triggerTurn: true, deliverAs: 'followUp' },
+        )
+      })
+    } finally {
+      previousCompletion?.()
     }
-    const assistant = lastAssistant(event.messages)
-    if (assistant === null) {
-      return
-    }
-    const decision = decideStopReminder(cycle, todos, assistant)
-    if (decision.kind === 'silent') {
-      return
-    }
-    cycle = decision.cycle
-    reminderTurnPending = true
-    pi.events.emit('todo_reminder', {
-      todos: decision.todos.map((todo) => ({
-        id: todo.id,
-        content: todo.content,
-        status: todo.status,
-      })),
-      attempt: decision.attempt,
-      maxAttempts: maximumStopReminders,
-    })
-    pi.sendMessage(
-      {
-        customType: 'todo-reminder',
-        content: formatStopReminder(decision.todos, decision.attempt),
-        display: true,
-        details: {
-          attempt: decision.attempt,
-          maxAttempts: maximumStopReminders,
-          todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
-        },
-      },
-      { triggerTurn: true, deliverAs: 'followUp' },
-    )
   })
 
   pi.on('agent_start', () => {
+    stoppedAssistant = null
+    overlay.setWorking(true)
     pi.events.emit('todo_turn_start_ids', {
       todoIds: todos.map((todo) => todo.id),
     })
@@ -504,20 +527,17 @@ export default function todo(pi: ExtensionAPI): void {
     promptSnippet: 'Create and manage a structured task list for the current coding session',
     promptGuidelines: [
       'Use todo_write before substantial multi-step work, after new requirements, and after each completed task.',
-      'Before the final response, use todo_write to mark every task completed or cancelled.',
+      'Before the final response, reconcile todo_write with actual outcomes. Keep external dependencies blocked. Never mark unfinished work completed or cancelled.',
     ],
     parameters: TodoWriteSchema,
     executionMode: 'sequential',
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       const errors = validateTodoWrite(todos, params.todos, params.merge)
       if (errors.length > 0) {
-        return {
-          content: [{ type: 'text', text: formatTodoSummary(todos, errors) }],
-          details: snapshotTodoDetails(todos),
-          isError: true,
-        }
+        throw new Error(formatTodoSummary(todos, errors))
       }
       const details: TodoWriteDetails = updateTodos(todos, params.todos, params.merge, Date.now())
+      cycle = recordTodoUpdate(cycle, todos, details.todos)
       todos = cloneTodos(details.todos)
       refreshStatus(ctx)
       if (ctx.mode === 'tui') {
@@ -704,7 +724,9 @@ export default function todo(pi: ExtensionAPI): void {
     ctx: ExtensionCommandContext,
     options: { removed?: boolean } = {},
   ) => {
-    todos = normalizeInProgress(cloneTodos(next), Date.now())
+    const normalized = normalizeInProgress(cloneTodos(next), Date.now())
+    cycle = recordTodoUpdate(cycle, todos, normalized)
+    todos = normalized
     refreshStatus(ctx)
     if (ctx.mode === 'tui') {
       overlay.setUI(ctx.ui)

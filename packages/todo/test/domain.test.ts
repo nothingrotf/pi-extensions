@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import {
+  actionableTodos,
   formatTodoReadResult,
   formatTodoSummary,
   formatTodoWriteResult,
@@ -164,6 +165,68 @@ describe('updateTodos', () => {
     ).toEqual(['Todo "3" depends on unknown id "1"'])
   })
 
+  it('rejects dependency cycles in replacement writes', () => {
+    expect(
+      validateTodoWrite(
+        [],
+        [
+          { id: 'a', content: 'A', status: 'pending', dependencies: ['b'] },
+          { id: 'b', content: 'B', status: 'pending', dependencies: ['c'] },
+          { id: 'c', content: 'C', status: 'pending', dependencies: ['a'] },
+        ],
+        false,
+      ),
+    ).toEqual(['Todo dependency graph contains a cycle'])
+  })
+
+  it('rejects cycles introduced by merging with retained dependencies without mutation', () => {
+    const before = structuredClone(currentTodos)
+    const cyclicUpdate = { ...inspectTodo, dependencies: ['2'] }
+    const incoming = [cyclicUpdate, { id: '2', content: 'Implement', status: implementTodo.status }]
+    const beforeIncoming = structuredClone(incoming)
+
+    expect(validateTodoWrite(currentTodos, incoming, true)).toEqual([
+      'Todo dependency graph contains a cycle',
+    ])
+    expect(currentTodos).toEqual(before)
+    expect(incoming).toEqual(beforeIncoming)
+    expect(validateTodoWrite(currentTodos, [cyclicUpdate], true)).toEqual([
+      'Todo dependency graph contains a cycle',
+    ])
+  })
+
+  it('validates dependencies across the entire effective merged graph', () => {
+    const invalid: Todo[] = [{ ...inspectTodo, dependencies: ['2'] }, implementTodo]
+    expect(validateTodoWrite(invalid, [], true)).toEqual(['Todo dependency graph contains a cycle'])
+    expect(
+      validateTodoWrite(
+        [{ ...inspectTodo, dependencies: ['missing'] }],
+        [{ id: 'new', content: 'New', status: 'pending' }],
+        true,
+      ),
+    ).toEqual(['Todo "1" depends on unknown id "missing"'])
+    expect(validateTodoWrite([{ ...inspectTodo, dependencies: ['1'] }], [], true)).toEqual([
+      'Todo "1" depends on itself',
+    ])
+    expect(validateTodoWrite(invalid, [{ ...inspectTodo, dependencies: [] }], true)).toEqual([])
+    expect(validateTodoWrite(invalid, [inspectTodo], false)).toEqual([])
+  })
+
+  it('accepts shared dependencies and complete replacement graphs', () => {
+    expect(
+      validateTodoWrite(
+        [],
+        [
+          { id: 'a', content: 'A', status: 'pending', dependencies: ['b', 'c'] },
+          { id: 'b', content: 'B', status: 'pending', dependencies: ['d'] },
+          { id: 'c', content: 'C', status: 'pending', dependencies: ['d'] },
+          { id: 'd', content: 'D', status: 'completed' },
+        ],
+        false,
+      ),
+    ).toEqual([])
+  })
+
   it('deduplicates IDs on merge with the last update', () => {
     const result = updateTodos(
       [
@@ -265,6 +328,90 @@ describe('task readiness', () => {
     expect(needsInProgressTodos([{ ...inspectTodo, status: 'pending' }])).toBe(true)
     expect(needsInProgressTodos([{ ...inspectTodo, status: 'completed' }])).toBe(false)
     expect(needsInProgressTodos([])).toBe(false)
+  })
+})
+
+describe('actionableTodos', () => {
+  it.each<{ status: Todo['status'] }>([{ status: 'blocked' }, { status: 'cancelled' }])(
+    'excludes pending chains waiting on $status dependencies',
+    ({ status }) => {
+      const todos: Todo[] = [
+        { ...inspectTodo, status },
+        implementTodo,
+        { ...implementTodo, id: '3', dependencies: ['2'] },
+        { ...implementTodo, id: '4', dependencies: [] },
+        { ...implementTodo, id: '5', dependencies: ['3', '4'] },
+      ]
+      const before = structuredClone(todos)
+
+      expect(actionableTodos(todos).map((todo) => todo.id)).toEqual(['4'])
+      expect(actionableTodos(todos.slice(0, 3))).toEqual([])
+      expect(todos).toEqual(before)
+    },
+  )
+
+  it('preserves normal pending chains in their original order', () => {
+    const todos: Todo[] = [
+      { ...implementTodo, id: '3', dependencies: ['1', '2'] },
+      implementTodo,
+      { ...inspectTodo, status: 'pending' },
+    ]
+
+    expect(actionableTodos(todos)).toEqual(todos)
+    expect(readyTaskIds(todos)).toEqual(['1'])
+  })
+
+  it('preserves active tasks and their pending downstream work', () => {
+    const todos: Todo[] = [...currentTodos, { ...implementTodo, id: '3', dependencies: ['2'] }]
+
+    expect(actionableTodos(todos)).toEqual(todos)
+    expect(readyTaskIds(todos)).toEqual([])
+  })
+
+  it('excludes in_progress work and its dependents when a dependency is blocked', () => {
+    const todos: Todo[] = [
+      { ...inspectTodo, dependencies: ['blocked'] },
+      implementTodo,
+      { ...inspectTodo, id: 'blocked', status: 'blocked' },
+      { ...implementTodo, id: 'waiting', dependencies: ['1', 'blocked'] },
+    ]
+
+    expect(actionableTodos(todos)).toEqual([])
+  })
+
+  it('treats completed dependencies as satisfied without reopening their prerequisites', () => {
+    const todos: Todo[] = [
+      { ...inspectTodo, status: 'completed', dependencies: ['cancelled'] },
+      implementTodo,
+      { ...inspectTodo, id: 'cancelled', status: 'cancelled' },
+    ]
+
+    expect(actionableTodos(todos)).toEqual([implementTodo])
+  })
+
+  it('excludes unreachable restored cycles and unknown dependencies', () => {
+    const todos: Todo[] = [
+      { ...inspectTodo, status: 'pending', dependencies: ['2'] },
+      implementTodo,
+      { ...implementTodo, id: '3', dependencies: ['2'] },
+      { ...implementTodo, id: '4', dependencies: ['missing'] },
+      { ...implementTodo, id: '5', dependencies: ['4'] },
+      { ...implementTodo, id: '6', dependencies: [] },
+    ]
+
+    expect(actionableTodos(todos).map((todo) => todo.id)).toEqual(['6'])
+    expect(actionableTodos([])).toEqual([])
+  })
+
+  it('handles long dependency chains without recursion', () => {
+    const todos: Todo[] = Array.from({ length: 10_000 }, (_, index) => ({
+      ...implementTodo,
+      id: String(index),
+      dependencies: index === 0 ? [] : [String(index - 1)],
+    })).reverse()
+
+    expect(validateTodoWrite([], todos, false)).toEqual([])
+    expect(actionableTodos(todos)).toEqual(todos)
   })
 })
 

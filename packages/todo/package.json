@@ -30,6 +30,9 @@
     "check": "vp check",
     "test": "vp test run"
   },
+  "dependencies": {
+    "marked": "18.0.5"
+  },
   "devDependencies": {
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",

@@ -94,7 +94,7 @@ export function formatTodoLine(todo: Todo, theme: TodoOverlayTheme): string {
 }
 
 function dockInset(width: number): number {
-  return Math.min(3, Math.max(0, Math.floor(width) - 1))
+  return Math.min(3, Math.max(0, Math.floor((Math.floor(width) - 1) / 2)))
 }
 
 function renderPanel(
@@ -106,11 +106,11 @@ function renderPanel(
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width))
   const inset = dockInset(safeWidth)
-  const innerWidth = safeWidth - inset
+  const innerWidth = safeWidth - inset * 2
   const outer = ' '.repeat(inset)
   const line = (text: string) => `${outer}${truncateToWidth(text, innerWidth, '…')}`
   const color = active ? 'accent' : 'muted'
-  return [line(theme.bold(theme.fg(color, title))), ...rows.map(line)]
+  return [line(theme.bold(theme.fg(color, title))), ...rows.map(line), '']
 }
 
 function settledSignature(todos: readonly Todo[]): string {
@@ -125,10 +125,17 @@ function settledDeadline(todos: readonly Todo[]): number {
   return updatedAt + settledLingerMs
 }
 
-function widgetTodoLine(todo: Todo, theme: TodoOverlayTheme, frame: number): string {
+function widgetTodoLine(
+  todo: Todo,
+  theme: TodoOverlayTheme,
+  frame: number,
+  working: boolean,
+): string {
   const content = sanitizeTerminalText(todo.content)
   if (todo.status === 'in_progress') {
-    const spinner = spinnerFrames[frame % spinnerFrames.length] ?? spinnerFrames[0] ?? '⠋'
+    const spinner = working
+      ? (spinnerFrames[frame % spinnerFrames.length] ?? spinnerFrames[0] ?? '⠋')
+      : '○'
     return `${theme.fg('accent', spinner)} ${theme.bold(theme.fg('text', content))}`
   }
   if (todo.status === 'blocked') {
@@ -142,6 +149,7 @@ export function renderTodoHudLines(
   theme: TodoOverlayTheme,
   width: number,
   now = Date.now(),
+  working = false,
 ): string[] {
   if (todos.length === 0) return []
   const completedCount = todos.filter((todo) => todo.status === 'completed').length
@@ -154,14 +162,14 @@ export function renderTodoHudLines(
   if (completedCount > 0) rows.push(theme.fg('success', `+${completedCount} done`))
   if (cancelledCount > 0) rows.push(theme.fg('error', `+${cancelledCount} dropped`))
   const frame = Math.floor(now / spinnerIntervalMs)
-  rows.push(...visible.map((todo) => widgetTodoLine(todo, theme, frame)))
+  rows.push(...visible.map((todo) => widgetTodoLine(todo, theme, frame, working)))
   if (open.length > visible.length) {
     rows.push(theme.fg('muted', `+${open.length - visible.length} more`))
   }
   return renderPanel(
     rows,
     `${taskIcon} Tasks ${completedCount}/${todos.length} ▾`,
-    active.length > 0,
+    working && active.length > 0,
     theme,
     width,
   )
@@ -171,6 +179,7 @@ export class TodoOverlay {
   private readonly getTodos: () => readonly Todo[]
   private ui: ExtensionUIContext | undefined
   private widgetRegistered = false
+  private working = false
   private tui: TUI | undefined
   private animationTimer: ReturnType<typeof setInterval> | undefined
   private settledTimer: ReturnType<typeof setTimeout> | undefined
@@ -186,6 +195,13 @@ export class TodoOverlay {
 
   setUI(ui: ExtensionUIContext): void {
     this.ui = ui
+  }
+
+  setWorking(working: boolean): void {
+    if (this.working === working) return
+    this.working = working
+    this.syncAnimation()
+    this.tui?.requestRender()
   }
 
   update(): void {
@@ -234,6 +250,7 @@ export class TodoOverlay {
   }
 
   dispose(): void {
+    this.working = false
     this.stopAnimation()
     this.stopSettledTimer()
     this.ui?.setWidget(widgetKey, undefined)
@@ -268,7 +285,8 @@ export class TodoOverlay {
   }
 
   private syncAnimation(): void {
-    const animating = this.tui !== undefined && this.visibleTodos().some(isActiveTodo)
+    const animating =
+      this.working && this.tui !== undefined && this.visibleTodos().some(isActiveTodo)
     if (!animating) {
       this.stopAnimation()
       return
@@ -342,6 +360,6 @@ export class TodoOverlay {
     ) {
       return []
     }
-    return renderTodoHudLines(todos, theme, width)
+    return renderTodoHudLines(todos, theme, width, Date.now(), this.working)
   }
 }

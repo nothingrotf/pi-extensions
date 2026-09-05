@@ -12,6 +12,7 @@ function harness(branch = []) {
   const entries = []
   const commands = new Map()
   const renderers = new Map()
+  const widgets = new Map()
   let idle = true
   let editorAnswer
   let confirmAnswer = true
@@ -49,6 +50,7 @@ function harness(branch = []) {
   const ctx = {
     cwd: process.cwd(),
     hasUI: false,
+    mode: 'print',
     isIdle() {
       return idle
     },
@@ -61,6 +63,10 @@ function harness(branch = []) {
       },
     },
     ui: {
+      setWidget(key, factory) {
+        if (factory === undefined) widgets.delete(key)
+        else widgets.set(key, factory({ requestRender() {} }, theme))
+      },
       setStatus(key, value) {
         statuses.set(key, value)
       },
@@ -146,6 +152,13 @@ function harness(branch = []) {
     setIdle(value) {
       idle = value
     },
+    enableUI() {
+      ctx.mode = 'tui'
+      ctx.hasUI = true
+    },
+    widgetLines() {
+      return widgets.get('todos')?.render(120) ?? []
+    },
     setEditorAnswer(value) {
       editorAnswer = value
     },
@@ -180,6 +193,7 @@ async function mutate(instance, count) {
       result: {},
       isError: false,
     })
+    await instance.emit('turn_end')
   }
 }
 
@@ -214,6 +228,52 @@ const restoredTodos = [
 ]
 
 describe('todo lifecycle', () => {
+  test('restores idle tasks without a spinner and follows start, stop, and settled events', async () => {
+    const instance = harness([
+      {
+        type: 'custom',
+        customType: 'pi-todo-user-edit',
+        data: {
+          todos: [
+            {
+              id: 'obs60',
+              content: 'Implement and independently verify OBS-60',
+              status: 'in_progress',
+              dependencies: [],
+              createdAt: '1',
+              updatedAt: '1',
+            },
+          ],
+        },
+      },
+    ])
+    instance.enableUI()
+    const lines = () => instance.widgetLines().join('\n')
+    const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/u
+    try {
+      await instance.emit('session_start')
+      expect(lines()).toContain('○ Implement and independently verify OBS-60')
+      expect(lines()).not.toMatch(spinner)
+      instance.setIdle(false)
+      await instance.emit('agent_start')
+      expect(lines()).toMatch(spinner)
+      await instance.emit('session_start')
+      expect(lines()).toMatch(spinner)
+      instance.setPending(true)
+      await instance.emit('agent_end', { messages: [] })
+      expect(lines()).not.toMatch(spinner)
+      await instance.emit('agent_start')
+      expect(lines()).toMatch(spinner)
+      instance.setIdle(true)
+      await instance.emit('agent_settled')
+      expect(lines()).not.toMatch(spinner)
+      await instance.emit('session_tree')
+      expect(lines()).toContain('○ Implement and independently verify OBS-60')
+    } finally {
+      await instance.emit('session_shutdown')
+    }
+  })
+
   test('exposes todo_write and todo_read schemas', () => {
     const instance = harness()
     expect(instance.schema('todo_write').required).toEqual(['todos', 'merge'])
@@ -368,9 +428,10 @@ describe('todo reminders', () => {
         { id: '2', content: 'Wait for ops', status: 'blocked', blocker: 'ops approval' },
       ],
     })
-    await instance.emit('before_agent_start')
+    await instance.emit('message_start', { message: { role: 'user' } })
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       await instance.emit('agent_end', { messages: [assistantStop('Done for now.')] })
+      const settled = instance.emit('agent_settled')
       expect(instance.messages).toHaveLength(attempt)
       expect(instance.messages.at(-1)).toMatchObject({
         message: { customType: 'todo-reminder', display: true },
@@ -384,20 +445,30 @@ describe('todo reminders', () => {
         name: 'todo_reminder',
         payload: { attempt, maxAttempts: 3, todos: [{ id: '1', status: 'in_progress' }] },
       })
-      await instance.emit('before_agent_start')
+      await instance.emit('agent_start')
+      await instance.emit('agent_end', {
+        messages: [assistantStop('Which task requires approval?')],
+      })
+      await instance.emit('agent_settled')
+      await settled
       await instance.emit('tool_execution_end', {
-        toolCallId: 'r',
-        toolName: 'read',
+        toolCallId: 'w',
+        toolName: 'write',
         result: {},
         isError: false,
       })
     }
     await instance.emit('agent_end', { messages: [assistantStop('Still done.')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(3)
 
-    await instance.emit('before_agent_start')
+    await instance.emit('message_start', { message: { role: 'user' } })
     await instance.emit('agent_end', { messages: [assistantStop('New prompt stop.')] })
+    const settled = instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(4)
+    await instance.emit('agent_end', { messages: [assistantStop('Stopped without progress.')] })
+    await instance.emit('agent_settled')
+    await settled
   })
 
   test('stays silent while awaiting progress, on questions, on tool calls, and on aborts', async () => {
@@ -409,17 +480,25 @@ describe('todo reminders', () => {
     })
     await instance.emit('before_agent_start')
     await instance.emit('agent_end', { messages: [assistantStop('Which file should I edit?')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Please confirm.')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Working', { toolCall: true })] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('', { stopReason: 'aborted' })] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    expect(instance.messages).toHaveLength(0)
+    const settled = instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(1)
-    await instance.emit('before_agent_start')
+    await instance.emit('agent_start')
     await instance.emit('agent_end', { messages: [assistantStop('Stopped again without acting.')] })
+    await instance.emit('agent_settled')
+    await settled
     expect(instance.messages).toHaveLength(1)
   })
 
@@ -433,10 +512,12 @@ describe('todo reminders', () => {
     await instance.emit('before_agent_start')
     instance.setPending(true)
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     instance.setPending(false)
     instance.setActiveTools(['read'])
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
     instance.setActiveTools(['read', 'todo_write'])
     await instance.tool('todo_write', {
@@ -444,6 +525,7 @@ describe('todo reminders', () => {
       todos: [{ id: '1', content: 'Inspect', status: 'completed' }],
     })
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(0)
   })
 
@@ -461,15 +543,15 @@ describe('todo reminders', () => {
     expect(instance.messages).toHaveLength(1)
     expect(instance.messages[0]).toMatchObject({
       message: { customType: 'todo-mid-run-nudge', display: false },
-      options: { triggerTurn: false, deliverAs: 'steer' },
+      options: { triggerTurn: true, deliverAs: 'steer' },
     })
-    expect(instance.messages[0].message.content).toContain('1 todo item remain open')
+    expect(instance.messages[0].message.content).toContain('1 todo item remains open')
     await mutate(instance, 12)
     expect(instance.messages).toHaveLength(2)
     await mutate(instance, 12)
     expect(instance.messages).toHaveLength(2)
 
-    await instance.emit('before_agent_start')
+    await instance.emit('message_start', { message: { role: 'user' } })
     await mutate(instance, 6)
     await instance.emit('tool_execution_end', {
       toolCallId: 'w',
@@ -674,11 +756,12 @@ describe('/todo command', () => {
       merge: false,
       todos: [{ id: '1', content: 'Inspect', status: 'pending' }],
     })
-    await instance.emit('before_agent_start', { prompt: 'go', systemPrompt: '' })
-    await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
-    expect(instance.renderMessage(instance.messages.at(-1).message)).toBe(
-      '⚠ Todo reminder 1/3 · 1 incomplete\n╰─ ☐ Inspect',
-    )
+    const message = {
+      customType: 'todo-reminder',
+      content: 'Reminder',
+      details: { attempt: 1, maxAttempts: 3, todos: [{ id: '1', content: 'Inspect' }] },
+    }
+    expect(instance.renderMessage(message)).toBe('⚠ Todo reminder 1/3 · 1 incomplete\n╰─ ☐ Inspect')
     expect(instance.renderMessage({ customType: 'todo-reminder', content: 'x' })).toBe(
       '⚠ Todo reminder',
     )

@@ -1,68 +1,76 @@
-import { isRemindableStatus, type Todo } from './domain.ts'
+import { Marked } from 'marked'
+
+import { actionableTodos, isRemindableStatus, type Todo } from './domain.ts'
 
 export const maximumStopReminders = 3
 export const midRunNudgeMutationThreshold = 12
 export const midRunNudgeMaximumPerCycle = 2
-export const mutatingToolNames: readonly string[] = ['bash', 'edit', 'write']
+export const mutatingToolNames: readonly string[] = ['edit', 'write']
 export const awaitingUserAnswerLineWindow = 12
 
-const markdownPromptPrefix = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/
-const promptLabel = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i
-const questionPrompt =
-  /^(?:what|which|when|where|why|how|who|whom|whose|do|does|did|can|could|would|will|should|is|are|am|may|shall)\b/i
-const userDirectedPrompt = /\b(?:you|your|we|our)\b/i
 const userResponseCue =
-  /^(?:please\s+)?(?:confirm|reply|choose|pick|decide|advise)\b|^(?:please\s+)?answer\b|^(?:please\s+)?(?:let\s+me\s+know|tell\s+me)\b/i
+  /^(?:please\s+)?(?:confirm|reply|choose|pick|decide|advise|answer|let\s+me\s+know|tell\s+me)\b|^(?:por\s+favor[,.:]?\s+)?(?:confirme|confirma|responda|responde|escolha|escolhe|decida|diga|informe|avise|me\s+diga|me\s+avise)\b|^(?:i\s+(?:need|await)|waiting\s+for|i\s+will\s+wait\s+for)\s+your\b|^(?:aguardo\s+(?:sua|seu)|preciso\s+(?:da\s+sua|do\s+seu|que\s+voce)|fico\s+no\s+aguardo)\b/i
 
-function hasNonAscii(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) > 0x7f) {
-      return true
-    }
-  }
-  return false
-}
+const proseMarkdown = new Marked({
+  renderer: {
+    code: () => '\n',
+    blockquote: () => '\n',
+    html: () => '\n',
+    table: () => '\n',
+    codespan: () => '',
+    image: () => '',
+    checkbox: () => '',
+    hr: () => '\n',
+    br: () => '\n',
+    space: () => '\n',
+    paragraph({ tokens }) {
+      return `${this.parser.parseInline(tokens)}\n`
+    },
+    heading({ tokens }) {
+      return `${this.parser.parseInline(tokens)}\n`
+    },
+    list({ items }) {
+      return items.map((item) => this.listitem(item)).join('\n')
+    },
+    listitem({ tokens }) {
+      return this.parser.parse(tokens)
+    },
+    strong({ tokens }) {
+      return this.parser.parseInline(tokens)
+    },
+    em({ tokens }) {
+      return this.parser.parseInline(tokens)
+    },
+    del({ tokens }) {
+      return this.parser.parseInline(tokens)
+    },
+    link({ tokens }) {
+      return this.parser.parseInline(tokens)
+    },
+    text(token) {
+      return 'tokens' in token && token.tokens !== undefined
+        ? this.parser.parseInline(token.tokens)
+        : token.text
+    },
+  },
+})
 
-function promptLine(line: string): { text: string; hadPromptLabel: boolean } {
-  const withoutMarkdownPrefix = line.trim().replace(markdownPromptPrefix, '').trim()
-  const withoutPromptLabel = withoutMarkdownPrefix.replace(promptLabel, '').trim()
-  return {
-    text: withoutPromptLabel,
-    hadPromptLabel: withoutPromptLabel !== withoutMarkdownPrefix,
-  }
-}
-
-function isQuestionPromptLine(line: string): boolean {
-  const candidate = promptLine(line)
-  if (!/[?？]\s*$/.test(candidate.text)) {
-    return false
-  }
-  return (
-    candidate.hadPromptLabel ||
-    questionPrompt.test(candidate.text) ||
-    userDirectedPrompt.test(candidate.text) ||
-    hasNonAscii(candidate.text)
-  )
-}
-
-function isResponseCueLine(line: string): boolean {
-  const candidate = promptLine(line)
-    .text.replace(/[.!?。！？]+$/, '')
-    .trim()
-  return userResponseCue.test(candidate)
-}
-
-export function isAwaitingUserAnswer(assistantText: string): boolean {
-  const text = assistantText.trim()
-  if (text.length === 0) {
-    return false
-  }
-  const trailingLines = text
+function proseLines(text: string): string[] {
+  return proseMarkdown
+    .parse(text, { async: false })
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
+}
+
+export function isAwaitingUserAnswer(assistantText: string): boolean {
+  return proseLines(assistantText)
     .slice(-awaitingUserAnswerLineWindow)
-  return trailingLines.some((line) => isQuestionPromptLine(line) || isResponseCueLine(line))
+    .some(
+      (line) =>
+        /[?？]\s*$/.test(line) ||
+        userResponseCue.test(line.normalize('NFD').replace(/\p{M}/gu, '')),
+    )
 }
 
 export interface ReminderCycle {
@@ -86,8 +94,9 @@ export function recordToolResult(
   toolName: string,
   isError: boolean,
 ): ReminderCycle {
+  if (isError) return cycle
   const touchedTodo = toolName === 'todo_write'
-  const mutated = !isError && mutatingToolNames.includes(toolName)
+  const mutated = mutatingToolNames.includes(toolName)
   return {
     ...cycle,
     mutationsSinceLastTouch: touchedTodo
@@ -95,7 +104,25 @@ export function recordToolResult(
       : mutated
         ? cycle.mutationsSinceLastTouch + 1
         : cycle.mutationsSinceLastTouch,
-    reminderAwaitingProgress: touchedTodo ? cycle.reminderAwaitingProgress : false,
+    reminderAwaitingProgress: mutated ? false : cycle.reminderAwaitingProgress,
+  }
+}
+
+export function recordTodoUpdate(
+  cycle: ReminderCycle,
+  previous: readonly Todo[],
+  next: readonly Todo[],
+): ReminderCycle {
+  const remainingIds = new Set(
+    next.filter((todo) => isRemindableStatus(todo.status)).map((todo) => todo.id),
+  )
+  const progressed = previous.some(
+    (todo) => isRemindableStatus(todo.status) && !remainingIds.has(todo.id),
+  )
+  return {
+    ...cycle,
+    mutationsSinceLastTouch: 0,
+    reminderAwaitingProgress: progressed ? false : cycle.reminderAwaitingProgress,
   }
 }
 
@@ -108,11 +135,14 @@ export function decideStopReminder(
   todos: readonly Todo[],
   assistant: { text: string; hadToolCalls: boolean; stopReason: string },
 ): StopReminderDecision {
-  if (assistant.stopReason === 'aborted' || assistant.stopReason === 'error') {
+  if (assistant.stopReason !== 'stop') {
     return { kind: 'silent', reason: assistant.stopReason }
   }
   if (assistant.hadToolCalls) {
     return { kind: 'silent', reason: 'tool-calls' }
+  }
+  if (assistant.text.trim().length === 0) {
+    return { kind: 'silent', reason: 'empty-response' }
   }
   if (cycle.reminderAwaitingProgress) {
     return { kind: 'silent', reason: 'awaiting-progress' }
@@ -120,7 +150,7 @@ export function decideStopReminder(
   if (cycle.reminderCount >= maximumStopReminders) {
     return { kind: 'silent', reason: 'max-reminders' }
   }
-  const incomplete = todos.filter((todo) => isRemindableStatus(todo.status))
+  const incomplete = actionableTodos(todos)
   if (incomplete.length === 0) {
     return { kind: 'silent', reason: 'no-incomplete' }
   }
@@ -148,7 +178,11 @@ export function formatStopReminder(todos: readonly Todo[], attempt: number): str
     `You stopped with ${todos.length} incomplete todo item(s):`,
     list,
     '',
-    'Please continue working on these tasks or mark them complete if finished.',
+    'Continue only with tasks that do not require user input.',
+    'Use todo_write to mark finished tasks completed.',
+    'If a task requires user input, mark it blocked with a blocker note and ask the user.',
+    'Do not mark unfinished work completed or cancelled to silence this reminder.',
+    '',
     `(Reminder ${attempt}/${maximumStopReminders})`,
     '</system-reminder>',
   ].join('\n')
@@ -168,7 +202,7 @@ export function decideMidRunNudge(
   if (cycle.midRunNudgeCount >= midRunNudgeMaximumPerCycle) {
     return { kind: 'silent' }
   }
-  const incompleteCount = todos.filter((todo) => isRemindableStatus(todo.status)).length
+  const incompleteCount = actionableTodos(todos).length
   if (incompleteCount === 0) {
     return { kind: 'silent' }
   }
@@ -184,12 +218,15 @@ export function decideMidRunNudge(
 }
 
 export function formatMidRunNudge(incompleteCount: number): string {
-  const noun = incompleteCount === 1 ? 'item' : 'items'
+  const remaining = incompleteCount === 1 ? 'item remains' : 'items remain'
   return [
     '<system-reminder>',
-    `Many file or shell mutations happened since the last todo_write call. ${incompleteCount} todo ${noun} remain open.`,
-    'Reconcile the todo list with the real state before more work: mark finished items completed, set the current item in_progress, and add new items for work that appeared.',
-    'Batch the todo_write call with the next real action. Do not make it the only tool call of the turn.',
+    `Twelve successful file edits or writes occurred since the last todo_write call. ${incompleteCount} todo ${remaining} open.`,
+    '',
+    'Reconcile the todo list with the actual task state before more work.',
+    'Mark finished items completed, and keep externally blocked items blocked with a blocker note.',
+    'Batch the todo_write call with the next real action.',
+    'Do not make it the only tool call of the turn.',
     '</system-reminder>',
   ].join('\n')
 }

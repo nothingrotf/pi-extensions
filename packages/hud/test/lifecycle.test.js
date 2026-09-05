@@ -166,6 +166,66 @@ describe('HUD lifecycle', () => {
     ])
   })
 
+  test('persists state changes instead of alternating call and result render reports', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    const call = {
+      detail: 'Inspect the repository',
+      doneLabel: 'Task',
+      runningLabel: 'Task',
+      iconKey: 'agent',
+      status: 'pending',
+      toolCallId: 'task',
+      toolName: 'Task',
+    }
+    const result = { ...call, output: 'Agent started' }
+    for (let frame = 0; frame < 1000; frame += 1) {
+      instance.emitEvent('hud:rail-action', call)
+      instance.emitEvent('hud:rail-action', result)
+    }
+    const reports = () =>
+      instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+    expect(reports()).toHaveLength(2)
+    expect(reports().at(-1)?.data.report).toMatchObject({
+      output: 'Agent started',
+      summary: 'Agent started',
+    })
+    instance.emitEvent('hud:rail-action', { ...result, status: 'ok', output: 'Done' })
+    instance.emitEvent('hud:rail-action', call)
+    expect(reports()).toHaveLength(3)
+    expect(reports().at(-1)?.data.report).toMatchObject({ status: 'ok', output: 'Done' })
+    await instance.emit('agent_end')
+    expect(reports()).toHaveLength(3)
+  })
+
+  test('deduplicates child snapshots without losing child progress', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      toolCallId: 'parent',
+      iconKey: 'agent',
+      status: 'pending',
+    })
+    const child = {
+      toolCallId: 'child',
+      parentToolCallId: 'parent',
+      iconKey: 'read',
+      status: 'pending',
+    }
+    for (let frame = 0; frame < 1000; frame += 1) {
+      instance.emitEvent('hud:rail-action', child)
+      instance.emitEvent('hud:rail-action', { ...child, output: 'Read file' })
+    }
+    const reports = instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+    expect(reports).toHaveLength(3)
+    expect(reports.at(-1)?.data.report).toMatchObject({
+      toolCallId: 'child',
+      parentToolCallId: 'parent',
+      output: 'Read file',
+    })
+    await instance.emit('agent_end')
+  })
+
   test('persists a final built-in action snapshot', async () => {
     const instance = harness()
     await instance.emit('agent_start')
