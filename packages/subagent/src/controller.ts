@@ -38,6 +38,15 @@ function cloneResult(result: SubagentResult): SubagentResult {
   }
 }
 
+function handleKey(handle: SubagentHandle): string {
+  return JSON.stringify([
+    handle.ownerSessionId,
+    handle.ownerGeneration,
+    handle.agentId,
+    handle.runGeneration,
+  ])
+}
+
 function cloneReceipt(receipt: TaskReceipt): TaskReceipt {
   return { ...receipt, handle: { ...receipt.handle } }
 }
@@ -59,6 +68,7 @@ export class SubagentControllerHost implements SubagentController {
   private readonly published = new Map<string, number>()
   private invalidatedOwnerGeneration = -1
   private lifecycleGeneration = 0
+  private lifecyclePending = false
   private replacementPending = false
   readonly runtime: SubagentRuntime
   registered = false
@@ -71,6 +81,7 @@ export class SubagentControllerHost implements SubagentController {
   async replaceSession(ctx: Pick<ExtensionContext, 'sessionManager'>): Promise<boolean> {
     if (this.runtime.ownerSessionId.length > 0 && !this.replacementPending) return false
     this.replacementPending = false
+    this.lifecyclePending = true
     this.lifecycleGeneration += 1
     const generation = this.lifecycleGeneration
     this.invalidateOwner()
@@ -78,6 +89,7 @@ export class SubagentControllerHost implements SubagentController {
     if (generation !== this.lifecycleGeneration) return false
     this.runtime.invalidateAgentCache()
     this.runtime.restore(ctx)
+    this.lifecyclePending = false
     return true
   }
 
@@ -87,6 +99,7 @@ export class SubagentControllerHost implements SubagentController {
   ): Promise<boolean> {
     if (ctx.sessionManager.getSessionId() !== this.runtime.ownerSessionId) return false
     this.replacementPending = true
+    this.lifecyclePending = true
     this.lifecycleGeneration += 1
     const generation = this.lifecycleGeneration
     this.invalidateOwner()
@@ -96,12 +109,18 @@ export class SubagentControllerHost implements SubagentController {
   }
 
   async start(invocation: SubagentInvocation): Promise<TaskReceipt> {
+    this.assertReady()
+    const generation = this.lifecycleGeneration
     const result = await this.runtime.run({
       ctx: invocation.ctx,
       input: { ...invocation.input, run_in_background: true },
       retainBackgroundSignal: true,
       signal: invocation.signal,
     })
+    this.assertReady()
+    if (generation !== this.lifecycleGeneration) {
+      throw new Error('The parent session changed while the subagent was starting.')
+    }
     if (result.kind !== 'background') {
       const detail = result.kind === 'failed' ? result.details.error : 'The subagent did not start.'
       throw new Error(detail)
@@ -115,22 +134,14 @@ export class SubagentControllerHost implements SubagentController {
       status: 'running',
       transcriptPath: result.details.transcriptPath,
     }
-    this.handles.set(handle.agentId, { ...handle })
+    this.handles.set(handleKey(handle), { ...handle })
     this.emit(handle.ownerSessionId, {
       receipt,
       revision: receipt.revision,
       type: 'created',
     })
     const terminal = this.runtime.resultFor(handle)
-    if (terminal !== undefined) {
-      this.emit(handle.ownerSessionId, {
-        handle: { ...handle },
-        result: cloneResult(terminal),
-        revision: this.runtime.currentRevision,
-        type: 'terminal',
-      })
-      this.published.set(handle.agentId, this.runtime.currentRevision)
-    }
+    if (terminal !== undefined) this.publishTerminal(handle, terminal)
     return receipt
   }
 
@@ -173,6 +184,13 @@ export class SubagentControllerHost implements SubagentController {
     ) {
       return { revision: this.runtime.currentRevision, status: 'stale-handle' }
     }
+    if (this.runtime.integrationStarted(handle.agentId)) {
+      return {
+        handle: { ...handle },
+        revision: this.runtime.currentRevision,
+        status: 'integration-started',
+      }
+    }
     this.runtime.requestCancel(handle.agentId, reason)
     return {
       handle: { ...handle },
@@ -199,6 +217,12 @@ export class SubagentControllerHost implements SubagentController {
     this.runtime.invalidateAgentCache()
   }
 
+  private assertReady(): void {
+    if (this.replacementPending || this.lifecyclePending) {
+      throw new Error('The parent session is shutting down or awaiting replacement.')
+    }
+  }
+
   private invalidateOwner(): void {
     if (this.runtime.currentOwnerGeneration === this.invalidatedOwnerGeneration) return
     const ownerSessionId = this.runtime.ownerSessionId
@@ -213,39 +237,43 @@ export class SubagentControllerHost implements SubagentController {
         type: 'owner-invalidated',
       })
     }
-    for (const [agentId, handle] of this.handles) {
+    for (const [key, handle] of this.handles) {
       if (handle.ownerSessionId !== ownerSessionId) continue
-      this.handles.delete(agentId)
-      this.published.delete(agentId)
+      this.handles.delete(key)
+      this.published.delete(key)
     }
   }
 
   private publishUpdates(): void {
     const revision = this.runtime.currentRevision
-    for (const handle of this.handles.values()) {
-      if (this.published.get(handle.agentId) === revision) continue
+    for (const [key, handle] of this.handles) {
+      if (this.published.get(key) === revision) continue
       const snapshot = this.runtime.snapshotFor(handle)
       if (snapshot !== undefined) {
+        this.published.set(key, revision)
         this.emit(handle.ownerSessionId, {
           handle: { ...handle },
           revision,
           snapshot: cloneSnapshot(snapshot),
           type: 'updated',
         })
-        this.published.set(handle.agentId, revision)
         continue
       }
       const result = this.runtime.resultFor(handle)
-      if (result !== undefined) {
-        this.emit(handle.ownerSessionId, {
-          handle: { ...handle },
-          result: cloneResult(result),
-          revision,
-          type: 'terminal',
-        })
-        this.published.set(handle.agentId, revision)
-      }
+      if (result !== undefined) this.publishTerminal(handle, result)
     }
+  }
+
+  private publishTerminal(handle: SubagentHandle, result: SubagentResult): void {
+    const key = handleKey(handle)
+    if (!this.handles.delete(key)) return
+    this.published.delete(key)
+    this.emit(handle.ownerSessionId, {
+      handle: { ...handle },
+      result: cloneResult(result),
+      revision: this.runtime.currentRevision,
+      type: 'terminal',
+    })
   }
 
   private emit(ownerSessionId: string, event: SubagentEvent): void {

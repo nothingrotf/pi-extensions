@@ -9,6 +9,8 @@ import { Value } from 'typebox/value'
 
 import { ARROW_OUT, MAIL_ICON, quotedBody } from './cards.ts'
 import type { SubagentControllerHost } from './controller.ts'
+import type { DecisionReceipt } from './decisions.ts'
+import type { DeliveryRecord } from './delivery.ts'
 import { oneLineLabel, type SubagentTheme } from './format.ts'
 import type { IsolationDestination } from './isolation.ts'
 import {
@@ -104,7 +106,37 @@ const ListInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
+const InboxInputSchema = Type.Object(
+  {
+    action: Type.Literal('inbox'),
+    agent_id: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+)
+
+const AcknowledgeInputSchema = Type.Object(
+  {
+    action: Type.Literal('acknowledge'),
+    agent_id: Type.String({ minLength: 1 }),
+    delivery_id: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+)
+
+const ReplyInputSchema = Type.Object(
+  {
+    action: Type.Literal('reply'),
+    agent_id: Type.String({ minLength: 1 }),
+    request_id: Type.String({ minLength: 1 }),
+    message: Type.String({ minLength: 1, maxLength: 8000 }),
+  },
+  { additionalProperties: false },
+)
+
 export const TaskControlInputSchema = Type.Union([
+  InboxInputSchema,
+  AcknowledgeInputSchema,
+  ReplyInputSchema,
   StatusInputSchema,
   SteerInputSchema,
   CancelInputSchema,
@@ -141,6 +173,14 @@ interface TaskStatus extends TaskStatusSummary {
 }
 
 export type TaskControlDetails =
+  | { action: 'inbox'; deliveries: DeliveryRecord[] }
+  | {
+      action: 'acknowledge'
+      agent_id: string
+      delivery_id: string
+      outcome: 'acknowledged' | 'rejected'
+    }
+  | ({ action: 'reply'; agent_id: string } & DecisionReceipt)
   | { action: 'status'; agent_id: string; outcome: 'not-found' }
   | { action: 'status'; outcome: 'found'; task: TaskStatus }
   | {
@@ -154,7 +194,12 @@ export type TaskControlDetails =
   | {
       action: 'cancel'
       agent_id: string
-      outcome: 'requested' | 'already-terminal' | 'not-found' | 'stale-handle'
+      outcome:
+        | 'requested'
+        | 'already-terminal'
+        | 'not-found'
+        | 'stale-handle'
+        | 'integration-started'
       reason: string
       revision: number
     }
@@ -190,7 +235,7 @@ export type TaskControlDetails =
 export interface TaskWaitDetails {
   action: 'wait'
   jobs: JobSnapshot[]
-  outcome: 'settled' | 'timeout' | 'aborted' | 'idle'
+  outcome: 'settled' | 'timeout' | 'aborted' | 'idle' | 'attention'
   settled: string[]
 }
 
@@ -202,7 +247,13 @@ export interface TaskControlExecution {
 
 export type TaskControlRuntime = Pick<
   SubagentRuntime,
-  'currentRevision' | 'handle' | 'joinStaged' | 'latestResult' | 'subscribe'
+  | 'currentRevision'
+  | 'deliveries'
+  | 'handle'
+  | 'joinStaged'
+  | 'latestResult'
+  | 'replyToDecision'
+  | 'subscribe'
 >
 
 export interface TaskControlScope {
@@ -277,11 +328,13 @@ export function serializeTaskControl(details: TaskControlDetails): string {
     const head =
       details.outcome === 'idle'
         ? 'No running jobs to wait on.'
-        : details.outcome === 'settled'
-          ? `Settled: ${details.settled.join(', ')}. Each result arrives as a follow-up message.`
-          : details.outcome === 'timeout'
-            ? 'Wait window elapsed. Re-issue wait to keep waiting.'
-            : 'Wait aborted.'
+        : details.outcome === 'attention'
+          ? 'A child needs a coordinator decision. Inspect inbox and reply to the pending request.'
+          : details.outcome === 'settled'
+            ? `Settled: ${details.settled.join(', ')}. Results arrive at the next turn boundary. Use status to inspect a result.`
+            : details.outcome === 'timeout'
+              ? 'Wait window elapsed. Re-issue wait to keep waiting.'
+              : 'Wait aborted.'
     return `${head}\n${jobsText(details.jobs)}`
   }
   return JSON.stringify(details, null, 2)
@@ -332,28 +385,36 @@ export async function waitForJobs(
       .filter((job) => job.status !== 'running')
       .map((job) => job.agentId)
   try {
-    const outcome = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
-      let unsubscribe = (): void => undefined
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const finish = (value: 'settled' | 'timeout' | 'aborted'): void => {
-        unsubscribe()
-        if (timer !== undefined) clearTimeout(timer)
-        execution.signal?.removeEventListener('abort', onAbort)
-        resolve(value)
-      }
-      const onAbort = (): void => finish('aborted')
-      const check = (): void => {
-        if (settledIds().length > 0) finish('settled')
-      }
-      if (execution.signal?.aborted === true) {
-        finish('aborted')
-        return
-      }
-      execution.signal?.addEventListener('abort', onAbort)
-      unsubscribe = runtime.subscribe(check)
-      timer = setTimeout(() => finish('timeout'), input.timeout_ms ?? DEFAULT_WAIT_MS)
-      check()
-    })
+    const outcome = await new Promise<'settled' | 'timeout' | 'aborted' | 'attention'>(
+      (resolve) => {
+        let unsubscribe = (): void => undefined
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const finish = (value: 'settled' | 'timeout' | 'aborted' | 'attention'): void => {
+          unsubscribe()
+          if (timer !== undefined) clearTimeout(timer)
+          execution.signal?.removeEventListener('abort', onAbort)
+          resolve(value)
+        }
+        const onAbort = (): void => finish('aborted')
+        const check = (): void => {
+          if (settledIds().length > 0) finish('settled')
+          else if (
+            watchedJobs(scope, ids, Date.now()).some(
+              (job) => job.lastActivity === 'Waiting for coordinator decision',
+            )
+          )
+            finish('attention')
+        }
+        if (execution.signal?.aborted === true) {
+          finish('aborted')
+          return
+        }
+        execution.signal?.addEventListener('abort', onAbort)
+        unsubscribe = runtime.subscribe(check)
+        timer = setTimeout(() => finish('timeout'), input.timeout_ms ?? DEFAULT_WAIT_MS)
+        check()
+      },
+    )
     return {
       action: 'wait',
       jobs: watchedJobs(scope, ids, Date.now()),
@@ -372,6 +433,39 @@ export async function executeTaskControl(
   scope: TaskControlScope,
   execution: TaskControlExecution = { onUpdate: undefined, signal: undefined },
 ): Promise<TaskControlDetails> {
+  if (input.action === 'inbox') {
+    return {
+      action: 'inbox',
+      deliveries: runtime.deliveries
+        .list(input.agent_id?.trim())
+        .filter((delivery) => scope.allows(delivery.agentId)),
+    }
+  }
+  if (input.action === 'acknowledge') {
+    const record = runtime.deliveries.get(input.delivery_id)
+    const allowed =
+      scope.allows(input.agent_id) &&
+      record?.agentId === input.agent_id &&
+      record.kind !== 'request'
+    return {
+      action: 'acknowledge',
+      agent_id: input.agent_id,
+      delivery_id: input.delivery_id,
+      outcome:
+        allowed && runtime.deliveries.acknowledge(input.delivery_id) ? 'acknowledged' : 'rejected',
+    }
+  }
+  if (input.action === 'reply') {
+    const receipt: DecisionReceipt = scope.allows(input.agent_id)
+      ? runtime.replyToDecision(
+          input.agent_id,
+          input.request_id,
+          input.message,
+          scope.callerId(ctx),
+        )
+      : { outcome: 'rejected', reason: 'not-pending', requestId: input.request_id }
+    return { action: 'reply', agent_id: input.agent_id, ...receipt }
+  }
   if (input.action === 'wait') return waitForJobs(input, ctx, runtime, scope, execution)
   if (input.action === 'jobs') {
     const now = Date.now()
@@ -445,6 +539,8 @@ export async function executeTaskControl(
       await scope.destination(ctx),
       scope.callerId(ctx),
     )
+    if (join.status === 'joined')
+      runtime.deliveries.settleAgent(agentId, 'completion', 'acknowledged')
     return {
       action: 'join',
       agent_id: agentId,
@@ -508,6 +604,12 @@ export type LabelResolver = (agentId: string) => string
 
 function pendingTarget(input: TaskControlInput, label: LabelResolver): string {
   switch (input.action) {
+    case 'inbox':
+      return 'notification inbox'
+    case 'acknowledge':
+      return `Acknowledge ${label(input.agent_id)}`
+    case 'reply':
+      return `Reply ${ARROW_OUT} ${label(input.agent_id)}`
     case 'jobs':
       return 'background jobs'
     case 'wait': {
@@ -598,6 +700,20 @@ export function renderTaskControlResult(
   }
   const rowOptions = { expanded: options.expanded, live: false }
   switch (details.action) {
+    case 'inbox':
+      return new Text(
+        details.deliveries
+          .map(
+            (delivery) =>
+              `${label(delivery.agentId)} · ${delivery.kind} · ${delivery.state}\n${delivery.content}`,
+          )
+          .join('\n\n') || 'No notifications.',
+        0,
+        0,
+      )
+    case 'acknowledge':
+    case 'reply':
+      return new Text(`${label(details.agent_id)} · ${details.outcome}`, 0, 0)
     case 'wait':
       return new JobTree(details.jobs, { expanded: options.expanded, isPartial: false }, theme)
     case 'jobs':
@@ -689,7 +805,7 @@ export function renderTaskControlResult(
 }
 
 export const taskControlDescription =
-  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. wait blocks until the first watched job settles, the timeout elapses, or the call is aborted; use it only when you have no other work. jobs returns a status snapshot without waiting. Steer only queues text. Cancel prevents later integration only for isolated writers.'
+  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. inbox shows notification delivery receipts. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, timeout, or abort; use it only without other work. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
 
 export function registerTaskControl(
   pi: ExtensionAPI,

@@ -91,18 +91,18 @@ export interface JsonObject {
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject
 
-function decodeJsonValue<Input>(input: Input): JsonValue {
+export function decodeJsonValue<Input>(input: Input): JsonValue {
   if (Value.Check(JsonNullSchema, input)) return Value.Decode(JsonNullSchema, input)
   if (Value.Check(JsonBooleanSchema, input)) return Value.Decode(JsonBooleanSchema, input)
   if (Value.Check(JsonNumberSchema, input)) return Value.Decode(JsonNumberSchema, input)
   if (Value.Check(JsonStringSchema, input)) return Value.Decode(JsonStringSchema, input)
   if (Value.Check(JsonArrayInputSchema, input)) {
-    return Value.Decode(JsonArrayInputSchema, input).map((item) => decodeJsonValue(item))
+    return input.map((item) => decodeJsonValue(item))
   }
-  const source = Value.Decode(JsonObjectInputSchema, input)
-  const output: JsonObject = {}
-  for (const [key, item] of Object.entries(source)) output[key] = decodeJsonValue(item)
-  return output
+  if (!Value.Check(JsonObjectInputSchema, input)) throw new Error('The value is not JSON data.')
+  return Object.fromEntries(
+    Object.entries(input).map(([key, item]) => [key, decodeJsonValue(item)]),
+  )
 }
 
 export const JsonValueSchema = Codec(Type.Unknown())
@@ -689,3 +689,41 @@ export type SubagentType = StaticDecode<typeof SubagentTypeSchema>
 export type TaskInput = StaticDecode<typeof SingleTaskInputSchema>
 export type TaskToolInput = StaticDecode<typeof TaskInputSchema>
 export type TaskNodeInput = StaticDecode<typeof TaskNodeInputSchema>
+
+const TaskJsonFieldsSchema = Type.Object({
+  outputSchema: Type.Optional(Type.Unknown()),
+  gates: Type.Optional(Type.Array(GateDefinitionSchema)),
+})
+
+function preserveTaskJson<Input, Output extends Pick<TaskInput, 'outputSchema' | 'gates'>>(
+  input: Input,
+  output: Output,
+): Output {
+  if (!Value.Check(TaskJsonFieldsSchema, input)) return output
+  if (Object.hasOwn(input, 'outputSchema'))
+    output.outputSchema = decodeJsonValue(input.outputSchema)
+  if (input.gates !== undefined) {
+    output.gates = input.gates.map((source) => {
+      const gate = Value.Decode(GateDefinitionSchema, source)
+      if (source.type === 'json-pointer' && gate.type === 'json-pointer') {
+        if (source.op === 'eq' && gate.op === 'eq') gate.value = decodeJsonValue(source.value)
+        if (source.op === 'in' && gate.op === 'in')
+          gate.values = source.values.map((value) => decodeJsonValue(value))
+      }
+      return gate
+    })
+  }
+  return output
+}
+
+export function decodeSingleTaskInput<Input>(input: Input): SingleTaskInput {
+  return preserveTaskJson(input, Value.Decode(SingleTaskInputSchema, input))
+}
+
+export function decodeBatchTaskInput<Input>(input: Input): BatchTaskInput {
+  const output = Value.Decode(BatchTaskInputSchema, input)
+  if (Value.Check(BatchTaskInputSchema, input)) {
+    output.tasks = output.tasks.map((task, index) => preserveTaskJson(input.tasks[index], task))
+  }
+  return output
+}

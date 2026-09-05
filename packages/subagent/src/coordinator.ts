@@ -14,7 +14,12 @@ import {
 } from './isolation.ts'
 import { RunMailbox } from './mailbox.ts'
 import { readArtifact } from './output.ts'
-import type { RuntimeResult, SubagentInvocation, SubagentRuntime } from './runtime.ts'
+import type {
+  CoordinationLifecycle,
+  RuntimeResult,
+  SubagentInvocation,
+  SubagentRuntime,
+} from './runtime.ts'
 import type {
   ArtifactRef,
   BatchTaskInput,
@@ -141,13 +146,52 @@ function itemContent(item: BatchItemResult): string {
     : `${header}${agent}\n${output}`
 }
 
-export async function runBatch(options: {
+interface BatchOptions {
   ctx: ExtensionContext
   input: BatchTaskInput
   onStarted?: (agentId: string) => void
   runtime: SubagentRuntime
   signal: AbortSignal | undefined
-}): Promise<BatchResult> {
+}
+
+export async function runBatch(options: BatchOptions): Promise<BatchResult> {
+  if (options.signal?.aborted === true) {
+    return options.runtime.coordinate(options.ctx, undefined, async () => {
+      const graph = buildTaskGraph(options.input.tasks)
+      const runId = randomUUID()
+      const items = graph.nodes.map((node): BatchItemResult => ({
+        agentId: undefined,
+        artifact: undefined,
+        error: node.needs?.length
+          ? `Blocked by: ${node.needs.join(', ')}.`
+          : 'The coordinated Task was aborted.',
+        gateResults: [],
+        isolation: undefined,
+        output: undefined,
+        status: node.needs?.length ? 'blocked' : 'aborted',
+        structuredOutput: undefined,
+        taskId: node.id,
+      }))
+      options.runtime.addCoordinationRun({
+        createdAt: Date.now(),
+        ownerSessionId: options.ctx.sessionManager.getSessionId(),
+        runId,
+        status: 'aborted',
+        tasks: items.map((item, index) => taskState(item, graph.nodes[index]?.needs ?? [])),
+        updatedAt: Date.now(),
+      })
+      return { content: items.map(itemContent).join('\n\n'), items, runId, status: 'aborted' }
+    })
+  }
+  return options.runtime.coordinate(options.ctx, options.signal, (lifecycle) =>
+    executeBatch(options, lifecycle),
+  )
+}
+
+async function executeBatch(
+  options: BatchOptions,
+  lifecycle: CoordinationLifecycle,
+): Promise<BatchResult> {
   const graph = buildTaskGraph(options.input.tasks)
   const runId = randomUUID()
   const rootContext = await createRootWorkspaceContext(
@@ -157,6 +201,7 @@ export async function runBatch(options: {
   )
   const baseInputs = graph.nodes.map((node) => taskInput(node, node.prompt))
   const readonlyPolicies = await options.runtime.preflight(options.ctx, baseInputs)
+  lifecycle.assertContinuing()
   const mutableTaskIds = new Set(
     graph.nodes.filter((_node, index) => readonlyPolicies[index] === false).map((node) => node.id),
   )
@@ -178,6 +223,7 @@ export async function runBatch(options: {
     if (aggregate !== undefined) return aggregate.context
     if (rootDestination === undefined)
       throw new Error('The aggregate workspace root is unavailable.')
+    lifecycle.assertContinuing()
     aggregate = await createIsolation({
       destination: rootDestination,
       integration: 'apply',
@@ -223,6 +269,7 @@ export async function runBatch(options: {
     const waveResults = await Promise.all(
       wave.map(async (node): Promise<BatchItemResult> => {
         try {
+          lifecycle.assertContinuing()
           const dependencies = (node.needs ?? []).map((taskId) => {
             const result = results.get(taskId)
             if (result === undefined) throw new Error(`Dependency "${taskId}" has no result.`)
@@ -348,48 +395,69 @@ export async function runBatch(options: {
     : items.some((item) => item.status === 'aborted')
       ? 'aborted'
       : 'completed'
-  runState = { ...runState, status, updatedAt: Date.now() }
-  options.runtime.updateCoordinationRun(runState)
   let aggregateError: string | undefined
-  if (aggregate !== undefined && rootDestination !== undefined) {
-    const receipt = await captureIsolation(aggregate)
-    await options.runtime.updateWorkspaceLifecycle(aggregate, 'captured', 'pending')
-    const anyApplied =
-      status === 'completed' &&
-      items.some((item) => item.status === 'completed' && item.isolation?.integration === 'apply')
-    if (anyApplied) {
-      await options.runtime.updateWorkspaceLifecycle(aggregate, 'integrating', 'pending')
-    }
-    const finalReceipt = anyApplied
-      ? await integrateStagedReceipt(receipt, rootDestination, runId)
-      : receipt
-    const recoveryRequired = finalReceipt.repositories.some(
-      (repository) => repository.status === 'recovery-required',
-    )
-    await options.runtime.updateWorkspaceLifecycle(
-      aggregate,
-      !anyApplied ? 'captured' : finalReceipt.status === 'integrated' ? 'integrated' : 'conflict',
-      finalReceipt.rootVisibility ?? 'pending',
-    )
-    if (!recoveryRequired) {
+  try {
+    if (aggregate !== undefined && rootDestination !== undefined) {
+      const receipt = await captureIsolation(aggregate)
+      await options.runtime.updateWorkspaceLifecycle(aggregate, 'captured', 'pending')
+      const anyApplied =
+        status === 'completed' &&
+        items.some((item) => item.status === 'completed' && item.isolation?.integration === 'apply')
+      if (anyApplied) {
+        await options.runtime.updateWorkspaceLifecycle(aggregate, 'integrating', 'pending')
+      }
+      const finalReceipt = anyApplied
+        ? await integrateStagedReceipt(receipt, rootDestination, runId, () =>
+            lifecycle.beforeApply(),
+          )
+        : receipt
+      const recoveryRequired = finalReceipt.repositories.some(
+        (repository) => repository.status === 'recovery-required',
+      )
       await options.runtime.updateWorkspaceLifecycle(
         aggregate,
-        'cleanup-pending',
+        !anyApplied ? 'captured' : finalReceipt.status === 'integrated' ? 'integrated' : 'conflict',
         finalReceipt.rootVisibility ?? 'pending',
       )
-      const cleanupDebt = await cleanupWorkspaceArtifacts(aggregate)
-      await options.runtime.updateWorkspaceLifecycle(
-        aggregate,
-        cleanupDebt ? 'cleanup-debt' : 'cleaned',
-        finalReceipt.rootVisibility ?? 'pending',
-      )
+      if (!recoveryRequired) {
+        await options.runtime.updateWorkspaceLifecycle(
+          aggregate,
+          'cleanup-pending',
+          finalReceipt.rootVisibility ?? 'pending',
+        )
+        const cleanupDebt = await cleanupWorkspaceArtifacts(aggregate)
+        await options.runtime.updateWorkspaceLifecycle(
+          aggregate,
+          cleanupDebt ? 'cleanup-debt' : 'cleaned',
+          finalReceipt.rootVisibility ?? 'pending',
+        )
+      }
+      if (finalReceipt.status === 'conflict' || finalReceipt.status === 'partial') {
+        aggregateError = `The coordinated result could not be integrated without a conflict.`
+      }
     }
-    if (finalReceipt.status === 'conflict' || finalReceipt.status === 'partial') {
-      aggregateError = `The coordinated result could not be integrated without a conflict.`
+  } catch (error) {
+    runState = {
+      ...runState,
+      status:
+        status === 'aborted' || (!lifecycle.integrationStarted && options.signal?.aborted === true)
+          ? 'aborted'
+          : 'failed',
+      updatedAt: Date.now(),
     }
+    options.runtime.updateCoordinationRun(runState)
+    throw error
   }
   const aggregateStatus =
-    aggregateError === undefined ? status : status === 'aborted' ? 'aborted' : 'failed'
+    !lifecycle.integrationStarted && options.signal?.aborted === true
+      ? 'aborted'
+      : aggregateError === undefined
+        ? status
+        : status === 'aborted'
+          ? 'aborted'
+          : 'failed'
+  runState = { ...runState, status: aggregateStatus, updatedAt: Date.now() }
+  options.runtime.updateCoordinationRun(runState)
   const content = items
     .map(itemContent)
     .concat(aggregateError === undefined ? [] : [`aggregate: failed - ${aggregateError}`])

@@ -1,11 +1,23 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 
+import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai'
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  type ExtensionContext,
+  ModelRuntime,
+  SessionManager,
+} from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
-import { describe, expect, it } from 'vite-plus/test'
+import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { CapabilityRegistry, type CapabilityToolDefinition } from '../src/capabilities.ts'
+import { SubagentControllerHost } from '../src/controller.ts'
+import { runBatch } from '../src/coordinator.ts'
 import { buildTaskGraph } from '../src/graph.ts'
 import { RunMailbox } from '../src/mailbox.ts'
 import {
@@ -22,6 +34,7 @@ import {
   TaskInputSchema,
   type RunRecord,
 } from '../src/schema.ts'
+import { stateHistory } from '../src/state.ts'
 import { recentRecords, recentRuns } from '../src/state.ts'
 
 const trustedTool: CapabilityToolDefinition = {
@@ -39,6 +52,387 @@ const node = {
   prompt: 'Prompt',
   subagent_type: 'explore',
 }
+
+const execFileAsync = promisify(execFile)
+
+async function createBatchHarness() {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-coordination-'))
+  await writeFile(join(dir, '.gitignore'), 'agent/\nsessions/\n')
+  await writeFile(join(dir, 'shared.txt'), 'base\n')
+  await execFileAsync('git', ['init', '-q'], { cwd: dir })
+  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: dir })
+  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir })
+  await execFileAsync('git', ['add', '.gitignore', 'shared.txt'], { cwd: dir })
+  await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir })
+  const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false })
+  modelRuntime.registerProvider('coordination-test', {
+    api: 'openai-completions',
+    apiKey: 'test-key',
+    baseUrl: 'http://localhost:1',
+    models: [
+      {
+        contextWindow: 100_000,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+        id: 'writer',
+        input: ['text'],
+        maxTokens: 8_000,
+        name: 'Coordination writer',
+        reasoning: false,
+      },
+    ],
+    streamSimple: (model, context) => {
+      const stream = createAssistantMessageEventStream()
+      const wrote = context.messages.some((message) => message.role === 'toolResult')
+      const message: AssistantMessage = {
+        api: model.api,
+        content: wrote
+          ? [{ text: 'Done', type: 'text' }]
+          : [
+              {
+                arguments: { content: 'writer\n', path: 'shared.txt' },
+                id: 'write-shared',
+                name: 'write',
+                type: 'toolCall',
+              },
+            ],
+        model: model.id,
+        provider: model.provider,
+        role: 'assistant',
+        stopReason: wrote ? 'stop' : 'toolUse',
+        timestamp: Date.now(),
+        usage: {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+          input: 1,
+          output: 1,
+          totalTokens: 2,
+        },
+      }
+      stream.push({ partial: message, type: 'start' })
+      stream.push({ message, reason: wrote ? 'stop' : 'toolUse', type: 'done' })
+      stream.end()
+      return stream
+    },
+  })
+  const model = modelRuntime.getModel('coordination-test', 'writer')
+  if (model === undefined) throw new Error('The test model is missing.')
+  let host: SubagentControllerHost | undefined
+  let context: ExtensionContext | undefined
+  const resourceLoader = new DefaultResourceLoader({
+    agentDir: join(dir, 'agent'),
+    cwd: dir,
+    extensionFactories: [
+      (pi) => {
+        host = new SubagentControllerHost(pi)
+        pi.on('input', (_event, ctx) => {
+          context = ctx
+          return { action: 'handled' }
+        })
+      },
+    ],
+    noExtensions: true,
+    noPromptTemplates: true,
+    noSkills: true,
+    noThemes: true,
+  })
+  await resourceLoader.reload()
+  const { session } = await createAgentSession({
+    cwd: dir,
+    model,
+    modelRuntime,
+    resourceLoader,
+    sessionManager: SessionManager.create(dir, join(dir, 'sessions')),
+    thinkingLevel: 'off',
+  })
+  await session.prompt('Capture coordination context')
+  if (host === undefined || context === undefined) throw new Error('The test context is missing.')
+  await host.replaceSession(context)
+  const runtime = host.runtime
+  const ctx = context
+  const states = () =>
+    stateHistory(session.sessionManager.getBranch(), session.sessionManager.getSessionId())
+  return {
+    close: async () => {
+      await runtime.shutdown()
+      session.dispose()
+      await rm(dir, { force: true, recursive: true })
+    },
+    ctx,
+    dir,
+    host,
+    run: (signal?: AbortSignal) =>
+      runBatch({
+        ctx,
+        input: {
+          tasks: [
+            {
+              description: 'Write shared file',
+              id: 'writer',
+              model: 'coordination-test/writer',
+              prompt: 'Write shared.txt',
+              readonly: false,
+              subagent_type: 'generalPurpose',
+            },
+          ],
+        },
+        runtime,
+        signal,
+      }),
+    runtime,
+    states,
+  }
+}
+
+describe('coordination finalization', () => {
+  it('fences cancellation before aggregate root apply', async () => {
+    const harness = await createBatchHarness()
+    const controller = new AbortController()
+    const update = harness.runtime.updateWorkspaceLifecycle.bind(harness.runtime)
+    const lifecycle = vi
+      .spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+      .mockImplementation(async (workspace, state, visibility) => {
+        await update(workspace, state, visibility)
+        if (workspace.writerId.startsWith('coordination-') && state === 'integrating') {
+          controller.abort()
+        }
+      })
+    try {
+      const result = await harness.run(controller.signal)
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('base\n')
+      expect(result.status).toBe('aborted')
+      expect(harness.states().at(-1)?.runs?.[0]?.status).toBe('aborted')
+    } finally {
+      lifecycle.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it.each(['integrating', 'cleanup-pending'])(
+    'drains aggregate %s before replacing the owner',
+    async (pausedState) => {
+      const harness = await createBatchHarness()
+      const controller = new AbortController()
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const update = harness.runtime.updateWorkspaceLifecycle.bind(harness.runtime)
+      const lifecycle = vi
+        .spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+        .mockImplementation(async (workspace, state, visibility) => {
+          await update(workspace, state, visibility)
+          if (workspace.writerId.startsWith('coordination-') && state === pausedState) {
+            entered.resolve()
+            await release.promise
+          }
+        })
+      const pending = harness.run(controller.signal)
+      let replacement: Promise<boolean> | undefined
+      try {
+        await entered.promise
+        const owner = harness.runtime.ownerSessionId
+        if (pausedState === 'cleanup-pending') controller.abort()
+        const stopping = harness.host.stopSession(harness.ctx)
+        const sessionManager = SessionManager.inMemory(harness.dir)
+        let replaced = false
+        replacement = harness.host.replaceSession({ sessionManager }).then((result) => {
+          replaced = true
+          return result
+        })
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        expect(replaced).toBe(false)
+        expect(harness.runtime.ownerSessionId).toBe(owner)
+        release.resolve()
+        const result = await pending
+        expect(result.status).toBe(pausedState === 'integrating' ? 'failed' : 'completed')
+        expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe(
+          pausedState === 'integrating' ? 'base\n' : 'writer\n',
+        )
+        await stopping
+        expect(await replacement).toBe(true)
+        expect(harness.runtime.ownerSessionId).toBe(sessionManager.getSessionId())
+        expect(harness.runtime.getCoordinationRun(result.runId)).toBeUndefined()
+      } finally {
+        release.resolve()
+        await pending.catch(() => {})
+        await replacement
+        lifecycle.mockRestore()
+        await harness.close()
+      }
+    },
+    180_000,
+  )
+
+  it('drains admitted setup and rejects new batches during shutdown', async () => {
+    const harness = await createBatchHarness()
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const preflight = harness.runtime.preflight.bind(harness.runtime)
+    const setup = vi.spyOn(harness.runtime, 'preflight').mockImplementation(async (ctx, inputs) => {
+      const policies = await preflight(ctx, inputs)
+      entered.resolve()
+      await release.promise
+      return policies
+    })
+    const pending = harness.run()
+    const rejected = expect(pending).rejects.toThrow('shutting down')
+    let shutdown: Promise<void> | undefined
+    try {
+      await entered.promise
+      let stopped = false
+      shutdown = harness.runtime.shutdown().then(() => {
+        stopped = true
+      })
+      await expect(harness.run()).rejects.toThrow('shutting down')
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(stopped).toBe(false)
+      release.resolve()
+      await rejected
+      await shutdown
+      expect(setup).toHaveBeenCalledTimes(1)
+      expect(harness.states().at(-1)?.runs ?? []).toEqual([])
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('base\n')
+    } finally {
+      release.resolve()
+      await pending.catch(() => {})
+      await shutdown
+      setup.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('releases coordination completion when setup throws', async () => {
+    const harness = await createBatchHarness()
+    const failure = new Error('Coordination preflight failed')
+    const setup = vi.spyOn(harness.runtime, 'preflight').mockRejectedValue(failure)
+    try {
+      await expect(harness.run()).rejects.toBe(failure)
+      let stopped = false
+      const shutdown = harness.runtime.shutdown().then(() => {
+        stopped = true
+      })
+      await vi.waitFor(() => expect(stopped).toBe(true))
+      await shutdown
+      expect(harness.states().at(-1)?.runs ?? []).toEqual([])
+    } finally {
+      setup.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('keeps the apply fence open for the remaining repositories after commit starts', async () => {
+    const harness = await createBatchHarness()
+    const controller = new AbortController()
+    try {
+      await harness.runtime.coordinate(harness.ctx, controller.signal, async (lifecycle) => {
+        expect(lifecycle.integrationStarted).toBe(false)
+        lifecycle.beforeApply()
+        expect(lifecycle.integrationStarted).toBe(true)
+        controller.abort()
+        harness.runtime.invalidateHandles()
+        expect(() => lifecycle.beforeApply()).not.toThrow()
+      })
+      await harness.runtime.shutdown()
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('keeps a successful batch running until aggregate integration and cleanup finish', async () => {
+    const harness = await createBatchHarness()
+    const update = harness.runtime.updateWorkspaceLifecycle.bind(harness.runtime)
+    const observed: Array<{ lifecycle: string; status: string | undefined }> = []
+    const lifecycle = vi
+      .spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+      .mockImplementation(async (workspace, state, visibility) => {
+        await update(workspace, state, visibility)
+        if (workspace.writerId.startsWith('coordination-')) {
+          observed.push({ lifecycle: state, status: harness.states().at(-1)?.runs?.[0]?.status })
+        }
+      })
+    try {
+      const result = await harness.run()
+      expect(result.status).toBe('completed')
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('writer\n')
+      expect(observed.map((entry) => entry.lifecycle)).toEqual([
+        'captured',
+        'integrating',
+        'integrated',
+        'cleanup-pending',
+        'cleaned',
+      ])
+      expect(observed.every((entry) => entry.status === 'running')).toBe(true)
+      expect(harness.states().at(-1)?.runs?.[0]?.status).toBe(result.status)
+    } finally {
+      lifecycle.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it.each([
+    { aborted: false, failureState: 'captured' },
+    { aborted: false, failureState: 'integrating' },
+    { aborted: false, failureState: 'cleaned' },
+    { aborted: true, failureState: 'integrating' },
+  ])(
+    'persists terminal state when aggregate finalization throws at $failureState (aborted=$aborted)',
+    async ({ aborted, failureState }) => {
+      const harness = await createBatchHarness()
+      const controller = new AbortController()
+      const update = harness.runtime.updateWorkspaceLifecycle.bind(harness.runtime)
+      const failure = new Error(`Failed at ${failureState}`)
+      const lifecycle = vi
+        .spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+        .mockImplementation(async (workspace, state, visibility) => {
+          if (workspace.writerId.startsWith('coordination-') && state === failureState) {
+            if (aborted) controller.abort()
+            throw failure
+          }
+          await update(workspace, state, visibility)
+        })
+      try {
+        await expect(harness.run(controller.signal)).rejects.toBe(failure)
+        const runs = harness.states().flatMap((state) => state.runs ?? [])
+        expect(runs.at(-1)?.status).toBe(aborted ? 'aborted' : 'failed')
+        expect(runs.at(-1)?.tasks[0]?.status).toBe('completed')
+        expect(runs.some((run) => run.status === 'completed')).toBe(false)
+        expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe(
+          failureState === 'cleaned' ? 'writer\n' : 'base\n',
+        )
+      } finally {
+        lifecycle.mockRestore()
+        await harness.close()
+      }
+    },
+    180_000,
+  )
+
+  it('persists aggregate conflicts as failed without publishing premature completion', async () => {
+    const harness = await createBatchHarness()
+    const update = harness.runtime.updateWorkspaceLifecycle.bind(harness.runtime)
+    const lifecycle = vi
+      .spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+      .mockImplementation(async (workspace, state, visibility) => {
+        if (workspace.writerId.startsWith('coordination-') && state === 'captured') {
+          await writeFile(join(harness.dir, 'shared.txt'), 'root\n')
+        }
+        await update(workspace, state, visibility)
+      })
+    try {
+      const result = await harness.run()
+      expect(result.status).toBe('failed')
+      expect(result.content).toContain('aggregate: failed')
+      expect(result.items[0]?.status).toBe('completed')
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('root\n')
+      const runs = harness.states().flatMap((state) => state.runs ?? [])
+      expect(runs.at(-1)?.status).toBe(result.status)
+      expect(runs.some((run) => run.status === 'completed')).toBe(false)
+      expect(harness.runtime.getCoordinationRun(result.runId)?.status).toBe(result.status)
+    } finally {
+      lifecycle.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+})
 
 describe('coordination primitives', () => {
   it('preserves legacy local Task role aliases', () => {

@@ -1,7 +1,8 @@
-import { truncateToWidth } from '@earendil-works/pi-tui'
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import type { DeliveryRecord } from './delivery.ts'
 import { oneLineLabel, type SubagentTheme } from './format.ts'
 import { formatMoreItems } from './jobs.ts'
 
@@ -11,7 +12,6 @@ export const ARROW_IN = '⟵'
 const QUOTE = '▏'
 const BODY_LINE_WIDTH = 80
 const BODY_LINES_COLLAPSED = 3
-const BODY_LINES_EXPANDED = 24
 
 export function quotedBody(
   body: string,
@@ -21,28 +21,35 @@ export function quotedBody(
     expanded: boolean
     indent?: string
     tone?: 'dim' | 'toolOutput'
+    width?: number
   },
 ): string[] {
+  const safeWidth = Math.max(0, Math.floor(options.width ?? BODY_LINE_WIDTH))
+  if (safeWidth === 0) return []
   const indent = options.indent ?? '  '
   const tone = options.tone ?? 'toolOutput'
   const max = options.expanded
-    ? BODY_LINES_EXPANDED
+    ? Number.POSITIVE_INFINITY
     : (options.collapsedLines ?? BODY_LINES_COLLAPSED)
   const source = body
     .split('\n')
     .map((line) => line.trimEnd())
     .filter((line) => line.trim().length > 0)
   const quote = theme.fg('dim', QUOTE)
-  const lines = source
+  const prefix = truncateToWidth(`${indent}${quote} `, Math.max(0, safeWidth - 2), '')
+  const width = Math.max(1, safeWidth - visibleWidth(prefix))
+  const wrapped = source.flatMap((line) =>
+    wrapTextWithAnsi(oneLineLabel(line, Number.POSITIVE_INFINITY), width),
+  )
+  const lines = wrapped
     .slice(0, max)
-    .map(
-      (line) =>
-        `${indent}${quote} ${theme.fg(tone, truncateToWidth(oneLineLabel(line, BODY_LINE_WIDTH + 1), BODY_LINE_WIDTH, '…'))}`,
-    )
-  const hidden = source.length - Math.min(source.length, max)
+    .map((line) => `${prefix}${theme.fg(tone, truncateToWidth(line, width, ''))}`)
+  const hidden = wrapped.length - Math.min(wrapped.length, max)
   if (hidden > 0) {
     lines.push(
-      `${indent}${quote} ${theme.fg('dim', `… +${hidden} more ${hidden === 1 ? 'line' : 'lines'}`)}`,
+      ...wrapTextWithAnsi(`+${hidden} more ${hidden === 1 ? 'line' : 'lines'}`, width).map(
+        (line) => `${prefix}${theme.fg('dim', line)}`,
+      ),
     )
   }
   return lines
@@ -80,7 +87,22 @@ const IntercomNoticeSchema = Type.Object({
   message: Type.String(),
 })
 
-const IntercomDetailsSchema = Type.Union([IntercomReplySchema, IntercomNoticeSchema])
+const IntercomRequestSchema = Type.Object({
+  agentId: Type.String(),
+  kind: Type.Literal('request'),
+  message: Type.String(),
+  requestId: Type.String(),
+})
+
+const IntercomDetailsSchema = Type.Intersect([
+  Type.Union([IntercomReplySchema, IntercomNoticeSchema, IntercomRequestSchema]),
+  Type.Object({
+    deliveryId: Type.Optional(Type.String()),
+    sentAt: Type.Optional(Type.Number()),
+    queuedAt: Type.Optional(Type.Number()),
+    deliveredAt: Type.Optional(Type.Number()),
+  }),
+])
 
 export type IntercomDetails = ReturnType<typeof decodeIntercomDetails>
 
@@ -101,28 +123,53 @@ export function renderIntercomCard(
   details: NonNullable<IntercomDetails>,
   label: string,
   timestamp: number | undefined,
-  options: { expanded: boolean; now: number },
+  options: {
+    expanded: boolean
+    now: number
+    delivery?: DeliveryRecord | undefined
+    width?: number
+  },
   theme: SubagentTheme,
 ): string[] {
-  const age = timestamp === undefined ? undefined : formatAge(options.now - timestamp)
-  const peer = theme.fg('accent', theme.bold(oneLineLabel(label, 48)))
+  const sentAt = options.delivery?.sentAt ?? details.sentAt
+  const createdAt = sentAt ?? timestamp
+  const age = createdAt === undefined ? undefined : formatAge(options.now - createdAt)
+  const peer = theme.fg('accent', theme.bold(oneLineLabel(label, Number.POSITIVE_INFINITY)))
   const meta: string[] = []
   if (details.kind === 'notification' && details.level !== 'info') {
     meta.push(theme.fg(details.level, details.level))
   }
-  if (age !== undefined) meta.push(age)
+  if (age !== undefined) meta.push(sentAt === undefined ? age : `sent ${age} ago`)
+  const receipt = options.delivery
+  if (receipt !== undefined) {
+    meta.push(receipt.state)
+    if (receipt.deliveredAt !== undefined)
+      meta.push(`queue ${formatAge(receipt.deliveredAt - receipt.queuedAt)}`)
+  }
+  if (details.kind === 'request') meta.push('coordinator decision')
+  if (details.kind === 'automatic-reply') meta.push('advisory only')
   const header = `${theme.fg('accent', MAIL_ICON)} ${theme.fg('accent', `IRC ${ARROW_IN}`)} ${peer}${meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''}`
-  if (details.kind === 'notification') {
+  if (details.kind === 'notification' || details.kind === 'request') {
     return [
       header,
-      ...quotedBody(unescapeXml(details.message), theme, { expanded: options.expanded }),
+      ...quotedBody(unescapeXml(details.message), theme, {
+        expanded: options.expanded,
+        width: options.width ?? BODY_LINE_WIDTH,
+      }),
     ]
   }
   return [
     header,
-    ...quotedBody(unescapeXml(details.question), theme, { expanded: options.expanded }),
-    `  ${theme.fg('dim', ARROW_OUT)} ${theme.fg('accent', 'parent')} ${theme.fg('dim', 'auto')}`,
-    ...quotedBody(unescapeXml(details.reply), theme, { expanded: options.expanded, tone: 'dim' }),
+    ...quotedBody(unescapeXml(details.question), theme, {
+      expanded: options.expanded,
+      width: options.width ?? BODY_LINE_WIDTH,
+    }),
+    `  ${theme.fg('dim', ARROW_OUT)} ${theme.fg('accent', 'advisor')} ${theme.fg('dim', 'not authorization')}`,
+    ...quotedBody(unescapeXml(details.reply), theme, {
+      expanded: options.expanded,
+      tone: 'dim',
+      width: options.width ?? BODY_LINE_WIDTH,
+    }),
   ]
 }
 

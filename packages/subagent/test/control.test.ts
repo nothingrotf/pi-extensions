@@ -284,9 +284,9 @@ describe('task control wait', () => {
       theme,
     ).map((line) => stripTerminalSequences(line))
     expect(card).toEqual([
-      '✉ IRC ⟵ a lane 1m',
+      '✉ IRC ⟵ a lane 1m · advisory only',
       '  ▏ Which branch?',
-      '  ➤ parent auto',
+      '  ➤ advisor not authorization',
       '  ▏ Use main.',
     ])
     expect(decodeIntercomDetails({ kind: 'other' })).toBeUndefined()

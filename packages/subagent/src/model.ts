@@ -1,13 +1,13 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { Model, Api } from '@earendil-works/pi-ai'
 import type { ExtensionContext, ModelRuntime } from '@earendil-works/pi-coding-agent'
+import { getFastSupport } from '@nothingrotf/fast-mode/policy'
 import { Value } from 'typebox/value'
 
 import type { RoleDefinition } from './roles.ts'
 import { EffortSchema, type Effort } from './schema.ts'
 
 const FAST_SUFFIX = ' [fast]'
-const FAST_MODELS = new Set(['openai-codex/gpt-5.6-luna', 'openai-codex/gpt-5.6-sol'])
 const RESERVED_SELECTORS = new Set(['auto', 'default', 'inherit'])
 
 export interface ResolvedModel {
@@ -70,9 +70,13 @@ function findExactModel(runtime: ModelRuntime, reference: string): Model<Api> {
   return model
 }
 
-function validateFast(reference: string, fast: boolean): void {
-  if (fast && !FAST_MODELS.has(reference)) {
-    throw new Error(`Model "${reference}" does not support the [fast] selector.`)
+function validateFast(model: Model<Api>, fast: boolean): void {
+  if (!fast) return
+  const support = getFastSupport(model)
+  if (!support.supported) {
+    throw new Error(
+      `Model "${modelRef(model)}" does not support the [fast] selector. ${support.reason}`,
+    )
   }
 }
 
@@ -110,7 +114,7 @@ export function resolveStoredModel(
 ): ResolvedModel {
   const model = findExactModel(runtime, reference)
   validateEffort(model, effort)
-  validateFast(reference, fast)
+  validateFast(model, fast)
   return {
     effort,
     fast,
@@ -142,7 +146,7 @@ export function resolveModel(
     selectEffort(parsed, role, ctx),
     parsed.effort !== undefined,
   )
-  validateFast(reference, parsed.fast)
+  validateFast(model, parsed.fast)
 
   const normalized = `${reference}:${effort}${parsed.fast ? FAST_SUFFIX : ''}`
   return {

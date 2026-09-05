@@ -10,9 +10,9 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
-import { Type } from 'typebox'
-import { Value } from 'typebox/value'
+import { applyFastTier, getFastSupport } from '@nothingrotf/fast-mode/policy'
 
+import { createDecisionTool } from './decisions.ts'
 import {
   CHILD_INTERCOM_TOOL_NAMES,
   CHILD_MAILBOX_TOOL_NAMES,
@@ -20,8 +20,6 @@ import {
   type ChildIntercomHandlers,
 } from './intercom.ts'
 import { toThinkingLevel, type ResolvedModel } from './model.ts'
-
-const ProviderPayloadSchema = Type.Object({}, { additionalProperties: true })
 
 function errorMessage<Input>(error: Input): string {
   if (error instanceof Error) return error.message
@@ -39,10 +37,10 @@ export class ChildSessionError extends Error {
 
 const fastModeExtension: InlineExtension = {
   factory: (pi) => {
-    pi.on('before_provider_request', (event) => {
-      if (!Value.Check(ProviderPayloadSchema, event.payload)) return event.payload
-      const payload = Value.Decode(ProviderPayloadSchema, event.payload)
-      return { ...payload, service_tier: 'priority' }
+    pi.on('before_provider_request', (event, ctx) => {
+      const support = getFastSupport(ctx.model)
+      if (!support.supported) throw new Error(support.reason)
+      return applyFastTier(event.payload, support.tier)
     })
   },
   hidden: true,
@@ -88,6 +86,7 @@ export interface CreateChildOptions {
   description: string
   extensions: readonly InlineExtension[]
   intercom: ChildIntercomHandlers
+  requestParent: (question: string, signal?: AbortSignal) => Promise<string>
   model: ResolvedModel
   resumeFile: string | undefined
   runtime: ModelRuntime
@@ -124,14 +123,14 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
       ? CHILD_INTERCOM_TOOL_NAMES
       : [...CHILD_INTERCOM_TOOL_NAMES, ...CHILD_MAILBOX_TOOL_NAMES]
   const created = await createAgentSession({
-    customTools: intercomTools,
+    customTools: [...intercomTools, createDecisionTool(options.requestParent)],
     cwd: options.cwd,
     model: options.model.model,
     modelRuntime: options.runtime,
     resourceLoader,
     sessionManager,
     thinkingLevel: toThinkingLevel(options.model.effort),
-    tools: [...options.tools, ...intercomToolNames],
+    tools: [...options.tools, ...intercomToolNames, 'request_parent'],
   })
 
   if (created.modelFallbackMessage !== undefined) {

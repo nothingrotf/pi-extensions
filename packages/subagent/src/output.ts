@@ -10,13 +10,13 @@ import {
   type ArtifactRef,
   type GateDefinition,
   type GateResult,
+  decodeJsonValue,
   isJsonBoolean,
   isJsonNumber,
   isJsonObject,
   isJsonString,
   type JsonObject,
   type JsonValue,
-  JsonValueSchema,
   type SchemaMode,
   type StructuredOutput,
 } from './schema.ts'
@@ -174,11 +174,11 @@ export function jsonEquals(left: JsonValue, right: JsonValue): boolean {
   if (isJsonObject(left) || isJsonObject(right)) {
     if (!isJsonObject(left) || !isJsonObject(right)) return false
     const leftEntries = entries(left)
-    const rightEntries = entries(right)
-    if (leftEntries.length !== rightEntries.length) return false
+    const rightEntries = new Map(entries(right))
+    if (leftEntries.length !== rightEntries.size) return false
     return leftEntries.every(([key, item]) => {
-      const candidate = rightEntries.find(([rightKey]) => rightKey === key)
-      return candidate !== undefined && jsonEquals(item, candidate[1])
+      const candidate = rightEntries.get(key)
+      return candidate !== undefined && jsonEquals(item, candidate)
     })
   }
   return left === right
@@ -215,8 +215,9 @@ function validateParsed(schema: ParsedSchema, value: JsonValue, path: string): s
       return `${path} must be an object.`
     }
     const valueEntries = entries(value)
+    const valueKeys = new Set(valueEntries.map(([key]) => key))
     for (const required of schema.required) {
-      if (!valueEntries.some(([key]) => key === required)) return `${path}/${required} is required.`
+      if (!valueKeys.has(required)) return `${path}/${required} is required.`
     }
     for (const [key, item] of valueEntries) {
       const propertySchema = schema.properties.get(key)
@@ -261,7 +262,7 @@ export function resolveStructuredOutput(
   if (schema === undefined) return undefined
   let data: JsonValue
   try {
-    data = Value.Decode(JsonValueSchema, JSON.parse(stripJsonFence(output)))
+    data = decodeJsonValue(JSON.parse(stripJsonFence(output)))
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : String(error),

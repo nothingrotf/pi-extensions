@@ -4,6 +4,7 @@ import {
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 
 import type { SubagentSnapshot } from './runtime.ts'
@@ -188,58 +189,45 @@ function activity(snapshot: SubagentSnapshot): { detail: string; tool: string } 
     : { detail: value.slice(separator + 1), tool: value.slice(0, separator).toLowerCase() }
 }
 
-function rowColumns(width: number): {
-  detail: boolean
-  model: number
-  name: number
-  sigil: boolean
-  tokens: boolean
-  tool: number
-} {
-  if (width >= 96) return { detail: true, model: 12, name: 12, sigil: true, tokens: true, tool: 20 }
-  if (width >= 76)
-    return { detail: false, model: 11, name: 11, sigil: false, tokens: true, tool: 16 }
-  if (width >= 56)
-    return { detail: false, model: 0, name: 10, sigil: false, tokens: true, tool: 14 }
-  return { detail: false, model: 0, name: 9, sigil: false, tokens: false, tool: 8 }
-}
-
 function agentRow(
   snapshot: SubagentSnapshot,
   connector: string,
   width: number,
   theme: SubagentTheme,
   now: number,
-): string {
-  const columns = rowColumns(width)
+): string[] {
   const current = activity(snapshot)
-  const name = truncateToWidth(oneLineLabel(snapshot.description), columns.name, '…').padEnd(
-    columns.name,
-  )
-  const model =
-    columns.model === 0
-      ? ''
-      : ` ${truncateToWidth(modelName(snapshot.model), columns.model - 1, '…').padEnd(columns.model - 1)}`
-  const tool = truncateToWidth(current.tool, Math.max(1, columns.tool - 1), '…').padEnd(
-    Math.max(1, columns.tool - 1),
-  )
+  const name = oneLineLabel(snapshot.description, Number.POSITIVE_INFINITY)
   const tokens = snapshot.usage.input + snapshot.usage.output
-  const tokenText = columns.tokens && tokens > 0 ? ` ${formatTokens(tokens).padStart(6)}` : ''
-  const detail = columns.detail && current.detail.length > 0 ? `   ${current.detail}` : ''
   const tone = rowTone(snapshot)
-  const sigil = columns.sigil ? `${theme.fg(tone, roleSigil(snapshot.subagentType))} ` : ''
+  const sigil = width >= 96 ? `${theme.fg(tone, roleSigil(snapshot.subagentType))} ` : ''
   const nameText = snapshot.running ? theme.bold(theme.fg('text', name)) : theme.fg('muted', name)
-  return [
-    theme.fg('dim', `${connector} `),
-    sigil,
-    theme.fg(tone, face(snapshot, now)),
-    ' ',
+  const prefix = `${theme.fg('dim', `${connector} `)}${sigil}${theme.fg(tone, face(snapshot, now))} `
+  const body = [
     nameText,
-    theme.fg('dim', model),
-    theme.fg(tone, ` ${tool}`),
-    theme.fg('dim', tokenText),
-    detail.length > 0 ? theme.fg('dim', detail) : '',
-  ].join('')
+    width >= 76
+      ? theme.fg('dim', oneLineLabel(modelName(snapshot.model), Number.POSITIVE_INFINITY))
+      : '',
+    theme.fg(tone, current.tool),
+    width >= 56 && tokens > 0 ? theme.fg('dim', formatTokens(tokens)) : '',
+    width >= 96 && current.detail ? theme.fg('dim', current.detail) : '',
+  ]
+    .filter(Boolean)
+    .join('  ')
+  const prefixWidth = visibleWidth(prefix)
+  if (width <= prefixWidth) {
+    return wrapTextWithAnsi(`${prefix}${body}`, Math.max(1, width)).map((line) =>
+      truncateToWidth(line, width, ''),
+    )
+  }
+  const continuation =
+    connector === TREE_LAST
+      ? ' '.repeat(prefixWidth)
+      : `${theme.fg('dim', '│')}${' '.repeat(prefixWidth - 1)}`
+  return wrapTextWithAnsi(body, width - prefixWidth).map(
+    (line, index) =>
+      `${index === 0 ? prefix : continuation}${truncateToWidth(line, width - prefixWidth, '')}`,
+  )
 }
 
 function panelTone(snapshots: readonly SubagentSnapshot[], background: boolean): ThemeColor {
@@ -293,7 +281,7 @@ function groupLines(
   visible.forEach((snapshot, index) => {
     const connector =
       index === visible.length - 1 && snapshots.length <= visible.length ? TREE_LAST : TREE_BRANCH
-    rows.push(agentRow(snapshot, connector, panelWidth, theme, now))
+    rows.push(...agentRow(snapshot, connector, panelWidth, theme, now))
   })
   if (snapshots.length > visible.length) {
     rows.push(theme.fg('dim', `${TREE_LAST} +${snapshots.length - visible.length} more`))

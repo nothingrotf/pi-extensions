@@ -33,6 +33,9 @@
     "check": "vp check",
     "test": "vp test run"
   },
+  "dependencies": {
+    "@nothingrotf/fast-mode": "workspace:^"
+  },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "catalog:",
     "@earendil-works/pi-ai": "catalog:",
@@ -47,6 +50,9 @@
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
+  "bundledDependencies": [
+    "@nothingrotf/fast-mode"
+  ],
   "pi": {
     "extensions": [
       "./src/index.ts"

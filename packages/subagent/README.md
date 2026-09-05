@@ -34,9 +34,13 @@ Task({
   description: 'Implement the fix',
   prompt: 'Implement the requested fix and run focused tests.',
   subagent_type: 'generalPurpose',
-  model: 'openai-codex/gpt-5.6-sol:high [fast]',
+  model: 'openai-codex/gpt-6-astra:high [fast]',
 })
 ```
+
+The `[fast]` selector uses the shared policy from `@nothingrotf/fast-mode`.
+It accepts supported Codex models, including Astra, and respects explicit service tiers from the Codex catalog.
+It does not inherit the parent's global Fast Mode preference.
 
 Set `run_in_background` to `true` to return the Agent ID after session creation.
 
@@ -123,6 +127,10 @@ TaskControl({
 
 Cancellation preserves an isolated writer patch. The runtime rejects joins for failed or aborted runs.
 
+Cancellation returns `integration-started` after physical integration begins. This result does not promise a zero-write stop.
+
+A join excludes concurrent joins and resumes for the same child. Shutdown closes admission and drains pending joins.
+
 For a zero-write order, cancel an isolated writer. The `steer` action cannot stop a child before its next write.
 
 Cancellation cannot revert changes from a non-isolated foreground Task.
@@ -148,7 +156,9 @@ TaskControl({
 })
 ```
 
-Omit `agent_ids` to watch every running Task. The call returns on the first of: a watched Task settles, the timeout elapses, or the call is aborted. It does not wait for every Task. Re-issue `wait` to keep waiting. Each settled result still arrives as a follow-up message.
+Omit `agent_ids` to watch every running Task. The call returns when a watched Task settles, requests a coordinator decision, times out, or receives an abort signal.
+
+It does not wait for every Task. Re-issue `wait` to continue. Completion notices use steering at the next safe context boundary.
 
 While `wait` runs, the tool result streams the same job tree as a foreground Task call, and the working loader shows `Waiting on N jobs`. After the call settles, the tree keeps only the settled rows.
 
@@ -219,9 +229,19 @@ The artifact metadata includes:
 - byte and line counts.
 - a media type.
 
-Graph state, workspace state, artifact metadata, isolation attempt history, and child records enter version 6 of the persisted parent state.
+Graph state, workspace state, artifact metadata, isolation attempts, and child records use version 6 checkpoints with version 7 incremental journal entries.
 
-The version 6 migration preserves older terminal records and artifact references.
+Each incremental entry references the previous state entry. Replay validates the active branch and rejects disconnected journals.
+
+Checkpoint frequency depends on both entry count and accumulated bytes. This avoids repeating large retained states after every mutation.
+
+Failed persistence rolls back the in-memory mutation. Replay preserves older version 1 through version 6 state and artifact references.
+
+Sessions containing version 7 entries require the updated runtime. Older runtimes cannot replay the incremental journal.
+
+The state retains 256 unpinned terminal Tasks plus records required by active descendant scopes or unresolved deliveries.
+
+Descendant scopes retain completion signals without completed output payloads. Closure releases their record pins and scope metadata.
 
 Graph children also receive these private tools:
 
@@ -521,13 +541,55 @@ Use the shared event bus registration contract between separately installed pack
 
 Each child receives these private tools:
 
-- `ask_parent` runs an isolated side turn with the current parent model.
-- `notify_parent` sends a non-blocking update and starts a parent turn.
+- `ask_parent` requests advisory guidance from an isolated side turn with the current parent model.
+- `request_parent` waits for an explicit decision from the actual coordinator.
+- `notify_parent` queues a non-blocking update for the next safe context boundary.
 - `update_progress` changes the live activity text without starting a parent turn.
 
-`ask_parent` copies a bounded parent conversation snapshot into an in-memory session. It removes tool traffic, redacts common secret formats, and uses a fixed supervisor prompt. The side turn has no tools and a two-minute timeout.
+`ask_parent` copies a bounded, redacted conversation snapshot into an in-memory session. It preserves recognized coordination contracts and excludes arbitrary tool traffic. The side turn has no tools and a two-minute timeout.
 
-The parent model answers directly. The user does not need to reply. The final question and automatic answer enter the parent transcript as a `subagent-intercom` message.
+An advisory answer cannot authorize scope changes or claim that the actual coordinator replied. The question and advisory answer enter the transcript as a `subagent-intercom` message.
+
+Only direct background Tasks can wait through `request_parent`. Foreground, nested, and graph Tasks fail closed with handoff guidance instead of blocking their coordinator.
+
+Inspect pending notices and decision requests:
+
+```ts
+TaskControl({ action: 'inbox', agent_id: '<agent-id>' })
+```
+
+Reply to the matching pending request:
+
+```ts
+TaskControl({
+  action: 'reply',
+  agent_id: '<agent-id>',
+  request_id: '<request-id>',
+  message: 'Keep the original scope. Do not modify deployment settings.',
+})
+```
+
+Timeout, cancellation, and stale ownership never imply authorization. `TaskControl wait` returns `attention` when a watched child needs a coordinator decision.
+
+Notices persist before dispatch. Receipt states distinguish `queued`, `delivered`, `acknowledged`, `cancelled`, `superseded`, and `failed`.
+
+`delivered` means that a context hook supplied the notice to the model. It does not prove attention or acknowledgment.
+
+Acknowledge a notice explicitly:
+
+```ts
+TaskControl({ action: 'acknowledge', agent_id: '<agent-id>', delivery_id: '<delivery-id>' })
+```
+
+The journal deduplicates pending identical notices and rejects overflow above 256 unresolved messages. It retains up to 512 receipt records in memory.
+
+Pruning preserves unresolved receipts and suppresses transcript references whose settled receipts no longer remain in memory.
+
+Completion overflow records a failed delivery without changing the completed task result. Inspect `inbox` and `status` for those results. Overflow does not automatically retry.
+
+Compaction pauses dispatch without discarding queued notices. Restore replays eligible notices at the next context boundary without starting a turn immediately.
+
+Delivery cannot interrupt an in-flight tool or model request. Dispatch errors remain in the receipt for inspection and recovery at the next context boundary.
 
 Side turns use additional model tokens and cost. `intercomUsage` reports them separately from child usage.
 
@@ -535,9 +597,13 @@ A side turn preserves the provider, model, and thinking level available through 
 
 The side turn does not guarantee the parent hooks, cache identity, transport, retry state, or effective service tier.
 
+Snapshot construction materializes recent text within the byte budget instead of redacting the complete parent history.
+
+A provider that ignores abort cannot hold the advisory caller beyond its deadline. Its internal operation still requires cooperative cancellation.
+
 ## TUI
 
-The transcript frames follow the oh-my-pi task renderer inside the Pi tool frame.
+The transcript renders task frames inside the Pi tool frame.
 
 A `Task` call shows the dispatch glyph, the agent type, the brief as muted markdown, and one row per agent:
 
@@ -560,25 +626,29 @@ The result replaces the agent rows with live rows. A running row shows the tool 
 
 `TaskControl` results use the same rows for `status` and `list`, receipt lines for `steer`, `cancel`, and `join`, and the job tree for `wait` and `jobs`. Intercom messages between a child and the parent render as IRC cards with quoted bodies.
 
-The editor dock uses separate Empryo-style panels for foreground dispatches and background Tasks:
+IRC cards wrap quoted text at the terminal width instead of clipping each line at 80 columns.
+Collapsed cards show three visual lines and an explicit hidden-line count. Expanded cards show the full quoted body.
+
+The editor dock uses separate panels for foreground dispatches and background Tasks:
 
 ```text
-    ╭─ 󰚩 dispatch · 2 ▾ ─────────────── 12s ─╮
-    │  ◉ opus                                  │
-    │  ├─ ✧ (◉‿◉) Inspect code  opus  read     │
-    │  ╰─ ❖ (◉‿◉) Run checks    opus  bash     │
-    ╰─ ↯ inspect in the panel ────── ctrl+shift+a ─╯
+   󰚩 dispatch · 2 ▾                              12s
+   ◉ opus
+   ├─ ✧ (◉‿◉) Inspect code  opus  read
+   ╰─ ❖ (◉‿◉) Run checks  opus  bash
+   ↯ inspect in the panel                ctrl+shift+a
 ```
 
-The responsive side inset uses one to four columns. Each panel uses a rounded border and a title chip.
+Panels use a three-column inset when space permits. Titles and footer actions retain their left and right alignment.
 
 Each row can show these fields:
 
 - A role sigil and an agent face.
-- A fixed-width description and model.
+- The full description and model.
 - The current tool, token count, and activity detail.
 
-The column set changes at widths of 56, 76, and 96 columns. Each panel shows at most five Tasks.
+Metadata visibility changes at widths of 56, 76, and 96 columns. Each panel shows at most five Tasks.
+Names use the available row width and wrap with aligned continuation rows instead of ending in an ellipsis.
 
 Completed rows remain for 1.4 seconds. The footer reports transcript transfer during this interval.
 

@@ -251,6 +251,7 @@ async function planMerge(
 }
 
 export async function integrateRepositories(options: {
+  beforeApply?: (() => void) | undefined
   artifactRoot: string
   destinationWorkspaceId: string
   owner: LockOwner
@@ -402,6 +403,7 @@ export async function integrateRepositories(options: {
       if (beforeTree !== entry.plan.currentTree) {
         throw new Error('The destination tree changed during integration.')
       }
+      options.beforeApply?.()
       if (entry.plan.currentTree !== entry.plan.mergedTree) {
         await git(entry.repoRoot, ['apply', '--binary', '--whitespace=nowarn', entry.patchPath])
       }

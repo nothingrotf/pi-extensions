@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { getEventListeners } from 'node:events'
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +17,8 @@ import type {
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import {
   createAgentSession,
+  CustomMessageComponent,
+  initTheme,
   DefaultResourceLoader,
   type ExtensionAPI,
   type ExtensionContext,
@@ -23,6 +26,7 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 import { describe, expect, it } from 'vite-plus/test'
@@ -41,7 +45,8 @@ import {
 } from '../src/index.ts'
 import { redactSensitiveText } from '../src/intercom.ts'
 import { SubagentRuntime } from '../src/runtime.ts'
-import { RuntimeStateSchema, TaskInputSchema, type TaskInput } from '../src/schema.ts'
+import { TaskInputSchema, type TaskInput } from '../src/schema.ts'
+import { latestState as readLatestState } from '../src/state.ts'
 import { ManifestSchema } from '../src/workspace.ts'
 
 const execFileAsync = promisify(execFile)
@@ -52,6 +57,7 @@ interface Deferred {
 }
 
 interface ProviderState {
+  autoReplyToDecision: boolean
   batch: TaskInput[]
   blocked: Array<() => void>
   blockedReady: Deferred
@@ -59,6 +65,7 @@ interface ProviderState {
   inputs: TaskInput[]
   notification: Deferred
   parentNotices: string[]
+  parentRequests: number
   payloads: unknown[]
   requests: Array<Promise<void>>
   sideContextPrompts: string[][]
@@ -171,11 +178,41 @@ function parentMessage(
   context: Context,
   state: ProviderState,
 ): AssistantMessage {
+  state.parentRequests += 1
   const prompts = userPrompts(context)
   const notification = prompts.some((prompt) => prompt.includes('Task notification:'))
   if (notification) state.notification.resolve()
   const intercomNotice = prompts.find((prompt) => prompt.includes('<subagent-notice'))
   if (intercomNotice !== undefined) state.parentNotices.push(intercomNotice)
+
+  const request = prompts.find((prompt) => prompt.startsWith('Parent decision requested by Task '))
+  const match = request?.match(/Task ([\w-]+)\. Request ID: ([\w-]+)\./)
+  const requestAgent = match?.[1]
+  const requestId = match?.[2]
+  if (
+    state.autoReplyToDecision &&
+    requestAgent !== undefined &&
+    requestId !== undefined &&
+    !toolResultText(context, 'TaskControl')?.includes(requestId)
+  ) {
+    return assistant(
+      model,
+      [
+        {
+          type: 'toolCall',
+          id: `reply-${requestId}`,
+          name: 'TaskControl',
+          arguments: {
+            action: 'reply',
+            agent_id: requestAgent,
+            request_id: requestId,
+            message: 'No. Preserve the assigned scope.',
+          },
+        },
+      ],
+      'toolUse',
+    )
+  }
 
   const control = state.controls.shift()
   if (control !== undefined) {
@@ -288,6 +325,23 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
       ],
       'toolUse',
     )
+  }
+  if (prompt === 'REQUEST_PARENT') {
+    const decision = toolResultText(context, 'request_parent')
+    return decision === undefined
+      ? assistant(
+          model,
+          [
+            {
+              type: 'toolCall',
+              id: 'request-decision',
+              name: 'request_parent',
+              arguments: { question: 'May I edit a file outside my assigned scope?' },
+            },
+          ],
+          'toolUse',
+        )
+      : assistant(model, [{ type: 'text', text: `decision:${decision}` }], 'stop')
   }
   if (prompt === 'REPORT_PARENT') {
     const notified = toolResultText(context, 'notify_parent')
@@ -475,7 +529,11 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
       'toolUse',
     )
   }
-  if (prompt === 'NESTED_BACKGROUND_WRITE' || prompt === 'NESTED_BACKGROUND_FAIL') {
+  if (
+    prompt === 'NESTED_BACKGROUND_WRITE' ||
+    prompt === 'NESTED_BACKGROUND_FAIL' ||
+    prompt === 'NESTED_BACKGROUND_BLOCK'
+  ) {
     const nested = toolResultText(context, 'Task')
     if (nested !== undefined) {
       return prompt === 'NESTED_BACKGROUND_FAIL'
@@ -489,7 +547,7 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
           arguments: {
             description: 'Write from a background nested workspace',
             isolation: { integration: 'apply', mode: 'worktree' },
-            prompt: 'WRITE_ISOLATED',
+            prompt: prompt === 'NESTED_BACKGROUND_BLOCK' ? 'WRITE_THEN_BLOCK' : 'WRITE_ISOLATED',
             run_in_background: true,
             subagent_type: 'generalPurpose',
           },
@@ -521,6 +579,30 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
           id: `nested-write-${Date.now()}`,
           name: 'Task',
           type: 'toolCall',
+        },
+      ],
+      'toolUse',
+    )
+  }
+  if (prompt === 'NESTED_MANY') {
+    const completed = context.messages.filter(
+      (message) => message.role === 'toolResult' && message.toolName === 'Task',
+    ).length
+    if (completed >= 257)
+      return assistant(model, [{ text: 'All 257 descendants completed.', type: 'text' }], 'stop')
+    return assistant(
+      model,
+      [
+        {
+          type: 'toolCall',
+          name: 'Task',
+          id: `many-${completed}`,
+          arguments: {
+            description: `Descendant ${completed}`,
+            prompt: 'RETURN_TOOLS',
+            subagent_type: 'explore',
+            readonly: true,
+          },
         },
       ],
       'toolUse',
@@ -713,10 +795,21 @@ function streamResponse(
 
 function providerConfig(state: ProviderState): ProviderConfig {
   return {
-    api: 'subagent-test',
+    api: 'openai-codex-responses',
     apiKey: 'test-key',
     baseUrl: 'http://127.0.0.1/unused',
     models: [
+      {
+        api: 'openai-codex-responses',
+        contextWindow: 272_000,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+        id: 'gpt-6-astra',
+        input: ['text'],
+        maxTokens: 128_000,
+        name: 'Test Astra',
+        reasoning: true,
+        thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high' },
+      },
       {
         contextWindow: 100_000,
         cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
@@ -763,6 +856,7 @@ async function createHarness(restoreRecordCount = 0, runTimeoutMs?: number): Pro
   const dir = await mkdtemp(join(tmpdir(), 'pi-subagent-'))
   await writeFile(join(dir, 'AGENTS.md'), 'PROJECT_CONTEXT_SENTINEL\n')
   const state: ProviderState = {
+    autoReplyToDecision: false,
     batch: [],
     blocked: [],
     blockedReady: deferred(),
@@ -770,6 +864,7 @@ async function createHarness(restoreRecordCount = 0, runTimeoutMs?: number): Pro
     inputs: [],
     notification: deferred(),
     parentNotices: [],
+    parentRequests: 0,
     payloads: [],
     requests: [],
     sideContextPrompts: [],
@@ -921,13 +1016,10 @@ function agentId(text: string): string {
 }
 
 function latestState(harness: Harness) {
-  let state: ReturnType<typeof Value.Decode<typeof RuntimeStateSchema>> | undefined
-  for (const entry of harness.session.sessionManager.getBranch()) {
-    if (entry.type !== 'custom' || entry.customType !== 'pi-subagent-state') continue
-    try {
-      state = Value.Decode(RuntimeStateSchema, entry.data)
-    } catch {}
-  }
+  const state = readLatestState(
+    harness.session.sessionManager.getBranch(),
+    harness.session.sessionManager.getSessionId(),
+  )
   if (state === undefined) throw new Error('The parent contains no subagent state.')
   return state
 }
@@ -947,6 +1039,89 @@ const baseInput: TaskInput = {
 }
 
 describe('subagent Task integration', () => {
+  it('reflows IRC cards at the actual terminal width without losing expanded text', async () => {
+    const harness = await createHarness()
+    try {
+      initTheme('dark')
+      const body =
+        'A complete report with evidence that must remain visible after resizing. '.repeat(3) +
+        'FINAL EVIDENCE'
+      const renderer = harness.session.extensionRunner.getMessageRenderer('subagent-intercom')
+      expect(renderer).toBeDefined()
+      const component = new CustomMessageComponent(
+        {
+          role: 'custom',
+          customType: 'subagent-intercom',
+          content: body,
+          display: true,
+          timestamp: 0,
+          details: { agentId: 'card-probe', kind: 'notification', level: 'info', message: body },
+        },
+        renderer,
+      )
+      expect(component.render(240).join('\n')).toContain('FINAL EVIDENCE')
+      component.setExpanded(true)
+      const narrow = component.render(40)
+      const recovered = narrow
+        .map(stripTerminalSequences)
+        .filter((line) => line.includes('▏'))
+        .map((line) => line.slice(line.indexOf('▏') + 1).trim())
+        .join(' ')
+      expect(recovered).toBe(body)
+      expect(narrow.every((line) => visibleWidth(line) <= 40)).toBe(true)
+      expect(narrow.join('\n')).not.toContain('…')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('refreshes existing transcript cards after delivery and acknowledgment', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      initTheme('dark')
+      const journal = harness.runtime.deliveries
+      journal.pause()
+      const receipt = journal.enqueue({
+        agentId: 'card-probe',
+        content: 'Card probe',
+        customType: 'subagent-intercom',
+        display: true,
+        kind: 'notice',
+        level: 'warning',
+        ownerSessionId: harness.session.sessionManager.getSessionId(),
+        runGeneration: 1,
+      })
+      const renderer = harness.session.extensionRunner.getMessageRenderer('subagent-intercom')
+      expect(renderer).toBeDefined()
+      const component = new CustomMessageComponent(
+        {
+          role: 'custom',
+          customType: 'subagent-intercom',
+          content: 'Card probe',
+          display: true,
+          timestamp: receipt.sentAt,
+          details: {
+            agentId: receipt.agentId,
+            kind: 'notification',
+            level: receipt.level,
+            message: receipt.content,
+            deliveryId: receipt.id,
+          },
+        },
+        renderer,
+      )
+      expect(component.render(100).join('\n')).toContain('queued')
+      journal.context([], () => true)
+      expect(component.render(100).join('\n')).toContain('delivered')
+      journal.acknowledge(receipt.id)
+      expect(component.render(100).join('\n')).toContain('acknowledged')
+      expect(component.render(100).join('\n')).not.toContain('queued')
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('redacts common credential formats from side-channel text', () => {
     const secrets = [
       'AWS_SECRET_ACCESS_KEY=abcdefghijklmnopqrstuvwxyz1234567890',
@@ -1040,7 +1215,9 @@ describe('subagent Task integration', () => {
         subagent_type: 'explore',
       })
       const id = agentId(result)
-      expect(result).toContain('tools:ask_parent,find,grep,ls,notify_parent,read,update_progress')
+      expect(result).toContain(
+        'tools:ask_parent,find,grep,ls,notify_parent,read,request_parent,update_progress',
+      )
       expect(result).not.toContain('write')
       expect(result).not.toContain('edit')
       expect(result).not.toContain('Task')
@@ -1300,7 +1477,9 @@ describe('subagent Task integration', () => {
         prompt: 'RETURN_PROFILE',
         subagent_type: 'Comment Sicko',
       })
-      expect(first).toContain('profile:custom;tools:ask_parent,notify_parent,read,update_progress')
+      expect(first).toContain(
+        'profile:custom;tools:ask_parent,notify_parent,read,request_parent,update_progress',
+      )
       const id = agentId(first)
       const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
       expect(record?.execution).toMatchObject({
@@ -1319,7 +1498,7 @@ describe('subagent Task integration', () => {
         subagent_type: 'Comment Sicko',
       })
       expect(resumed).toContain(
-        'profile:custom;tools:ask_parent,notify_parent,read,update_progress',
+        'profile:custom;tools:ask_parent,notify_parent,read,request_parent,update_progress',
       )
     } finally {
       unregister()
@@ -1490,7 +1669,7 @@ describe('subagent Task integration', () => {
         subagent_type: 'file-agent',
       })
       expect(first).toContain(
-        'profile:file;tools:ask_parent,grep,notify_parent,read,update_progress',
+        'profile:file;tools:ask_parent,grep,notify_parent,read,request_parent,update_progress',
       )
       const id = agentId(first)
       const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
@@ -1792,14 +1971,15 @@ describe('subagent Task integration', () => {
         description: 'Ask the parent model',
         prompt: 'ASK_PARENT',
       })
-      expect(result).toContain('guided:Use @nothingrotf/pi-extensions.')
+      expect(result).toContain('guided:Advisory only, not a live-parent decision')
+      expect(result).toContain('Use @nothingrotf/pi-extensions.')
       expect(harness.state.sideQuestions).toHaveLength(1)
       expect(harness.state.sideQuestions[0]).toContain(
         'Which workspace name did the parent request?',
       )
       expect(harness.state.sideSystemPrompts[0]).not.toContain('PROJECT_CONTEXT_SENTINEL')
       expect(harness.state.sideSystemPrompts[0]).toContain(
-        'You answer a child agent on behalf of its parent model.',
+        'You provide advisory guidance in a separate side turn, not a reply from the live parent agent.',
       )
       expect(harness.state.sideToolNames[0]).toEqual([])
       expect(harness.state.sideContextPrompts[0]?.join('\n')).toContain(
@@ -1831,7 +2011,8 @@ describe('subagent Task integration', () => {
         description: 'Test parent context isolation',
         prompt: 'ASK_PARENT_SECRET',
       })
-      expect(result).toContain('guided:api_key=[REDACTED]')
+      expect(result).toContain('guided:Advisory only')
+      expect(result).toContain('api_key=[REDACTED]')
       expect(result).not.toContain('sidechannel-secret-12345')
       const sideContext = harness.state.sideContextPrompts.flat().join('\n')
       expect(sideContext).not.toContain('parent-secret-12345')
@@ -1865,6 +2046,263 @@ describe('subagent Task integration', () => {
       )
       expect(notice).toBeDefined()
       expect(harness.state.parentNotices).toHaveLength(1)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('removes the abort listener when a controller wait completes', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      const receipt = await harness.controller.start({
+        ctx: harness.context(),
+        input: { ...baseInput, prompt: 'BLOCK', readonly: true },
+      })
+      await harness.state.blockedReady.promise
+      const controller = new AbortController()
+      const waiting = harness.controller.wait(receipt.handle, controller.signal)
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+      for (const release of harness.state.blocked.splice(0)) release()
+      await waiting
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('serializes joins against another join and a resumed attempt', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        ...baseInput,
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+        run_in_background: true,
+      })
+      const id = agentId(started)
+      const handle = harness.runtime.handle(id)
+      if (handle !== undefined) await harness.controller.wait(handle)
+      const destination = await harness.runtime.rootDestination(harness.context())
+      const joining = harness.runtime.joinStaged(id, destination, harness.session.sessionId)
+      expect(
+        (await harness.runtime.joinStaged(id, destination, harness.session.sessionId)).reason,
+      ).toBe('running')
+      const resumed = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          prompt: 'RETURN_TOOLS',
+          subagent_type: 'generalPurpose',
+          resume: id,
+        },
+        signal: undefined,
+      })
+      expect(resumed.kind).toBe('failed')
+      if (resumed.kind !== 'failed') throw new Error('The concurrent resume was not rejected.')
+      expect(resumed.details.error).toContain('already has an active run')
+      expect((await joining).status).toBe('joined')
+      expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+      expect(
+        harness.runtime.deliveries.list(id).find((delivery) => delivery.kind === 'completion')
+          ?.state,
+      ).toBe('acknowledged')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('drains an invalidated join without applying its patch', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        ...baseInput,
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+        run_in_background: true,
+      })
+      const id = agentId(started)
+      const handle = harness.runtime.handle(id)
+      if (handle !== undefined) await harness.controller.wait(handle)
+      const destination = await harness.runtime.rootDestination(harness.context())
+      const joining = harness.runtime.joinStaged(id, destination, harness.session.sessionId)
+      harness.runtime.invalidateHandles()
+      const shutdown = harness.runtime.shutdown()
+      expect((await joining).status).not.toBe('joined')
+      await shutdown
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('delivers a child notice before the parent final answer', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, {
+        ...baseInput,
+        description: 'Report during foreground work',
+        prompt: 'REPORT_PARENT',
+      })
+      const messages = harness.session.messages
+      const noticeIndex = messages.findIndex(
+        (message) => message.role === 'custom' && message.customType === 'subagent-intercom',
+      )
+      const finalIndex = messages.findIndex(
+        (message) => message.role === 'assistant' && message.stopReason === 'stop',
+      )
+      expect(noticeIndex).toBeGreaterThan(-1)
+      expect(noticeIndex).toBeLessThan(finalIndex)
+      expect(
+        messages.filter((message) => message.role === 'assistant' && message.stopReason === 'stop'),
+      ).toHaveLength(1)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('answers a background decision through the real coordinator TaskControl reply', async () => {
+    const harness = await createHarness()
+    try {
+      harness.state.autoReplyToDecision = true
+      const started = await runTask(harness, {
+        ...baseInput,
+        prompt: 'REQUEST_PARENT',
+        readonly: true,
+        run_in_background: true,
+      })
+      const id = agentId(started)
+      const handle = harness.runtime.handle(id)
+      if (handle !== undefined) await harness.controller.wait(handle)
+      await harness.session.agent.waitForIdle()
+      const result = harness.runtime.latestResult(id)
+      expect(result?.status).toBe('completed')
+      expect(result?.output).toBe('decision:No. Preserve the assigned scope.')
+      expect(harness.state.sideQuestions).toHaveLength(0)
+      expect(
+        harness.runtime.deliveries.list(id).find((delivery) => delivery.kind === 'request')?.state,
+      ).toBe('acknowledged')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it.each(['completed', 'cancelled'])(
+    'defers background delivery until manual compaction is %s',
+    async (outcome) => {
+      const harness = await createHarness()
+      const entered = deferred()
+      const releaseCompact = deferred()
+      try {
+        harness.session.settingsManager.applyOverrides({
+          compaction: { enabled: false, keepRecentTokens: 1 },
+        })
+        await harness.session.prompt('Compaction history. '.repeat(100), {
+          expandPromptTemplates: false,
+        })
+        const started = await runTask(harness, {
+          ...baseInput,
+          prompt: 'BLOCK',
+          readonly: true,
+          run_in_background: true,
+        })
+        await harness.state.blockedReady.promise
+        harness.pi.on('session_before_compact', async (event) => {
+          entered.resolve()
+          await releaseCompact.promise
+          if (outcome === 'cancelled') return { cancel: true }
+          return {
+            compaction: {
+              summary: 'A background Task is in progress.',
+              firstKeptEntryId: event.preparation.firstKeptEntryId,
+              tokensBefore: event.preparation.tokensBefore,
+            },
+          }
+        })
+        const compact = harness.session.compact()
+        await Promise.race([
+          entered.promise,
+          compact.then(() => {
+            throw new Error('Compaction did not reach the barrier.')
+          }),
+        ])
+        const requests = harness.state.parentRequests
+        const handle = harness.runtime.handle(agentId(started))
+        if (handle === undefined) throw new Error('The background child is missing.')
+        for (const release of harness.state.blocked.splice(0)) release()
+        await harness.controller.wait(handle)
+        expect(harness.state.parentRequests).toBe(requests)
+        expect(harness.runtime.deliveries.list(handle.agentId)[0]?.state).toBe('queued')
+        releaseCompact.resolve()
+        if (outcome === 'cancelled') await expect(compact).rejects.toThrow('Compaction cancelled')
+        else await compact
+        await harness.state.notification.promise
+        await harness.session.agent.waitForIdle()
+        expect(harness.runtime.deliveries.list(handle.agentId)[0]?.state).toBe('delivered')
+      } finally {
+        releaseCompact.resolve()
+        for (const release of harness.state.blocked.splice(0)) release()
+        await harness.close()
+      }
+    },
+  )
+
+  it('fails closed instead of deadlocking a foreground coordinator decision', async () => {
+    const harness = await createHarness()
+    try {
+      const result = await runTask(harness, {
+        ...baseInput,
+        prompt: 'REQUEST_PARENT',
+        readonly: true,
+      })
+      expect(result).toContain('No authorization was granted')
+      expect(result).toContain('run_in_background=true')
+      expect(harness.runtime.latestResult(agentId(result))?.status).toBe('aborted')
+      expect(harness.state.sideQuestions).toHaveLength(0)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('retains unresolved delivery authority beyond terminal record pruning on restore', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      const seed = latestState(harness)
+      const record = seed.records[0]
+      if (record === undefined) throw new Error('The seed task is missing.')
+      const records = Array.from({ length: 257 }, (_unused, index) => ({
+        ...record,
+        agentId: `restored-delivery-${index}`,
+        createdAt: index,
+        updatedAt: index,
+        runGeneration: index + 1,
+      }))
+      harness.session.sessionManager.appendCustomEntry('pi-subagent-state', { ...seed, records })
+      harness.session.sessionManager.appendCustomEntry('pi-subagent-delivery', {
+        agentId: 'restored-delivery-0',
+        id: 'retained-notice',
+        content: 'Unresolved work result',
+        customType: 'subagent-notification',
+        display: false,
+        kind: 'completion',
+        level: 'info',
+        ownerSessionId: seed.ownerSessionId,
+        runGeneration: 1,
+        state: 'queued',
+        queuedAt: 0,
+        sentAt: 0,
+      })
+      harness.runtime.restore(harness.context())
+      expect(
+        harness.runtime.deliveries.context([], (delivery) =>
+          harness.runtime.isCurrentDelivery(delivery),
+        ),
+      ).toHaveLength(1)
+      expect(harness.runtime.latestResult('restored-delivery-0')?.status).toBe('completed')
     } finally {
       await harness.close()
     }
@@ -2195,6 +2633,26 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it('runs Astra with the shared Fast Mode policy and rejects disabled reasoning', async () => {
+    const harness = await createHarness()
+    try {
+      const result = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-6-astra:medium [fast]',
+      })
+      expect(result).toContain('Agent ID:')
+      const payloads = harness.state.payloads.map((payload) => Value.Decode(PayloadSchema, payload))
+      expect(payloads.some((payload) => payload.service_tier === 'priority')).toBe(true)
+      const rejected = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-6-astra:off',
+      })
+      expect(rejected).toContain('does not support reasoning effort "off"')
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('parses colon model IDs and applies fast mode only when requested', async () => {
     const harness = await createHarness()
     try {
@@ -2337,6 +2795,73 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it(
+    'settles nested setup when its owner is invalidated during extension loading',
+    { timeout: 30_000 },
+    async () => {
+      const harness = await createHarness()
+      const entered = deferred()
+      const releaseSetup = deferred()
+      let setups = 0
+      try {
+        await initializeHarnessRepository(harness)
+        await runTask(harness, { ...baseInput, prompt: 'context seed' })
+        harness.runtime.registerCapability({
+          id: 'blocked-setup',
+          version: '1',
+          tools: [],
+          extensions: [
+            {
+              name: 'blocked-setup',
+              hidden: true,
+              factory: async () => {
+                setups += 1
+                if (setups === 2) {
+                  entered.resolve()
+                  await releaseSetup.promise
+                }
+              },
+            },
+          ],
+        })
+        harness.runtime.registerCapabilityProfile({
+          id: 'nested-setup',
+          nested: { maxDepth: 2 },
+          registrations: ['blocked-setup'],
+        })
+        const pending = harness.runtime.run({
+          ctx: harness.context(),
+          input: {
+            ...baseInput,
+            prompt: 'NESTED_TOOLS',
+            readonly: false,
+            subagent_type: 'generalPurpose',
+            capability_profile: 'nested-setup',
+          },
+          signal: undefined,
+        })
+        await Promise.race([
+          entered.promise,
+          pending.then((result) => {
+            throw new Error(`Setup did not reach the barrier: ${JSON.stringify(result)}`)
+          }),
+        ])
+        harness.runtime.invalidateHandles()
+        const stopping = harness.runtime.shutdown()
+        releaseSetup.resolve()
+        await stopping
+        expect((await pending).kind).toBe('failed')
+        expect(harness.runtime.hasActiveRun()).toBe(false)
+        expect(
+          latestState(harness).records.filter((record) => record.status === 'running'),
+        ).toEqual([])
+      } finally {
+        releaseSetup.resolve()
+        await harness.close()
+      }
+    },
+  )
+
   it('returns background identity, sends a hidden notification, and preserves payload shape', async () => {
     const harness = await createHarness()
     try {
@@ -2473,7 +2998,10 @@ describe('subagent Task integration', () => {
       await harness.runtime.shutdown('The test parent stopped.')
       const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
       expect(record?.status).toBe('aborted')
-      await harness.state.notification.promise
+      expect(
+        harness.runtime.deliveries.list(id).find((delivery) => delivery.kind === 'completion')
+          ?.state,
+      ).toBe('queued')
     } finally {
       for (const release of harness.state.blocked.splice(0)) release()
       await harness.close()
@@ -3029,6 +3557,145 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  it('reports rejected cancellation from the nested control scope', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      harness.runtime.registerCapabilityProfile({
+        id: 'nested-cancel-receipt',
+        nested: { maxDepth: 2 },
+        registrations: [],
+      })
+      const original = harness.runtime.requestCancel.bind(harness.runtime)
+      harness.runtime.requestCancel = (id, reason) => {
+        if (latestState(harness).records.find((record) => record.agentId === id)?.depth !== 2)
+          return original(id, reason)
+        harness.state.requests.push(
+          harness.state.blockedReady.promise.then(() => {
+            for (const release of harness.state.blocked.splice(0)) release()
+          }),
+        )
+        return false
+      }
+      harness.runtime.integrationStarted = () => true
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          capability_profile: 'nested-cancel-receipt',
+          prompt: 'NESTED_CANCEL',
+          readonly: true,
+        },
+        signal: undefined,
+      })
+      expect(result.kind).toBe('completed')
+      if (result.kind !== 'completed') throw new Error('The parent did not complete.')
+      expect(result.content).toContain('integration-started')
+      expect(result.content).not.toContain('"status":"requested"')
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('preserves completion and releases abort listeners when workspace cleanup fails', async () => {
+    const harness = await createHarness()
+    const signal = new AbortController().signal
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      const append = harness.pi.appendEntry.bind(harness.pi)
+      let injected = false
+      harness.pi.appendEntry = (type, data) => {
+        if (
+          !injected &&
+          type === 'pi-subagent-state' &&
+          JSON.stringify(data).includes('"lifecycleState":"cleanup-pending"')
+        ) {
+          injected = true
+          throw new Error('Cleanup persistence failed')
+        }
+        append(type, data)
+      }
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          subagent_type: 'generalPurpose',
+          readonly: false,
+          prompt: 'WRITE_ISOLATED',
+          isolation: { mode: 'worktree', integration: 'apply' },
+        },
+        signal,
+      })
+      expect(injected).toBe(true)
+      expect(getEventListeners(signal, 'abort')).toHaveLength(0)
+      expect(result.kind).toBe('completed')
+      if (result.kind !== 'completed') throw new Error('The completed result was lost.')
+      expect(result.details.isolation?.cleanupDebt).toBe(true)
+      expect(harness.runtime.latestResult(result.details.agentId)?.status).toBe('completed')
+      expect(harness.runtime.latestResult(result.details.agentId)?.isolation?.cleanupDebt).toBe(
+        true,
+      )
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('settles and disposes a child when its admission callback throws', async () => {
+    const harness = await createHarness()
+    let id = ''
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: { ...baseInput, prompt: 'never dispatched' },
+        signal: undefined,
+        onStarted: (agentId) => {
+          id = agentId
+          throw new Error('Admission callback failed')
+        },
+      })
+      expect(result.kind).toBe('failed')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      expect(harness.runtime.latestResult(id)?.status).toBe('failed')
+      expect(harness.runtime.latestResult(id)?.error).toContain('Admission callback failed')
+      await harness.runtime.shutdown()
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('closes more than 256 successful descendants without losing their status', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      harness.runtime.registerCapabilityProfile({
+        id: 'many-descendants',
+        nested: { maxDepth: 2 },
+        registrations: [],
+      })
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          prompt: 'NESTED_MANY',
+          capability_profile: 'many-descendants',
+          readonly: true,
+        },
+        signal: undefined,
+      })
+      expect(result.kind).toBe('completed')
+      if (result.kind !== 'completed') throw new Error('The descendants did not complete.')
+      expect(result.content).toBe('All 257 descendants completed.')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      expect(latestState(harness).records.length).toBeLessThanOrEqual(256)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
   it('resumes a nested child inside an isolated parent workspace', async () => {
     const harness = await createHarness()
     try {
@@ -3225,6 +3892,47 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  it('honors cancellation after the parent model stops while descendants drain', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      harness.runtime.registerCapabilityProfile({
+        id: 'late-cancel',
+        nested: { maxDepth: 2 },
+        registrations: [],
+      })
+      let parentId = ''
+      const resultPromise = harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          capability_profile: 'late-cancel',
+          isolation: { integration: 'apply', mode: 'worktree' },
+          prompt: 'NESTED_BACKGROUND_BLOCK',
+          subagent_type: 'generalPurpose',
+        },
+        onStarted: (id) => {
+          parentId = id
+        },
+        signal: undefined,
+      })
+      await harness.state.blockedReady.promise
+      expect(
+        harness.runtime.listSnapshots().find((entry) => entry.agentId === parentId)?.lastActivity,
+      ).toContain('nested-background-result')
+      expect(harness.runtime.requestCancel(parentId, 'Cancel during descendant drain')).toBe(true)
+      for (const release of harness.state.blocked.splice(0)) release()
+      const result = await resultPromise
+      expect(result.kind).toBe('failed')
+      expect(harness.runtime.getRecord(parentId)?.status).toBe('aborted')
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  }, 180_000)
+
   it('does not apply a background descendant after parent failure', async () => {
     const harness = await createHarness()
     try {
@@ -3253,7 +3961,8 @@ describe('subagent Task integration', () => {
         (record) => record.runId === result.details.runId && record.depth === 2,
       )
       expect(descendants[0]?.isolation?.rootVisibility).toBe('blocked')
-      expect(descendants[0]?.isolation?.integrationStatus).toBe('staged')
+      expect(descendants[0]?.status).toBe('aborted')
+      expect(descendants[0]?.isolation?.integrationStatus).toBe('not-requested')
       const patchUri = descendants[0]?.isolation?.repositories[0]?.patch.uri
       if (patchUri === undefined) throw new Error('The descendant patch is unavailable.')
       expect(await readFile(fileURLToPath(patchUri), 'utf8')).toContain('isolated.txt')
@@ -3317,4 +4026,234 @@ describe('subagent Task integration', () => {
       await harness.close()
     }
   })
+
+  it('cleans an allocated workspace when registration persistence fails', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      let workspace: Parameters<typeof harness.runtime.registerWorkspace>[0] | undefined
+      const register = harness.runtime.registerWorkspace.bind(harness.runtime)
+      harness.runtime.registerWorkspace = (allocated) => {
+        workspace = allocated
+        register(allocated)
+      }
+      const append = harness.pi.appendEntry.bind(harness.pi)
+      let injected = false
+      harness.pi.appendEntry = (type, data) => {
+        if (
+          !injected &&
+          type === 'pi-subagent-state' &&
+          JSON.stringify(data).includes('"lifecycleState":"active"')
+        ) {
+          injected = true
+          throw new Error('Workspace registration persistence failed')
+        }
+        append(type, data)
+      }
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          isolation: { integration: 'apply', mode: 'worktree' },
+          prompt: 'never dispatched',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+        signal: undefined,
+      })
+      expect(injected).toBe(true)
+      expect(result.kind).toBe('failed')
+      if (result.kind !== 'failed') throw new Error('The task unexpectedly succeeded.')
+      expect(result.details.error).toContain('Workspace registration persistence failed')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      if (workspace === undefined) throw new Error('No workspace was allocated.')
+      await expect(readFile(join(workspace.rootWorktree, 'AGENTS.md'))).rejects.toThrow('ENOENT')
+      expect(await readFile(join(harness.dir, 'AGENTS.md'), 'utf8')).toContain(
+        'PROJECT_CONTEXT_SENTINEL',
+      )
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('cleans an allocated workspace when a resumed transcript changes Agent ID', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const initial = await runTask(harness, {
+        ...baseInput,
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'initial isolated task',
+        readonly: false,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(initial)
+      const prior = harness.runtime.getRecord(id)
+      if (prior === undefined) throw new Error('The initial run is missing.')
+      const transcript = await readFile(prior.sessionFile, 'utf8')
+      await writeFile(prior.sessionFile, transcript.replace(id, 'changed-transcript-id'))
+      let workspace: Parameters<typeof harness.runtime.registerWorkspace>[0] | undefined
+      const register = harness.runtime.registerWorkspace.bind(harness.runtime)
+      harness.runtime.registerWorkspace = (allocated) => {
+        workspace = allocated
+        register(allocated)
+      }
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          prompt: 'never dispatched',
+          resume: id,
+          subagent_type: 'generalPurpose',
+        },
+        signal: undefined,
+      })
+      expect(result.kind).toBe('failed')
+      if (result.kind !== 'failed') throw new Error('The task unexpectedly succeeded.')
+      expect(result.details.error).toContain(
+        'The resumed transcript returned a different Agent ID.',
+      )
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      if (workspace === undefined) throw new Error('No workspace was allocated.')
+      await expect(readFile(join(workspace.rootWorktree, 'AGENTS.md'))).rejects.toThrow('ENOENT')
+      expect(harness.runtime.getRecord(id)?.status).toBe('completed')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('captures unadmitted changes before cleanup when run record persistence fails', async () => {
+    const harness = await createHarness()
+    const { writeFileSync } = await import('node:fs')
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      let workspace: Parameters<typeof harness.runtime.registerWorkspace>[0] | undefined
+      const register = harness.runtime.registerWorkspace.bind(harness.runtime)
+      harness.runtime.registerWorkspace = (allocated) => {
+        workspace = allocated
+        register(allocated)
+      }
+      const append = harness.pi.appendEntry.bind(harness.pi)
+      let injected = false
+      harness.pi.appendEntry = (type, data) => {
+        if (
+          !injected &&
+          type === 'pi-subagent-state' &&
+          JSON.stringify(data).includes('"status":"running"')
+        ) {
+          injected = true
+          if (workspace === undefined) throw new Error('No workspace was allocated.')
+          writeFileSync(join(workspace.rootWorktree, 'unadmitted.txt'), 'retain this change\n')
+          throw new Error('Run record persistence failed')
+        }
+        append(type, data)
+      }
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          isolation: { integration: 'apply', mode: 'worktree' },
+          prompt: 'never dispatched',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+        signal: undefined,
+      })
+      expect(injected).toBe(true)
+      expect(result.kind).toBe('failed')
+      if (result.kind !== 'failed') throw new Error('The task unexpectedly succeeded.')
+      expect(result.details.error).toContain('Run record persistence failed')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      if (workspace === undefined) throw new Error('No workspace was allocated.')
+      await expect(readFile(join(workspace.rootWorktree, 'unadmitted.txt'))).rejects.toThrow(
+        'ENOENT',
+      )
+      const refs = await execFileAsync(
+        'git',
+        ['for-each-ref', '--format=%(refname)', 'refs/pi-subagent'],
+        {
+          cwd: harness.dir,
+        },
+      )
+      const attemptId = workspace.attemptId
+      const ref = refs.stdout.split('\n').find((line) => line.includes(attemptId))
+      if (ref === undefined) throw new Error('The captured failure artifact is missing.')
+      const artifact = await execFileAsync('git', ['show', `${ref}:unadmitted.txt`], {
+        cwd: harness.dir,
+      })
+      expect(artifact.stdout).toBe('retain this change\n')
+      await expect(readFile(join(harness.dir, 'unadmitted.txt'))).rejects.toThrow('ENOENT')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('retains unadmitted workspace artifacts and cleanup debt when capture fails', async () => {
+    const harness = await createHarness()
+    const { rmSync } = await import('node:fs')
+    try {
+      await initializeHarnessRepository(harness)
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      let workspace: Parameters<typeof harness.runtime.registerWorkspace>[0] | undefined
+      const register = harness.runtime.registerWorkspace.bind(harness.runtime)
+      harness.runtime.registerWorkspace = (allocated) => {
+        workspace = allocated
+        register(allocated)
+      }
+      const append = harness.pi.appendEntry.bind(harness.pi)
+      let injected = false
+      harness.pi.appendEntry = (type, data) => {
+        if (
+          !injected &&
+          type === 'pi-subagent-state' &&
+          JSON.stringify(data).includes('"lifecycleState":"active"')
+        ) {
+          injected = true
+          if (workspace === undefined) throw new Error('No workspace was allocated.')
+          rmSync(join(workspace.rootWorktree, '.git'), { force: true, recursive: true })
+          throw new Error('Workspace registration persistence failed')
+        }
+        append(type, data)
+      }
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          isolation: { integration: 'apply', mode: 'worktree' },
+          prompt: 'never dispatched',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+        signal: undefined,
+      })
+      expect(injected).toBe(true)
+      expect(result.kind).toBe('failed')
+      if (result.kind !== 'failed') throw new Error('The task unexpectedly succeeded.')
+      expect(result.details.error).toContain('Workspace registration persistence failed')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      if (workspace === undefined) throw new Error('No workspace was allocated.')
+      expect(await readFile(join(workspace.rootWorktree, 'AGENTS.md'), 'utf8')).toContain(
+        'PROJECT_CONTEXT_SENTINEL',
+      )
+      const manifest = Value.Decode(
+        ManifestSchema,
+        JSON.parse(await readFile(workspace.manifestPath, 'utf8')),
+      )
+      expect(manifest.state).toBe('cleanup-debt')
+      expect(
+        harness.session.sessionManager
+          .getBranch()
+          .some(
+            (entry) =>
+              entry.type === 'custom' &&
+              entry.customType === 'pi-subagent-state' &&
+              JSON.stringify(entry.data).includes('"lifecycleState":"cleanup-debt"'),
+          ),
+      ).toBe(true)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
 })

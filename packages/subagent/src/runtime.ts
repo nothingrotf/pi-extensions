@@ -35,10 +35,17 @@ import {
   type TaskControlRenderState,
   type TaskControlScope,
 } from './control.ts'
+import { ParentDecisions } from './decisions.ts'
+import { DeliveryJournal, type DeliveryRecord } from './delivery.ts'
 import { resolveInvocationCwd, resolveTools } from './execution.ts'
 import { activitySnippet, describeCall, oneLineLabel } from './format.ts'
 import { commonDirectory, repositoryRoot } from './git-isolation.ts'
-import { ParentSideTurnError, recordAutomaticReply, runParentSideTurn } from './intercom.ts'
+import {
+  ParentSideTurnError,
+  recordAutomaticReply,
+  redactSensitiveText,
+  runParentSideTurn,
+} from './intercom.ts'
 import {
   captureIsolation,
   cleanupCapturedReceipt,
@@ -82,7 +89,7 @@ import type {
   TaskInput,
   WorkspaceLifecycle,
 } from './schema.ts'
-import { SingleTaskInputSchema } from './schema.ts'
+import { decodeSingleTaskInput, SingleTaskInputSchema } from './schema.ts'
 import { StateStore } from './state.ts'
 import {
   createRootWorkspaceContext,
@@ -126,6 +133,7 @@ interface ActiveRun {
   deferIntegration: boolean
   destination: IsolationDestination | undefined
   intercomController: AbortController
+  integrationStarted: boolean
   intercomUsage: RunUsage
   handle: SubagentHandle
   isolationReceipt: IsolationReceipt | undefined
@@ -197,7 +205,7 @@ export interface SteerReceipt {
 export interface CancelReceipt {
   handle?: SubagentHandle
   revision: number
-  status: 'requested' | 'not-found' | 'stale-handle' | 'already-terminal'
+  status: 'requested' | 'not-found' | 'stale-handle' | 'already-terminal' | 'integration-started'
 }
 
 export interface JoinReceipt {
@@ -242,6 +250,12 @@ export interface SubagentInvocation {
   onStarted?: (agentId: string) => void
   parentWorkspace?: WorkspaceContext
   signal?: AbortSignal
+}
+
+export interface CoordinationLifecycle {
+  assertContinuing(): void
+  beforeApply(): void
+  readonly integrationStarted: boolean
 }
 
 export interface CoordinationIdentity {
@@ -499,7 +513,12 @@ function stopError(message: AssistantMessage | undefined): string | undefined {
 }
 
 export class SubagentRuntime {
+  readonly deliveries: DeliveryJournal
+  private readonly decisions: ParentDecisions
   private readonly active = new Map<string, ActiveRun>()
+  private readonly joins = new Map<string, Promise<JoinReceipt>>()
+  private readonly coordinations = new Set<Promise<void>>()
+  private accepting = true
   private readonly capabilities = new CapabilityRegistry()
   private readonly leases = new Set<string>()
   private readonly listeners = new Set<() => void>()
@@ -515,19 +534,28 @@ export class SubagentRuntime {
     private readonly runTimeoutMs = DEFAULT_RUN_TIMEOUT_MS,
   ) {
     this.state = new StateStore(pi)
+    this.deliveries = new DeliveryJournal(pi, (agentId, retained) => {
+      if (retained) this.state.pin(agentId)
+      else this.state.unpin(agentId)
+    })
+    this.decisions = new ParentDecisions(this.deliveries)
   }
 
   restore(ctx: Pick<ExtensionContext, 'sessionManager'>): void {
+    this.accepting = true
     this.ownerGeneration += 1
     this.rootWorkspaceContext = undefined
     this.durableCommonDirCache.clear()
     this.recoveryPromise = undefined
-    this.state.restore(ctx)
+    this.deliveries.restore(ctx)
+    this.state.restore(ctx, this.deliveries.unresolvedAgentIds())
     this.runGeneration = this.state.maxRunGeneration()
     this.emitChange()
   }
 
   invalidateHandles(): void {
+    this.accepting = false
+    this.deliveries.pause()
     this.ownerGeneration += 1
     this.emitChange()
   }
@@ -559,6 +587,40 @@ export class SubagentRuntime {
 
   hasActiveRun(): boolean {
     return this.active.size > 0
+  }
+
+  async coordinate<Result>(
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    operation: (lifecycle: CoordinationLifecycle) => Promise<Result>,
+  ): Promise<Result> {
+    if (!this.accepting) throw new Error('The subagent owner is shutting down.')
+    this.ensureOwner(ctx)
+    const ownerFence = { generation: this.ownerGeneration, sessionId: this.state.owner }
+    let integrationStarted = false
+    const assertContinuing = () => {
+      if (integrationStarted) return
+      this.assertOwnerFence(ownerFence)
+      if (signal?.aborted === true) throw new Error('The coordinated Task was aborted.')
+    }
+    assertContinuing()
+    const completion = Promise.withResolvers<void>()
+    this.coordinations.add(completion.promise)
+    try {
+      return await operation({
+        assertContinuing,
+        beforeApply: () => {
+          assertContinuing()
+          integrationStarted = true
+        },
+        get integrationStarted() {
+          return integrationStarted
+        },
+      })
+    } finally {
+      this.coordinations.delete(completion.promise)
+      completion.resolve()
+    }
   }
 
   addCoordinationRun(run: CoordinationRunState): void {
@@ -603,44 +665,45 @@ export class SubagentRuntime {
   listSnapshots(): SubagentSnapshot[] {
     return this.state
       .all()
-      .map((record) => {
-        const active = this.active.get(record.agentId)
-        const durationMs =
-          active === undefined ? (record.durationMs ?? 0) : Date.now() - active.startedAt
-        const contextState = active?.session.getSessionStats().contextUsage ?? record.contextState
-        const terminalStartedAt =
-          record.durationMs === undefined
-            ? record.createdAt
-            : Math.max(record.createdAt, record.updatedAt - record.durationMs)
-        return {
-          agentId: record.agentId,
-          contextState,
-          description: record.description,
-          effort: record.effort,
-          endedAt:
-            active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
-          error: record.error,
-          intercomUsage: active?.intercomUsage ?? record.intercomUsage ?? emptyUsage(0),
-          isolation: active?.isolationReceipt ?? record.isolation,
-          lastActivity: active?.lastActivity,
-          model: record.model,
-          background: record.background,
-          output: record.output,
-          readonly: record.readonly,
-          retryFailure: active?.retryFailure ?? record.retryFailure,
-          retryState: active?.retryState,
-          running: active !== undefined,
-          sessionFile: record.sessionFile,
-          startedAt: active?.startedAt ?? terminalStartedAt,
-          status: active === undefined ? record.status : 'running',
-          subagentType: record.subagentType,
-          usage:
-            active === undefined
-              ? (record.usage ?? emptyUsage(durationMs))
-              : collectUsage(active.messages, active.metrics, durationMs),
-        }
-      })
+      .map((record) => this.recordSnapshot(record))
       .reverse()
+  }
+
+  private recordSnapshot(record: RunRecord): SubagentSnapshot {
+    const active = this.active.get(record.agentId)
+    const durationMs =
+      active === undefined ? (record.durationMs ?? 0) : Date.now() - active.startedAt
+    const contextState = active?.session.getContextUsage() ?? record.contextState
+    const terminalStartedAt =
+      record.durationMs === undefined
+        ? record.createdAt
+        : Math.max(record.createdAt, record.updatedAt - record.durationMs)
+    return {
+      agentId: record.agentId,
+      contextState,
+      description: record.description,
+      effort: record.effort,
+      endedAt: active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
+      error: record.error,
+      intercomUsage: active?.intercomUsage ?? record.intercomUsage ?? emptyUsage(0),
+      isolation: active?.isolationReceipt ?? record.isolation,
+      lastActivity: active?.lastActivity,
+      model: record.model,
+      background: record.background,
+      output: record.output,
+      readonly: record.readonly,
+      retryFailure: active?.retryFailure ?? record.retryFailure,
+      retryState: active?.retryState,
+      running: active !== undefined,
+      sessionFile: record.sessionFile,
+      startedAt: active?.startedAt ?? terminalStartedAt,
+      status: active === undefined ? record.status : 'running',
+      subagentType: record.subagentType,
+      usage:
+        active === undefined
+          ? (record.usage ?? emptyUsage(durationMs))
+          : collectUsage(active.messages, active.metrics, durationMs),
+    }
   }
 
   get currentRevision(): number {
@@ -661,7 +724,8 @@ export class SubagentRuntime {
 
   snapshotFor(handle: SubagentHandle): SubagentSnapshot | undefined {
     if (!this.matchesHandle(handle)) return undefined
-    return this.listSnapshots().find((snapshot) => snapshot.agentId === handle.agentId)
+    const record = this.state.get(handle.agentId)
+    return record === undefined ? undefined : this.recordSnapshot(record)
   }
 
   resultFor(handle: SubagentHandle): SubagentResult | undefined {
@@ -700,14 +764,15 @@ export class SubagentRuntime {
     if (signal === undefined) await completion
     else {
       if (signal.aborted) throw new Error('The wait was aborted.')
-      await Promise.race([
-        completion,
-        new Promise<never>((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(new Error('The wait was aborted.')), {
-            once: true,
-          })
-        }),
-      ])
+      const interrupted = Promise.withResolvers<never>()
+      const abort = () => interrupted.reject(new Error('The wait was aborted.'))
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        if (signal.aborted) abort()
+        await Promise.race([completion, interrupted.promise])
+      } finally {
+        signal.removeEventListener('abort', abort)
+      }
     }
     const result = this.resultFor(handle)
     if (result === undefined) throw new Error('The subagent result is unavailable.')
@@ -719,6 +784,30 @@ export class SubagentRuntime {
     destination: IsolationDestination,
     callerId: string,
   ): Promise<JoinReceipt> {
+    if (!this.accepting || this.joins.has(agentId) || this.leases.has(agentId))
+      return {
+        reason: 'running',
+        receipt: undefined,
+        revision: this.currentRevision,
+        status: 'rejected',
+      }
+    this.leases.add(agentId)
+    const pending = this.performJoin(agentId, destination, callerId)
+    this.joins.set(agentId, pending)
+    try {
+      return await pending
+    } finally {
+      this.joins.delete(agentId)
+      if (!this.active.has(agentId)) this.leases.delete(agentId)
+    }
+  }
+
+  private async performJoin(
+    agentId: string,
+    destination: IsolationDestination,
+    callerId: string,
+  ): Promise<JoinReceipt> {
+    const ownerFence = { generation: this.ownerGeneration, sessionId: this.state.owner }
     const record = this.state.get(agentId)
     if (record === undefined || record.ownerSessionId !== this.state.owner) {
       return {
@@ -782,10 +871,16 @@ export class SubagentRuntime {
         status: 'rejected',
       }
     }
-    let updated = await integrateStagedReceipt(receipt, destination, callerId)
+    let updated = await integrateStagedReceipt(receipt, destination, callerId, () => {
+      this.assertOwnerFence(ownerFence)
+      if (this.state.get(agentId)?.runGeneration !== record.runGeneration)
+        throw new Error('The joined attempt changed.')
+    })
     if (updated.status === 'integrated') {
       updated = await this.cleanupJoinedReceipt(updated)
     }
+    if (this.state.get(agentId)?.runGeneration !== record.runGeneration)
+      throw new Error('The joined attempt changed.')
     this.applyReceiptToRecord(agentId, updated)
     if (updated.status === 'conflict' || updated.status === 'partial') {
       return {
@@ -795,6 +890,7 @@ export class SubagentRuntime {
         status: 'conflict',
       }
     }
+    this.deliveries.settleAgent(agentId, 'completion', 'acknowledged')
     return { receipt: updated, reason: undefined, revision: this.currentRevision, status: 'joined' }
   }
 
@@ -877,13 +973,18 @@ export class SubagentRuntime {
     }
   }
 
+  integrationStarted(agentId: string): boolean {
+    return this.active.get(agentId)?.integrationStarted === true
+  }
+
   requestCancel(
     agentId: string,
     reason = 'The child was canceled from the subagent pane.',
   ): boolean {
     const active = this.active.get(agentId)
-    if (active === undefined) return false
+    if (active === undefined || active.integrationStarted) return false
     active.abortReason ??= reason
+    for (const child of active.scope.list()) this.requestCancel(child.agentId, reason)
     active.intercomController.abort(active.abortReason)
     active.abortPromise ??= active.session.abort().catch((error) => {
       active.abortReason = errorMessage(error)
@@ -919,7 +1020,7 @@ export class SubagentRuntime {
             if (options.currentDepth >= options.maxDepth) {
               throw new Error(`The nested Task reached the maximum depth of ${options.maxDepth}.`)
             }
-            const input = Value.Decode(SingleTaskInputSchema, rawInput)
+            const input = decodeSingleTaskInput(rawInput)
             if (
               input.capability_profile !== undefined &&
               input.capability_profile !== options.profileId
@@ -1015,11 +1116,15 @@ export class SubagentRuntime {
                 if (!this.matchesHandle(handle)) {
                   return { revision: this.currentRevision, status: 'stale-handle' }
                 }
-                this.requestCancel(handle.agentId, reason)
+                const requested = this.requestCancel(handle.agentId, reason)
                 return {
                   handle: { ...handle },
                   revision: this.currentRevision,
-                  status: 'requested',
+                  status: requested
+                    ? 'requested'
+                    : this.integrationStarted(handle.agentId)
+                      ? 'integration-started'
+                      : 'already-terminal',
                 }
               },
               destination: async () => ({
@@ -1120,8 +1225,13 @@ export class SubagentRuntime {
     return commonDir
   }
 
+  private ensureOwner(ctx: ExtensionContext): void {
+    if (this.state.owner.length === 0) this.restore(ctx)
+    else this.state.ensureOwner(ctx)
+  }
+
   private async ensureRecovery(ctx: ExtensionContext): Promise<void> {
-    this.state.ensureOwner(ctx)
+    this.ensureOwner(ctx)
     if (this.recoveryPromise === undefined) {
       this.recoveryPromise = (async () => {
         const stores = new Set(this.state.rootStorePaths())
@@ -1217,8 +1327,11 @@ export class SubagentRuntime {
   }
 
   async shutdown(reason = 'The parent session stopped.'): Promise<void> {
+    this.accepting = false
+    this.deliveries.pause()
     const activeRuns = [...this.active.values()]
     for (const active of activeRuns) {
+      if (active.integrationStarted) continue
       active.abortReason = reason
       active.intercomController.abort(reason)
       active.abortPromise ??= active.session.abort().catch((error) => {
@@ -1229,10 +1342,15 @@ export class SubagentRuntime {
     for (const active of activeRuns) {
       if (active.completion !== undefined) await active.completion
     }
+    await Promise.allSettled([...this.joins.values(), ...this.coordinations])
   }
 
   private async start(options: StartOptions): Promise<RuntimeResult> {
-    if (options.skipOwnerCheck !== true) this.state.ensureOwner(options.ctx)
+    if (!this.accepting) throw new Error('The subagent owner is shutting down.')
+    if (options.skipOwnerCheck !== true) {
+      this.ensureOwner(options.ctx)
+      this.deliveries.ensureOwner(options.ctx)
+    }
     const ownerFence: OwnerFence = {
       generation: this.ownerGeneration,
       sessionId: this.state.owner,
@@ -1326,55 +1444,57 @@ export class SubagentRuntime {
     const parentActive =
       options.parentAgentId === undefined ? undefined : this.active.get(options.parentAgentId)
     let isolation: WriterWorkspace | undefined
-    let effectiveCwd: string
+    let session: AgentSession | undefined
+    let record: RunRecord | undefined
+    let active: ActiveRun
+    const parentScopeCompletion =
+      parentActive === undefined ? undefined : Promise.withResolvers<RuntimeTerminalResult>()
     const requestedCwd = contract.logicalCwd
     const sessionManager = createChildSessionManager(options.ctx, requestedCwd, prior?.sessionFile)
     const writerId = sessionManager.getSessionId()
     const spawnOrdinal = parentActive?.scope.nextOrdinal() ?? 1
-    if (contract.isolation === undefined) {
-      effectiveCwd =
-        options.parentWorkspace === undefined
-          ? requestedPhysicalCwd
-          : joinEffectiveCwd(parentContext.physicalRoot, contract.relativeCwd)
-    } else {
-      const destination = await this.isolationDestination(parentContext)
-      isolation = await createIsolation({
-        destination,
-        integration: contract.isolation.integration ?? 'apply',
-        parent: parentContext,
-        relativeCwd: contract.relativeCwd,
-        spawnOrdinal,
-        writerId,
-      })
-      this.registerWorkspace(isolation)
-      effectiveCwd = joinEffectiveCwd(isolation.context.physicalRoot, isolation.context.relativeCwd)
-    }
-    const nestedPolicy = contract.capability?.nested
-    const nestedExtension =
-      nestedPolicy?.enabled === true
-        ? this.nestedExtension({
-            currentDepth: depth,
-            maxDepth: nestedPolicy.maxDepth,
-            parentWorkspace: isolation?.context ?? parentContext,
-            parentEffectiveCwd: effectiveCwd,
-            parentReadonly: contract.readonly,
-            parentTools: contract.tools,
-            profileId: contract.capability?.profileId,
-            rootAgentId: prior?.rootAgentId ?? options.rootAgentId,
-            runId,
-          })
-        : undefined
-    const extensions = [...execution.capabilities.extensions]
-    if (nestedExtension !== undefined)
-      extensions.push(nestedExtension, this.scopeBoundTaskControlExtension())
-
-    const parentScopeCompletion =
-      parentActive === undefined ? undefined : Promise.withResolvers<RuntimeTerminalResult>()
-    if (parentActive !== undefined && parentScopeCompletion !== undefined) {
-      parentActive.scope.register(writerId, parentScopeCompletion.promise, spawnOrdinal)
-    }
-    let session: AgentSession
     try {
+      let effectiveCwd: string
+      if (contract.isolation === undefined) {
+        effectiveCwd =
+          options.parentWorkspace === undefined
+            ? requestedPhysicalCwd
+            : joinEffectiveCwd(parentContext.physicalRoot, contract.relativeCwd)
+      } else {
+        const destination = await this.isolationDestination(parentContext)
+        isolation = await createIsolation({
+          destination,
+          integration: contract.isolation.integration ?? 'apply',
+          parent: parentContext,
+          relativeCwd: contract.relativeCwd,
+          spawnOrdinal,
+          writerId,
+        })
+        this.registerWorkspace(isolation)
+        effectiveCwd = joinEffectiveCwd(
+          isolation.context.physicalRoot,
+          isolation.context.relativeCwd,
+        )
+      }
+      const nestedPolicy = contract.capability?.nested
+      const nestedExtension =
+        nestedPolicy?.enabled === true
+          ? this.nestedExtension({
+              currentDepth: depth,
+              maxDepth: nestedPolicy.maxDepth,
+              parentWorkspace: isolation?.context ?? parentContext,
+              parentEffectiveCwd: effectiveCwd,
+              parentReadonly: contract.readonly,
+              parentTools: contract.tools,
+              profileId: contract.capability?.profileId,
+              rootAgentId: prior?.rootAgentId ?? options.rootAgentId,
+              runId,
+            })
+          : undefined
+      const extensions = [...execution.capabilities.extensions]
+      if (nestedExtension !== undefined)
+        extensions.push(nestedExtension, this.scopeBoundTaskControlExtension())
+
       session = await createChildSession({
         ctx: options.ctx,
         cwd: effectiveCwd,
@@ -1387,6 +1507,30 @@ export class SubagentRuntime {
           notifyParent: (agentId, message, level) => this.notifyParent(agentId, message, level),
           updateProgress: (agentId, phase, note) => this.updateProgress(agentId, phase, note),
         },
+        requestParent: async (question, signal) => {
+          const active = this.active.get(writerId)
+          if (!background || options.parentAgentId !== undefined || options.mailbox !== undefined) {
+            const reason = `A foreground or nested Task cannot wait for its blocked coordinator. Resume a direct Task with run_in_background=true to request this decision: ${redactSensitiveText(question)}. No authorization was granted.`
+            this.requestCancel(writerId, reason)
+            throw new Error(reason)
+          }
+          if (active === undefined || active.abortReason !== undefined)
+            throw new Error('The child is not active.')
+          active.lastActivity = 'Waiting for coordinator decision'
+          this.emitChange()
+          try {
+            const signals =
+              signal === undefined
+                ? [active.intercomController.signal]
+                : [signal, active.intercomController.signal]
+            return await this.decisions.request(active.handle, question, AbortSignal.any(signals))
+          } finally {
+            if (this.active.get(writerId) === active) {
+              active.lastActivity = 'Continuing after coordinator decision'
+              this.emitChange()
+            }
+          }
+        },
         model,
         resumeFile: prior?.sessionFile,
         runtime,
@@ -1397,145 +1541,138 @@ export class SubagentRuntime {
             ? contract.tools
             : [...contract.tools, 'Task', 'TaskControl'],
       })
-    } catch (error) {
-      if (isolation !== undefined) {
-        await captureIsolation(isolation)
-        await cleanupWorkspaceArtifacts(isolation)
-      }
-      parentScopeCompletion?.resolve({
-        details: { agentId: writerId, error: errorMessage(error), status: 'error' },
-        kind: 'failed',
-        outcome: 'failed',
-      })
-      throw error
-    }
-    try {
       this.assertOwnerFence(ownerFence)
-    } catch (error) {
-      session.dispose()
-      if (isolation !== undefined) {
-        await captureIsolation(isolation)
-        await cleanupWorkspaceArtifacts(isolation)
+      if (parentActive?.abortReason !== undefined) throw new Error(parentActive.abortReason)
+      const sessionFile = session.sessionFile
+      if (sessionFile === undefined) {
+        throw new ChildSessionError(
+          'The child session did not create a persistent transcript.',
+          session.sessionId,
+        )
       }
-      throw error
-    }
-    const sessionFile = session.sessionFile
-    if (sessionFile === undefined) {
-      const agentId = session.sessionId
-      session.dispose()
-      throw new ChildSessionError(
-        'The child session did not create a persistent transcript.',
-        agentId,
-      )
-    }
-    if (prior !== undefined && session.sessionId !== prior.agentId) {
-      session.dispose()
-      throw new Error('The resumed transcript returned a different Agent ID.')
-    }
+      if (prior !== undefined && session.sessionId !== prior.agentId) {
+        throw new Error('The resumed transcript returned a different Agent ID.')
+      }
 
-    const rootAgentId = prior?.rootAgentId ?? options.rootAgentId ?? session.sessionId
-    const parentSessionId = prior?.parentSessionId ?? options.parentAgentId ?? this.state.owner
-    contract.lineage = {
-      depth,
-      parentSessionId,
-      rootAgentId,
-      rootOwnerSessionId: this.state.owner,
-    }
-    if (prior?.parentAgentId !== undefined) contract.lineage.parentAgentId = prior.parentAgentId
-    else if (options.parentAgentId !== undefined)
-      contract.lineage.parentAgentId = options.parentAgentId
+      const rootAgentId = prior?.rootAgentId ?? options.rootAgentId ?? session.sessionId
+      const parentSessionId = prior?.parentSessionId ?? options.parentAgentId ?? this.state.owner
+      contract.lineage = {
+        depth,
+        parentSessionId,
+        rootAgentId,
+        rootOwnerSessionId: this.state.owner,
+      }
+      if (prior?.parentAgentId !== undefined) contract.lineage.parentAgentId = prior.parentAgentId
+      else if (options.parentAgentId !== undefined)
+        contract.lineage.parentAgentId = options.parentAgentId
 
-    const now = Date.now()
-    this.assertOwnerFence(ownerFence)
-    this.runGeneration += 1
-    const record: RunRecord = {
-      agentId: session.sessionId,
-      background,
-      createdAt: prior?.createdAt ?? now,
-      depth,
-      description,
-      effort: model.effort,
-      execution: contract,
-      fast: model.fast,
-      model: model.modelRef,
-      modelSelector: model.selector,
-      itemId: prior?.itemId ?? options.taskId ?? 'task',
-      ownerSessionId: this.state.owner,
-      parentSessionId,
-      readonly: contract.readonly,
-      rootAgentId,
-      runGeneration: this.runGeneration,
-      runId,
-      sessionFile,
-      status: 'running',
-      subagentType: input.subagent_type,
-      updatedAt: now,
-    }
-    if (prior?.parentAgentId !== undefined) record.parentAgentId = prior.parentAgentId
-    else if (options.parentAgentId !== undefined) record.parentAgentId = options.parentAgentId
-    if (prior?.isolation !== undefined) record.isolation = prior.isolation
-    if (prior?.isolationAttempts !== undefined) {
-      record.isolationAttempts = [...prior.isolationAttempts]
-    }
+      const now = Date.now()
+      this.assertOwnerFence(ownerFence)
+      this.runGeneration += 1
+      record = {
+        agentId: session.sessionId,
+        background,
+        createdAt: prior?.createdAt ?? now,
+        depth,
+        description,
+        effort: model.effort,
+        execution: contract,
+        fast: model.fast,
+        model: model.modelRef,
+        modelSelector: model.selector,
+        itemId: prior?.itemId ?? options.taskId ?? 'task',
+        ownerSessionId: this.state.owner,
+        parentSessionId,
+        readonly: contract.readonly,
+        rootAgentId,
+        runGeneration: this.runGeneration,
+        runId,
+        sessionFile,
+        status: 'running',
+        subagentType: input.subagent_type,
+        updatedAt: now,
+      }
+      if (prior?.parentAgentId !== undefined) record.parentAgentId = prior.parentAgentId
+      else if (options.parentAgentId !== undefined) record.parentAgentId = options.parentAgentId
+      if (prior?.isolation !== undefined) record.isolation = prior.isolation
+      if (prior?.isolationAttempts !== undefined) {
+        record.isolationAttempts = [...prior.isolationAttempts]
+      }
 
-    try {
+      if (parentActive !== undefined && parentScopeCompletion !== undefined) {
+        parentActive.scope.register(writerId, parentScopeCompletion.promise, spawnOrdinal)
+      }
       if (prior === undefined) {
         this.state.add(record)
         this.leases.add(record.agentId)
       } else this.state.update(record)
-    } catch (error) {
-      const agentId = session.sessionId
-      session.dispose()
-      throw new ChildSessionError(errorMessage(error), agentId)
-    }
 
-    const handle: SubagentHandle = {
-      agentId: record.agentId,
-      ownerGeneration: this.ownerGeneration,
-      ownerSessionId: this.state.owner,
-      runGeneration: this.runGeneration,
-    }
-    const destination: IsolationDestination | undefined = isolation
-      ? {
-          destinationWorkspaceId: parentContext.workspaceId,
-          destinationPhysicalRoot: parentContext.physicalRoot,
-          durableCommonDir: isolation.durableCommonDir,
-        }
-      : undefined
-    const active: ActiveRun = {
-      abortPromise: undefined,
-      abortReason: undefined,
-      completion: undefined,
-      cwd: effectiveCwd,
-      deferIntegration: options.deferIntegration === true || options.parentAgentId !== undefined,
-      destination,
-      intercomController: new AbortController(),
-      handle,
-      intercomUsage: emptyUsage(0),
-      isolationReceipt: undefined,
-      lastActivity: 'Starting',
-      messages: [],
-      metrics: { toolCalls: 0, turns: 0 },
-      partialMessage: undefined,
-      pendingQuestion: undefined,
-      parentScopeCompletion,
-      retryFailure: undefined,
-      retryState: undefined,
-      scope: new DescendantScope(`scope-${record.agentId}`),
-      session,
-      startedAt: Date.now(),
-      workspace: isolation,
-      workspaceContext: isolation?.context ?? parentContext,
+      const handle: SubagentHandle = {
+        agentId: record.agentId,
+        ownerGeneration: this.ownerGeneration,
+        ownerSessionId: this.state.owner,
+        runGeneration: this.runGeneration,
+      }
+      const destination: IsolationDestination | undefined = isolation
+        ? {
+            destinationWorkspaceId: parentContext.workspaceId,
+            destinationPhysicalRoot: parentContext.physicalRoot,
+            durableCommonDir: isolation.durableCommonDir,
+          }
+        : undefined
+      active = {
+        abortPromise: undefined,
+        abortReason: undefined,
+        completion: undefined,
+        cwd: effectiveCwd,
+        deferIntegration: options.deferIntegration === true || options.parentAgentId !== undefined,
+        destination,
+        intercomController: new AbortController(),
+        integrationStarted: false,
+        handle,
+        intercomUsage: emptyUsage(0),
+        isolationReceipt: undefined,
+        lastActivity: 'Starting',
+        messages: [],
+        metrics: { toolCalls: 0, turns: 0 },
+        partialMessage: undefined,
+        pendingQuestion: undefined,
+        parentScopeCompletion,
+        retryFailure: undefined,
+        retryState: undefined,
+        scope: new DescendantScope(`scope-${record.agentId}`, (agentId, retained) => {
+          if (retained) this.state.pin(agentId)
+          else this.state.unpin(agentId)
+        }),
+        session,
+        startedAt: Date.now(),
+        workspace: isolation,
+        workspaceContext: isolation?.context ?? parentContext,
+      }
+    } catch (error) {
+      await this.cleanupUnadmitted(session, isolation).catch(() => {})
+      parentScopeCompletion?.resolve({
+        details: {
+          agentId: session?.sessionId ?? writerId,
+          error: errorMessage(error),
+          status: 'error',
+        },
+        kind: 'failed',
+        outcome: 'failed',
+      })
+      if (record !== undefined) throw new ChildSessionError(errorMessage(error), record.agentId)
+      throw error
     }
     this.active.set(record.agentId, active)
-    options.onStarted?.(record.agentId)
-    this.emitChange()
-    const turn = this.completeRun(
-      record,
-      model,
-      prompt,
-      active,
-      background && options.retainBackgroundSignal !== true ? undefined : options.signal,
+    const turn = Promise.resolve().then(() =>
+      this.completeRun(
+        record,
+        model,
+        prompt,
+        active,
+        background && options.retainBackgroundSignal !== true ? undefined : options.signal,
+        options.onStarted,
+      ),
     )
     const completion = turn.then(
       (result) => this.finalizeRun(record, active, background, result),
@@ -1555,12 +1692,36 @@ export class SubagentRuntime {
         createdAt: record.createdAt,
         effort: model.effort,
         fast: model.fast,
-        handle: { ...handle },
+        handle: { ...active.handle },
         model: model.modelRef,
         status: 'background',
         transcriptPath: record.sessionFile,
       },
       kind: 'background',
+    }
+  }
+
+  private async cleanupUnadmitted(
+    session: AgentSession | undefined,
+    workspace: WriterWorkspace | undefined,
+  ): Promise<void> {
+    try {
+      session?.dispose()
+    } finally {
+      if (workspace !== undefined) {
+        let captured = false
+        try {
+          const receipt = await captureIsolation(workspace)
+          captured = receipt.captureStatus === 'captured' && !receipt.cleanupDebt
+        } finally {
+          const cleanupDebt = !captured || (await cleanupWorkspaceArtifacts(workspace))
+          await this.transitionWorkspace(
+            workspace,
+            cleanupDebt ? 'cleanup-debt' : 'cleaned',
+            'blocked',
+          )
+        }
+      }
     }
   }
 
@@ -1837,6 +1998,7 @@ export class SubagentRuntime {
     active.pendingQuestion = pending
     try {
       const result = await pending
+      this.assertRunContinuing(active)
       active.intercomUsage = addUsage(active.intercomUsage, result.usage)
       recordAutomaticReply(this.pi, agentId, question, result.reply)
       return result.reply
@@ -1853,25 +2015,53 @@ export class SubagentRuntime {
     }
   }
 
+  replyToDecision(agentId: string, requestId: string, answer: string, callerId: string) {
+    return this.decisions.reply(agentId, requestId, answer, (handle) => {
+      const active = this.active.get(agentId)
+      return (
+        callerId === this.state.owner &&
+        active !== undefined &&
+        active.abortReason === undefined &&
+        handle.ownerSessionId === this.state.owner &&
+        handle.ownerGeneration === this.ownerGeneration &&
+        handle.runGeneration === active.handle.runGeneration
+      )
+    })
+  }
+
+  isCurrentDelivery(delivery: DeliveryRecord): boolean {
+    const record = this.state.get(delivery.agentId)
+    return (
+      record !== undefined &&
+      record.ownerSessionId === delivery.ownerSessionId &&
+      (record.runGeneration ?? 0) === delivery.runGeneration &&
+      (delivery.kind !== 'request' || this.active.has(delivery.agentId))
+    )
+  }
+
   private notifyParent(
     agentId: string,
     message: string,
     level: 'info' | 'warning' | 'error',
-  ): void {
-    if (!this.active.has(agentId)) return
-    this.pi.sendMessage(
-      {
-        content: [
-          `<subagent-notice agent-id="${agentId}" level="${level}">`,
-          message,
-          '</subagent-notice>',
-        ].join('\n'),
-        customType: 'subagent-intercom',
-        details: { agentId, kind: 'notification', level, message },
-        display: true,
-      },
-      { deliverAs: 'followUp', triggerTurn: true },
-    )
+  ): DeliveryRecord {
+    const active = this.active.get(agentId)
+    if (
+      active === undefined ||
+      active.abortReason !== undefined ||
+      active.handle.ownerGeneration !== this.ownerGeneration
+    ) {
+      throw new Error('The child cannot notify a stale or cancelled parent run.')
+    }
+    return this.deliveries.enqueue({
+      agentId,
+      content: redactSensitiveText(message.trim()),
+      customType: 'subagent-intercom',
+      display: true,
+      kind: 'notice',
+      level,
+      ownerSessionId: active.handle.ownerSessionId,
+      runGeneration: active.handle.runGeneration,
+    })
   }
 
   private updateProgress(agentId: string, phase: string, note: string | undefined): void {
@@ -1890,6 +2080,7 @@ export class SubagentRuntime {
     if (fence.generation !== this.ownerGeneration) {
       throw new Error('The Task owner generation changed during child setup.')
     }
+    if (!this.accepting) throw new Error('The subagent owner is shutting down.')
   }
 
   private getModelRuntime(ctx: ExtensionContext) {
@@ -1993,6 +2184,7 @@ export class SubagentRuntime {
       for (const entry of active.scope.list()) this.requestCancel(entry.agentId)
     }
     await Promise.all(active.scope.list().map((entry) => entry.completion.catch(() => undefined)))
+    if (mode === 'success') this.assertRunContinuing(active)
     let conflict: string | undefined
     const entries = active.scope.list()
     if (mode === 'success' && entries.length > 0) {
@@ -2023,7 +2215,12 @@ export class SubagentRuntime {
           durableCommonDir: await this.durableCommonDirFor(active.workspaceContext),
         }
         for (const child of staged) {
-          let updated = await integrateStagedReceipt(child.receipt, destination, record.agentId)
+          let updated = await integrateStagedReceipt(
+            child.receipt,
+            destination,
+            record.agentId,
+            () => this.assertRunContinuing(active),
+          )
           if (updated.status === 'integrated') {
             updated = await this.cleanupJoinedReceipt(updated)
           }
@@ -2119,12 +2316,22 @@ export class SubagentRuntime {
     return { artifact, gateResults, structuredOutput }
   }
 
+  private assertRunContinuing(active: ActiveRun): void {
+    if (active.integrationStarted) return
+    if (active.abortReason !== undefined) throw new Error(active.abortReason)
+    this.assertOwnerFence({
+      generation: active.handle.ownerGeneration,
+      sessionId: active.handle.ownerSessionId,
+    })
+  }
+
   private async completeRun(
     record: RunRecord,
     model: ResolvedModel,
     prompt: string,
     active: ActiveRun,
     signal: AbortSignal | undefined,
+    onStarted: ((agentId: string) => void) | undefined,
   ): Promise<RuntimeTerminalResult> {
     const unsubscribe = active.session.subscribe((event) => {
       if (event.type === 'turn_start') {
@@ -2176,11 +2383,7 @@ export class SubagentRuntime {
     })
     let timeout: ReturnType<typeof setTimeout> | undefined
     const abortFromSignal = () => {
-      active.abortReason = 'The parent Task call was aborted.'
-      active.intercomController.abort(active.abortReason)
-      active.abortPromise ??= active.session.abort().catch((error) => {
-        active.abortReason = errorMessage(error)
-      })
+      this.requestCancel(record.agentId, 'The parent Task call was aborted.')
     }
 
     if (signal?.aborted === true) abortFromSignal()
@@ -2188,10 +2391,13 @@ export class SubagentRuntime {
 
     let outputState: OutputState | undefined
     try {
-      if (active.abortReason !== undefined) throw new Error(active.abortReason)
+      onStarted?.(record.agentId)
+      this.emitChange()
+      this.assertRunContinuing(active)
 
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
+          if (active.integrationStarted) return
           active.abortReason = 'The child exceeded the six-hour runtime limit.'
           active.intercomController.abort(active.abortReason)
           active.abortPromise ??= active.session.abort().catch((error) => {
@@ -2258,8 +2464,11 @@ export class SubagentRuntime {
           outputState,
         )
       }
+      this.assertRunContinuing(active)
       const scopeConflict = await this.closeDescendantScope(record, active, 'success')
+      this.assertRunContinuing(active)
       const isolationReceipt = await this.captureRunIsolation(active, record)
+      this.assertRunContinuing(active)
       if (scopeConflict !== undefined) {
         return this.finishFailure(
           record,
@@ -2292,6 +2501,10 @@ export class SubagentRuntime {
             isolationReceipt,
             active.destination,
             record.agentId,
+            () => {
+              this.assertRunContinuing(active)
+              active.integrationStarted = true
+            },
           )
           this.applyReceiptToRecord(record.agentId, active.isolationReceipt)
           if (active.workspace !== undefined) {
@@ -2317,6 +2530,7 @@ export class SubagentRuntime {
           await this.transitionWorkspace(active.workspace, 'staged', 'pending')
         }
       }
+      this.assertRunContinuing(active)
       if (active.isolationReceipt?.rootVisibility === 'visible') {
         this.propagateDescendantVisibility(record, 'visible')
       }
@@ -2412,10 +2626,32 @@ export class SubagentRuntime {
         outputState,
       )
     } finally {
-      await this.cleanupCapturedWorkspace(active)
       if (timeout !== undefined) clearTimeout(timeout)
       signal?.removeEventListener('abort', abortFromSignal)
       unsubscribe()
+      try {
+        await this.cleanupCapturedWorkspace(active)
+      } catch (error) {
+        const receipt = active.isolationReceipt
+        if (receipt !== undefined) {
+          receipt.cleanupDebt = true
+          try {
+            const current = this.state.get(record.agentId)
+            if (current !== undefined) this.state.update({ ...current, isolation: { ...receipt } })
+            if (active.workspace !== undefined)
+              await this.transitionWorkspace(
+                active.workspace,
+                'cleanup-debt',
+                receipt.rootVisibility ?? 'pending',
+              )
+            this.pi.appendEntry('pi-subagent-cleanup-error', {
+              agentId: record.agentId,
+              error: errorMessage(error),
+              attemptId: receipt.attemptId,
+            })
+          } catch {}
+        }
+      }
     }
   }
 
@@ -2426,7 +2662,7 @@ export class SubagentRuntime {
     result: RuntimeTerminalResult,
   ): RuntimeTerminalResult {
     let finalResult = result
-    if (background) {
+    if (background && active.handle.ownerGeneration === this.ownerGeneration) {
       try {
         this.notify(record, result)
       } catch (error) {
@@ -2457,6 +2693,8 @@ export class SubagentRuntime {
   private matchesHandle(handle: SubagentHandle): boolean {
     const active = this.active.get(handle.agentId)
     return (
+      handle.ownerSessionId === this.state.owner &&
+      handle.ownerGeneration === this.ownerGeneration &&
       active !== undefined &&
       active.handle.ownerSessionId === handle.ownerSessionId &&
       active.handle.ownerGeneration === handle.ownerGeneration &&
@@ -2567,14 +2805,19 @@ export class SubagentRuntime {
       taskId: record.agentId,
       title: record.description,
     }
-    this.pi.sendMessage(
-      {
-        content: `Task notification: ${JSON.stringify(notification)}`,
-        customType: 'system/task_notification',
-        details: notification,
-        display: false,
-      },
-      { deliverAs: 'followUp', triggerTurn: true },
-    )
+    if (record.ownerSessionId !== this.state.owner) return
+    this.deliveries.enqueue({
+      agentId: record.agentId,
+      content: `Task notification: ${JSON.stringify(notification)}`,
+      customType: 'system/task_notification',
+      detail,
+      title: record.description,
+      status,
+      display: false,
+      kind: 'completion',
+      level: status === 'error' ? 'error' : status === 'aborted' ? 'warning' : 'info',
+      ownerSessionId: record.ownerSessionId,
+      runGeneration: record.runGeneration ?? 0,
+    })
   }
 }

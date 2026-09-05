@@ -286,9 +286,11 @@ export async function integrateStagedReceipt(
   receipt: IsolationReceipt,
   destination: IsolationDestination,
   writerId: string,
+  beforeApply?: () => void,
 ): Promise<IsolationReceipt> {
   if (receipt.integration !== 'apply') return receipt
   if (receipt.repositories.length === 0) {
+    beforeApply?.()
     return receipt.captureStatus === 'captured'
       ? { ...receipt, integrationStatus: 'integrated', status: 'integrated' }
       : receipt
@@ -308,6 +310,7 @@ export async function integrateStagedReceipt(
   }))
   const outcomes = await integrateRepositories({
     artifactRoot: receiptArtifactDirectory(receipt),
+    beforeApply,
     destinationWorkspaceId: destination.destinationWorkspaceId,
     owner,
     repositories: specs,

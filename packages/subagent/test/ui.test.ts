@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vite-plus/test'
 
+import { quotedBody, renderIntercomCard } from '../src/cards.ts'
 import {
   activitySnippet,
   describeCall,
@@ -22,6 +23,38 @@ const theme: SubagentTheme = {
   fg: (_color, text) => text,
   getFgAnsi: () => '',
 }
+
+it('renders send age separately from delivery latency and acknowledgment', () => {
+  const lines = renderIntercomCard(
+    { agentId: 'child', kind: 'notification', level: 'warning', message: 'Check dependency' },
+    'Child',
+    9_000,
+    {
+      expanded: false,
+      now: 120_000,
+      delivery: {
+        agentId: 'child',
+        content: 'Check dependency',
+        customType: 'subagent-intercom',
+        display: true,
+        id: 'notice',
+        kind: 'notice',
+        level: 'warning',
+        ownerSessionId: 'owner',
+        runGeneration: 1,
+        sentAt: 0,
+        queuedAt: 0,
+        deliveredAt: 60_000,
+        state: 'delivered',
+      },
+    },
+    theme,
+  ).join('\n')
+  expect(lines).toContain('sent 2m ago')
+  expect(lines).toContain('queue 1m')
+  expect(lines).toContain('delivered')
+  expect(lines).not.toContain('acknowledged')
+})
 
 function snapshot(
   agentId: string,
@@ -74,7 +107,61 @@ function snapshot(
 }
 
 describe('subagent TUI', () => {
-  it('renders the Empryo dispatch panel and respects terminal width', () => {
+  it('wraps full IRC text instead of losing content after eighty columns', () => {
+    const message =
+      'A complete report with enough text to cross the old fixed column limit. '.repeat(4) +
+      'FINAL EVIDENCE'
+    for (const width of [32, 80, 160]) {
+      const lines = quotedBody(message, theme, { expanded: true, width })
+      const body = lines.map((line) => line.replace(/^  ▏ /u, '').trim()).join(' ')
+      expect(body).toBe(message)
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+      expect(lines.join('\n')).not.toContain('…')
+    }
+  })
+
+  it('bounds collapsed IRC previews and retains full text on expansion', () => {
+    const body = Array.from({ length: 30 }, (_, index) => `Evidence ${index}`).join('\n')
+    const collapsed = quotedBody(body, theme, { expanded: false, width: 40 })
+    expect(collapsed).toHaveLength(4)
+    expect(collapsed.at(-1)).toContain('+27 more lines')
+    const expanded = quotedBody(body, theme, { expanded: true, width: 40 })
+    expect(expanded).toHaveLength(30)
+    expect(expanded.at(-1)).toContain('Evidence 29')
+  })
+
+  it('uses available widget width for complete agent names', () => {
+    const name = 'Eliminar custos extras nas chamadas do agente'
+    const agent = snapshot('wide', name, 'running', '/tmp/one.jsonl', true)
+    for (const width of [80, 120, 180]) {
+      const lines = renderSubagentHudLines([agent], theme, width, 2_500)
+      expect(lines.join('\n')).toContain(name)
+      expect(lines.join('\n')).not.toContain('…')
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+    }
+  })
+
+  it('wraps long Unicode agent names without dropping their tail', () => {
+    const words = Array.from({ length: 40 }, (_, index) => `界面${index}`)
+    const agent = snapshot('long', words.join(' '), 'running', '/tmp/one.jsonl', true)
+    for (const width of [32, 60, 120]) {
+      const lines = renderSubagentHudLines([agent], theme, width, 2_500)
+      const text = lines.map(stripTerminalSequences).join('\n')
+      expect(text.replace(/\s/gu, '')).toContain(words.join(''))
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+    }
+  })
+
+  it('keeps IRC quote rows within narrow terminal widths', () => {
+    for (let width = 0; width <= 40; width += 1) {
+      for (const expanded of [false, true]) {
+        const lines = quotedBody('界面 🙂 é '.repeat(10), theme, { expanded, width })
+        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+      }
+    }
+  })
+
+  it('renders the dispatch panel and respects terminal width', () => {
     const snapshots = [
       snapshot('active', 'Inspect runtime', 'running', '/tmp/active.jsonl'),
       snapshot('done', 'Review tests', 'completed', '/tmp/done.jsonl'),
@@ -83,8 +170,8 @@ describe('subagent TUI', () => {
     const plainLines = lines.map(stripTerminalSequences)
     expect(plainLines[0]).toMatch(/^   󰚩 dispatch · 2 ▾/)
     expect(plainLines[1]).toContain('◉ opus')
-    expect(plainLines[2]).toContain('(◉‿◉) Inspect r…')
-    expect(plainLines[3]).toContain('(✓‿✓) Review te…')
+    expect(plainLines[2]).toContain('(◉‿◉) Inspect runtime')
+    expect(plainLines[3]).toContain('(✓‿✓) Review tests')
     expect(plainLines.at(-2)).toContain('↯ inspect in the panel')
     expect(plainLines.at(-2)).toContain('ctrl+shift+a')
     expect(plainLines.at(-1)).toBe('')

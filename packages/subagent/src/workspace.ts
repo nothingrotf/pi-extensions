@@ -489,7 +489,7 @@ export async function removeFromRegistry(
 
 export interface DescendantEntry {
   agentId: string
-  completion: Promise<unknown>
+  completion: Promise<void>
   spawnOrdinal: number
 }
 
@@ -498,7 +498,10 @@ export class DescendantScope {
   private ordinalCounter = 0
   private state: 'closed' | 'closing' | 'open' = 'open'
 
-  constructor(readonly scopeId: string) {}
+  constructor(
+    readonly scopeId: string,
+    private readonly onRetain?: (agentId: string, retained: boolean) => void,
+  ) {}
 
   get closeStarted(): boolean {
     return this.state !== 'open'
@@ -522,7 +525,15 @@ export class DescendantScope {
   register(agentId: string, completion: Promise<unknown>, spawnOrdinal?: number): number {
     this.assertCanSpawn()
     const ordinal = spawnOrdinal ?? this.nextOrdinal()
-    this.children.set(agentId, { agentId, completion, spawnOrdinal: ordinal })
+    if (!this.children.has(agentId)) this.onRetain?.(agentId, true)
+    this.children.set(agentId, {
+      agentId,
+      completion: completion.then(
+        () => undefined,
+        () => undefined,
+      ),
+      spawnOrdinal: ordinal,
+    })
     return ordinal
   }
 
@@ -535,11 +546,13 @@ export class DescendantScope {
   }
 
   markClosing(): void {
-    this.state = 'closing'
+    if (this.state === 'open') this.state = 'closing'
   }
 
   markClosed(): void {
     this.state = 'closed'
+    for (const agentId of this.children.keys()) this.onRetain?.(agentId, false)
+    this.children.clear()
   }
 }
 

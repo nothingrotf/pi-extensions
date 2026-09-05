@@ -17,7 +17,7 @@ import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs
 import { JobProgress } from './progress.ts'
 import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
-import { BatchTaskInputSchema, SingleTaskInputSchema, TaskInputSchema } from './schema.ts'
+import { decodeBatchTaskInput, decodeSingleTaskInput, TaskInputSchema } from './schema.ts'
 import {
   plainText,
   rowFromBatchItem,
@@ -92,6 +92,21 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   pi.events.emit(SUBAGENT_DISCOVERY_EVENT, { version: 1 })
   pi.events.emit(SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT, { version: 1 })
 
+  pi.on('context', (event, ctx) => {
+    runtime.deliveries.ensureOwner(ctx)
+    return {
+      messages: runtime.deliveries.context(event.messages, (record) =>
+        runtime.isCurrentDelivery(record),
+      ),
+    }
+  })
+  pi.on('session_before_compact', () => runtime.deliveries.pause())
+  pi.on('session_compact', (_event, ctx) => {
+    runtime.deliveries.compact()
+    runtime.deliveries.resumeWhenIdle(ctx)
+  })
+  pi.on('session_compact_failed', (_event, ctx) => runtime.deliveries.resumeWhenIdle(ctx))
+
   pi.on('agent_start', (_event, ctx) => {
     tui.agentStart(ctx)
   })
@@ -111,6 +126,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     if (await host.replaceSession(ctx)) tui.sessionStart(ctx)
   })
   pi.on('session_shutdown', async (_event, ctx) => {
+    runtime.deliveries.pause()
     unregisterAgentEvents()
     unregisterCapabilityProfileEvents()
     for (const unregister of agentRegistrations.values()) unregister()
@@ -124,17 +140,30 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     const label =
       runtime.listSnapshots().find((snapshot) => snapshot.agentId === details.agentId)
         ?.description ?? details.agentId
-    return new Text(
-      renderIntercomCard(
-        details,
-        label,
-        message.timestamp,
-        { expanded: options.expanded, now: Date.now() },
-        theme,
-      ).join('\n'),
-      1,
-      0,
-    )
+    return {
+      invalidate() {},
+      render(width) {
+        return new Text(
+          renderIntercomCard(
+            details,
+            label,
+            message.timestamp,
+            {
+              expanded: options.expanded,
+              now: Date.now(),
+              width: Math.max(1, width - 2),
+              delivery:
+                details.deliveryId === undefined
+                  ? undefined
+                  : runtime.deliveries.get(details.deliveryId),
+            },
+            theme,
+          ).join('\n'),
+          1,
+          0,
+        ).render(width)
+      },
+    }
   })
 
   pi.registerCommand('subagents', {
@@ -287,7 +316,7 @@ async function executeTask(
   progress: JobProgress,
 ): Promise<AgentToolResult<TaskToolDetails>> {
   if ('tasks' in input) {
-    const decoded = Value.Decode(BatchTaskInputSchema, input)
+    const decoded = decodeBatchTaskInput(input)
     const batch = await runBatch({
       ctx,
       input: decoded,
@@ -305,7 +334,7 @@ async function executeTask(
       },
     }
   }
-  const decoded = Value.Decode(SingleTaskInputSchema, input)
+  const decoded = decodeSingleTaskInput(input)
   const result = await runtime.run({ ctx, input: decoded, onStarted: progress.started, signal })
 
   if (result.kind === 'background') {
