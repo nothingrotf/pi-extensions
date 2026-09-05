@@ -15,7 +15,7 @@ A complete `todo_write` and `todo_read` lifecycle for Pi sessions.
 - It returns complete state, readiness, transition, and reminder metadata.
 - It stores complete todo snapshots on the active Pi session branch.
 - It restores the correct list after resume, fork, or branch navigation.
-- It renders an Empryo-style task panel above the editor.
+- It renders a task panel above the editor.
 - It displays a responsive frame, a progress title, state icons, and a six-row task window.
 - It hides completed panel rows after one agent run.
 - It publishes update, turn-start, and reminder events for other extensions.
@@ -126,17 +126,16 @@ Filter by status, ID, or both.
 
 ## Persistent task panel
 
-The widget renders an Empryo-style task panel above the editor:
+The widget renders a task panel above the editor:
 
 ```text
-    ╭─  Tasks 1/3 ▾ ─────────────────╮
-    │  +1 done                        │
-    │  ⠋ Implement change             │
-    │  ○ Verify behavior              │
-    ╰─────────────────────────────────╯
+    Tasks 1/3 ▾
+   +1 done
+   ⠋ Implement change
+   ○ Verify behavior
 ```
 
-The responsive side inset uses one to four columns. The panel uses a rounded border and a title chip.
+The responsive side inset uses zero to three columns. The panel uses an unbordered title and task rows.
 
 Rows use these states:
 
@@ -175,7 +174,7 @@ The state remains available through `todo_read` after the panel hides a complete
 /todo eager <off|preferred|always>
 ```
 
-A task reference matches an id first, then a case-insensitive substring of the content. When several tasks match, the command picks the single open match or reports the ambiguity.
+A task reference matches an id first, then a case-insensitive substring of the content. When several tasks match, the command prefers a single pending or in-progress match. Otherwise, it reports the ambiguity.
 
 Each user edit appends a `pi-todo-user-edit` entry to the session branch and queues a hidden `todo-user-edit` message for the model. The message states that the user changed the list and, after a removal, that the model must not re-add the removed items.
 
@@ -233,7 +232,10 @@ Each accepted user message resets the reminder cycle at `message_start`. This in
 
 The reminder does not fire when:
 
-- one of the last 12 non-empty prose lines is a question or a recognized response request
+- Ask reports open or queued questions, or a form skipped or aborted by the user
+- another extension UI prompt is open
+- the user requested stop, cancel, or pause, or the current run was aborted
+- one of the last 12 non-empty prose lines contains a conversational question or response request, except bare continuation permission
 - the last assistant response is empty, contains tool calls, or has a stop reason other than `stop`
 - a previous reminder still waits for progress
 - three reminders already fired for the current user message
@@ -243,7 +245,23 @@ The reminder does not fire when:
 
 The detector uses Markdown structure and ignores quoted examples, code, tables, images, and HTML. It handles multiline quotes, multiline code spans, emphasis, headings, and questions regardless of ASCII characters.
 
-Response requests without a question mark support English and Portuguese. These rules are conservative heuristics, not a semantic check of user intent.
+Outstanding AskQuestion forms and blocked task dependencies are the primary evidence. Todo listens to the optional versioned `ask:state` protocol documented by Ask. Without Ask installed, UI lifecycle and conversational detection still work.
+
+Bare continuation requests do not suppress reminders for actionable work:
+
+- `Posso continuar?`
+- `Should I continue?`
+- `Can I proceed?`
+
+Scoped questions such as `Should I continue with the production deployment?` still suppress reminders. Material choices and separate decision questions also suppress reminders.
+
+A reminder requests only authorized work. It respects stop, pause, cancellation, and consequential decisions.
+
+Response requests without a question mark and leading stop/cancel/pause instructions support English and Portuguese. These are conservative heuristics, not a semantic check of arbitrary user intent.
+
+A new user message clears the stop latch. It does not close an outstanding form.
+
+Use blocked todos with blocker notes for durable decisions.
 
 Actionable tasks include pending and active tasks whose dependency chains can complete without external input. Blocked, cancelled, missing, and cyclic dependencies exclude dependent tasks from reminders.
 
@@ -267,7 +285,7 @@ The extension counts successful `edit` and `write` calls at `tool_execution_end`
 
 After twelve calls without a successful todo update, it queues a hidden `todo-mid-run-nudge` as steering input. The next model request in the current run receives the nudge.
 
-At most two nudges fire per user message. A successful `todo_write` or manual todo edit resets the call counter, but not the two-nudge limit.
+At most two nudges fire per user message. A successful `todo_write` or manual todo edit resets the call counter, but not the two-nudge limit. Open questions, active UI prompts, and user stop/skip/abort state suppress nudges too.
 
 Shell calls do not count because their results do not establish whether files changed. Failed calls do not count or reset the counter.
 

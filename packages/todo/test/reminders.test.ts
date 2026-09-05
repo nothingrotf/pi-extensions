@@ -18,10 +18,24 @@ describe('awaiting user answer detection', () => {
   test('detects questions without an ASCII or language restriction', () => {
     expect(isAwaitingUserAnswer('Which branch should I use?')).toBe(true)
     expect(isAwaitingUserAnswer('Summary.\n- Q1: keep the old API?')).toBe(true)
-    expect(isAwaitingUserAnswer('Do you want me to continue?')).toBe(true)
+    expect(isAwaitingUserAnswer('Do you want me to continue with the deployment?')).toBe(true)
     expect(isAwaitingUserAnswer('Qual opção prefere?')).toBe(true)
     expect(isAwaitingUserAnswer('Qual arquivo devo alterar?')).toBe(true)
     expect(isAwaitingUserAnswer('続行しますか？')).toBe(true)
+  })
+
+  test.each([
+    'Posso continuar?',
+    'Should I continue?',
+    'Do you want me to continue?',
+    'Can I proceed?',
+    'Ready. **Posso continuar?**',
+  ])('does not treat bare continuation permission as a material question: %s', (text) => {
+    expect(isAwaitingUserAnswer(text)).toBe(false)
+  })
+
+  test('retains a material question beside a redundant permission request', () => {
+    expect(isAwaitingUserAnswer('Should I continue? Which target should I deploy to?')).toBe(true)
   })
 
   test('detects response cues', () => {
@@ -147,7 +161,9 @@ describe('reminder cycle', () => {
       kind: 'silent',
       reason: 'no-incomplete',
     })
-    expect(decideStopReminder(progressed, todos, { ...stop, text: 'Should I continue?' })).toEqual({
+    expect(
+      decideStopReminder(progressed, todos, { ...stop, text: 'Which target should I use?' }),
+    ).toEqual({
       kind: 'silent',
       reason: 'awaiting-user',
     })

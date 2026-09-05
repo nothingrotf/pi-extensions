@@ -20,6 +20,7 @@ import {
   parseTodoCommand,
   setStatus,
   slugId,
+  startTodo,
   splitBlockArguments,
   todoUsage,
   userEditReminder,
@@ -63,6 +64,7 @@ import {
   formatMidRunNudge,
   formatStopReminder,
   maximumStopReminders,
+  isUserStopRequest,
   recordToolResult,
   recordTodoUpdate,
 } from './reminders.ts'
@@ -74,7 +76,7 @@ export const TodoWriteSchema = Type.Object(
     }),
     merge: Type.Boolean({
       description:
-        'Whether to merge the todos with the existing todos. If true, the todos will be merged into the existing todos based on the id field. You can leave unchanged properties undefined. If false, the new todos will replace the existing todos.',
+        'Whether to merge the todos with the existing todos. If true, listed items update or extend the existing list while unlisted items remain unchanged. Each listed item still requires id, content, and status. If false, the new todos replace the existing list.',
     }),
   },
   { additionalProperties: false },
@@ -284,6 +286,12 @@ function decodeEagerEntry<Input>(value: Input): EagerMode | null {
   }
 }
 
+const AskStateSchema = Type.Object({
+  version: Type.Literal(1),
+  pending: Type.Integer({ minimum: 0 }),
+  paused: Type.Boolean(),
+})
+
 const ReminderDetailsSchema = Type.Object({
   attempt: Type.Integer(),
   maxAttempts: Type.Integer(),
@@ -338,6 +346,24 @@ export default function todo(pi: ExtensionAPI): void {
   const defaultEagerMode: EagerMode = 'preferred'
   let eagerMode: EagerMode = defaultEagerMode
   let userPromptPending = false
+  let questionPending = false
+  let questionPaused = false
+  let uiPromptOpen = false
+  let userStopped = false
+
+  const unsubscribeAsk = pi.events.on('ask:state', (data) => {
+    if (!Value.Check(AskStateSchema, data)) return
+    questionPending = data.pending > 0
+    questionPaused = data.paused
+  })
+  const waitingForUser = () => questionPending || questionPaused || uiPromptOpen || userStopped
+
+  pi.on('ui_prompt_start', () => {
+    uiPromptOpen = true
+  })
+  pi.on('ui_prompt_end', () => {
+    uiPromptOpen = false
+  })
 
   const todoToolActive = () => pi.getActiveTools().includes('todo_write')
 
@@ -351,6 +377,11 @@ export default function todo(pi: ExtensionAPI): void {
     reminderCompletion?.()
     reminderCompletion = undefined
     userPromptPending = false
+    questionPending = false
+    questionPaused = false
+    uiPromptOpen = false
+    userStopped = false
+    pi.events.emit('ask:state:request', {})
     todos = []
     eagerMode = defaultEagerMode
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -406,6 +437,7 @@ export default function todo(pi: ExtensionAPI): void {
     reminderCompletion?.()
     reminderCompletion = undefined
     overlay.dispose()
+    unsubscribeAsk()
   })
 
   const hasUserMessages = (ctx: ExtensionContext): boolean =>
@@ -419,13 +451,28 @@ export default function todo(pi: ExtensionAPI): void {
   })
 
   pi.on('message_start', (event) => {
-    if (event.message.role === 'user') cycle = createReminderCycle()
+    if (event.message.role !== 'user') return
+    cycle = createReminderCycle()
+    const content = event.message.content
+    const text = Array.isArray(content)
+      ? content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text)
+          .join('\n')
+      : content
+    userStopped = isUserStopRequest(text)
   })
 
   pi.on('before_agent_start', (event, ctx) => {
     const fromUserPrompt = userPromptPending
     userPromptPending = false
-    if (!fromUserPrompt || eagerMode === 'off' || todos.length > 0 || !todoToolActive()) {
+    if (
+      !fromUserPrompt ||
+      eagerMode === 'off' ||
+      todos.length > 0 ||
+      !todoToolActive() ||
+      isUserStopRequest(event.prompt)
+    ) {
       return
     }
     const prompt = event.prompt.trimEnd()
@@ -445,8 +492,9 @@ export default function todo(pi: ExtensionAPI): void {
     cycle = recordToolResult(cycle, event.toolName, event.isError)
   })
 
-  pi.on('turn_end', () => {
-    if (!todoToolActive()) {
+  pi.on('turn_end', (_event, ctx) => {
+    if (ctx.signal?.aborted) userStopped = true
+    if (!todoToolActive() || waitingForUser()) {
       return
     }
     const decision = decideMidRunNudge(cycle, todos)
@@ -464,7 +512,8 @@ export default function todo(pi: ExtensionAPI): void {
     )
   })
 
-  pi.on('agent_end', (event) => {
+  pi.on('agent_end', (event, ctx) => {
+    if (ctx.signal?.aborted) userStopped = true
     overlay.setWorking(false)
     stoppedAssistant = lastAssistant(event.messages)
   })
@@ -476,7 +525,14 @@ export default function todo(pi: ExtensionAPI): void {
     const assistant = stoppedAssistant
     stoppedAssistant = null
     try {
-      if (assistant === null || !ctx.isIdle() || !todoToolActive() || ctx.hasPendingMessages())
+      if (
+        assistant === null ||
+        waitingForUser() ||
+        ctx.signal?.aborted ||
+        !ctx.isIdle() ||
+        !todoToolActive() ||
+        ctx.hasPendingMessages()
+      )
         return
       const decision = decideStopReminder(cycle, todos, assistant)
       if (decision.kind === 'silent') return
@@ -547,7 +603,7 @@ export default function todo(pi: ExtensionAPI): void {
         }
         overlay.update()
       }
-      const notificationTodos = params.todos.map((todo) => ({
+      const notificationTodos = details.todos.map((todo) => ({
         id: todo.id,
         content: todo.content,
         status: todo.status,
@@ -782,8 +838,11 @@ export default function todo(pi: ExtensionAPI): void {
     if (target === undefined) {
       return
     }
+    const now = Date.now()
     commitUserEdit(
-      setStatus(todos, target.id, status, Date.now(), blocker),
+      status === 'in_progress'
+        ? startTodo(todos, target.id, now)
+        : setStatus(todos, target.id, status, now, blocker),
       `/todo ${status === 'cancelled' ? 'drop' : status === 'in_progress' ? 'start' : status === 'completed' ? 'done' : status === 'blocked' ? 'block' : 'unblock'} #${target.id}`,
       ctx,
     )

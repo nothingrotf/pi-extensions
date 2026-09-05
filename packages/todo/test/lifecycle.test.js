@@ -373,11 +373,40 @@ describe('todo lifecycle', () => {
     })
   })
 
+  test('emits the complete normalized list for merge updates', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    await instance.tool('todo_write', {
+      merge: false,
+      todos: [
+        { id: '1', content: 'Inspect', status: 'pending' },
+        { id: '2', content: 'Implement', status: 'pending' },
+      ],
+    })
+    await instance.tool(
+      'todo_write',
+      { merge: true, todos: [{ id: '2', content: 'Implement', status: 'completed' }] },
+      'merge-1',
+    )
+
+    expect(instance.emitted.filter((event) => event.name === 'todo_update').at(-1)).toEqual({
+      name: 'todo_update',
+      payload: {
+        toolCallId: 'merge-1',
+        todos: [
+          { id: '1', content: 'Inspect', status: 'in_progress' },
+          { id: '2', content: 'Implement', status: 'completed' },
+        ],
+        merge: true,
+      },
+    })
+  })
+
   test('emits update notifications for clear operations', async () => {
     const instance = harness()
     await instance.emit('session_start')
     await instance.tool('todo_write', { merge: false, todos: [] }, 'clear-1')
-    expect(instance.emitted).toEqual([
+    expect(instance.emitted.filter((event) => event.name === 'todo_update')).toEqual([
       {
         name: 'todo_update',
         payload: { toolCallId: 'clear-1', todos: [], merge: false },
@@ -428,7 +457,7 @@ describe('todo reminders', () => {
         { id: '2', content: 'Wait for ops', status: 'blocked', blocker: 'ops approval' },
       ],
     })
-    await instance.emit('message_start', { message: { role: 'user' } })
+    await instance.emit('message_start', { message: { role: 'user', content: 'Continue' } })
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       await instance.emit('agent_end', { messages: [assistantStop('Done for now.')] })
       const settled = instance.emit('agent_settled')
@@ -462,7 +491,7 @@ describe('todo reminders', () => {
     await instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(3)
 
-    await instance.emit('message_start', { message: { role: 'user' } })
+    await instance.emit('message_start', { message: { role: 'user', content: 'Continue' } })
     await instance.emit('agent_end', { messages: [assistantStop('New prompt stop.')] })
     const settled = instance.emit('agent_settled')
     expect(instance.messages).toHaveLength(4)
@@ -551,7 +580,7 @@ describe('todo reminders', () => {
     await mutate(instance, 12)
     expect(instance.messages).toHaveLength(2)
 
-    await instance.emit('message_start', { message: { role: 'user' } })
+    await instance.emit('message_start', { message: { role: 'user', content: 'Continue' } })
     await mutate(instance, 6)
     await instance.emit('tool_execution_end', {
       toolCallId: 'w',
@@ -630,6 +659,17 @@ describe('/todo command', () => {
     expect(instance.notices.at(-1).text).toContain('/todo edit')
     await instance.command('bogus')
     expect(instance.notices.at(-1).level).toBe('error')
+  })
+
+  test('starts the requested task instead of preserving the previous active task', async () => {
+    const instance = await seeded()
+    await instance.command('start #verify')
+
+    expect(userEditEntry(instance).data.todos.map((todo) => [todo.id, todo.status])).toEqual([
+      ['inspect', 'completed'],
+      ['impl', 'pending'],
+      ['verify', 'in_progress'],
+    ])
   })
 
   test('mutates status by id or text, persists a user edit, and informs the model', async () => {

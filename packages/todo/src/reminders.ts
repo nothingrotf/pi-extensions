@@ -63,9 +63,22 @@ function proseLines(text: string): string[] {
     .filter((line) => line.length > 0)
 }
 
+const continuationPermission =
+  /^(?:(?:can|may|should|shall) i (?:continue|proceed)|do you want me to (?:continue|proceed)|posso (?:continuar|prosseguir))\s*[?？]$/i
+
+export function isUserStopRequest(text: string): boolean {
+  const normalized = text.trim().normalize('NFD').replace(/\p{M}/gu, '')
+  return (
+    /^(?:please\s+)?(?:stop|cancel|pause)\b/i.test(normalized) ||
+    /^(?:por favor[, ]+)?(?:pare|parar|cancele|cancelar|pause|nao continue)\b/i.test(normalized)
+  )
+}
+
 export function isAwaitingUserAnswer(assistantText: string): boolean {
   return proseLines(assistantText)
     .slice(-awaitingUserAnswerLineWindow)
+    .flatMap((line) => line.split(/(?<=[.!?？])\s+/u))
+    .filter((line) => !continuationPermission.test(line))
     .some(
       (line) =>
         /[?？]\s*$/.test(line) ||
@@ -178,7 +191,9 @@ export function formatStopReminder(todos: readonly Todo[], attempt: number): str
     `You stopped with ${todos.length} incomplete todo item(s):`,
     list,
     '',
-    'Continue only with tasks that do not require user input.',
+    'Continue only with already authorized tasks that do not require user input.',
+    'Do not ask for permission merely to continue those tasks.',
+    'Respect user stop, pause, and cancellation requests. Never infer approval for a new scope or consequential action.',
     'Use todo_write to mark finished tasks completed.',
     'If a task requires user input, mark it blocked with a blocker note and ask the user.',
     'Do not mark unfinished work completed or cancelled to silence this reminder.',

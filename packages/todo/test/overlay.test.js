@@ -59,7 +59,7 @@ function harness(initialTodos) {
 }
 
 describe('persistent todo panel', () => {
-  test('renders the Empryo task panel', () => {
+  test('renders the task panel', () => {
     const instance = harness([
       todo('done', 'completed'),
       todo('active', 'in_progress'),

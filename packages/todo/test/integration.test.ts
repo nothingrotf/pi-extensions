@@ -18,7 +18,10 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { describe, expect, test } from 'vite-plus/test'
 
+import type { AskQuestionInput } from '../../ask/src/domain.ts'
+import ask from '../../ask/src/index.ts'
 import todo from '../src/index.ts'
+import { questionUI } from './question-ui.js'
 
 type Content = AssistantMessage['content']
 
@@ -28,13 +31,15 @@ function text(value = 'Stopped.'): Content {
 
 function call(
   name: string,
-  args: {
-    merge?: boolean
-    todos?: { id: string; content: string; status: string; dependencies?: string[] }[]
-    path?: string
-    content?: string
-    command?: string
-  },
+  args:
+    | AskQuestionInput
+    | {
+        merge?: boolean
+        todos?: { id: string; content: string; status: string; dependencies?: string[] }[]
+        path?: string
+        content?: string
+        command?: string
+      },
 ): Content {
   return [{ type: 'toolCall', id: crypto.randomUUID(), name, arguments: args }]
 }
@@ -55,7 +60,7 @@ function contentText(content: Context['messages'][number]['content']): string {
     : content
 }
 
-async function harness(extra?: ExtensionFactory, extraFirst = false) {
+async function harness(extra?: ExtensionFactory, extraFirst = false, interactive = false) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-todo-test-'))
   const events: string[] = []
   const requests: string[][] = []
@@ -155,8 +160,10 @@ async function harness(extra?: ExtensionFactory, extraFirst = false) {
     sessionManager: SessionManager.inMemory(dir),
     thinkingLevel: 'off',
   })
+  const ui = questionUI(session.extensionRunner.getUIContext())
   await session.bindExtensions({
-    mode: 'print',
+    mode: interactive ? 'tui' : 'print',
+    uiContext: interactive ? ui.ui : session.extensionRunner.getUIContext(),
     onError: (error) => {
       extensionErrors.push(error.error)
     },
@@ -165,6 +172,16 @@ async function harness(extra?: ExtensionFactory, extraFirst = false) {
     events,
     requests,
     session,
+    ui,
+    async respond(content: Content[], key: string) {
+      steps.push(...content)
+      ui.press(key)
+      await expect.poll(() => steps.length).toBe(0)
+      await session.agent.waitForIdle()
+      await expect.poll(() => session.isIdle).toBe(true)
+      expect(unexpectedRequests).toBe(0)
+      expect(extensionErrors).toEqual([])
+    },
     async prompt(content: Content[], prompt = 'Perform the test task') {
       steps.push(...content)
       await session.prompt(prompt)
@@ -180,13 +197,235 @@ async function harness(extra?: ExtensionFactory, extraFirst = false) {
     },
     async close() {
       await session.abort()
+      await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' })
+      ui.close()
       session.dispose()
       await rm(dir, { recursive: true, force: true })
     },
   }
 }
 
+const question: AskQuestionInput = {
+  title: 'Target',
+  questions: [
+    {
+      id: 'target',
+      prompt: 'Which target should receive the change?',
+      options: [
+        { id: 'staging', label: 'Staging' },
+        { id: 'production', label: 'Production' },
+      ],
+      allowMultiple: false,
+    },
+  ],
+}
+
+const materialDecision = [
+  'Como você quer finalizar essa skill?',
+  '1. Manter como PR próprio empilhado.',
+  '2. Mover o commit para dentro do PR existente.',
+  '3. Outra alternativa.',
+  'Enquanto isso não toco no stack nem spawno mais nada.',
+].join('\n')
+
+describe('todo and AskQuestion through AgentSession', () => {
+  test.each([true, false])(
+    'waits for async answers with ask registered first: %s',
+    async (first) => {
+      const instance = await harness(ask, first, true)
+      try {
+        await instance.prompt([
+          seed(),
+          call('AskQuestion', { ...question, runAsync: true }),
+          text('Posso continuar?'),
+        ])
+        expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+        expect(instance.ui.opened).toHaveLength(1)
+        await instance.respond(
+          [text('Should I continue?'), text('Continuing the approved task.')],
+          '\r',
+        )
+        expect(instance.customMessages('ask-question-completion')).toHaveLength(1)
+        expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      } finally {
+        await instance.close()
+      }
+    },
+  )
+
+  test.each([true, false])(
+    'does not nag after the user skips a form (async: %s)',
+    async (runAsync) => {
+      const instance = await harness(ask, false, true)
+      try {
+        const run = instance.prompt([
+          seed(),
+          call('AskQuestion', { ...question, runAsync }),
+          text('Should I continue?'),
+        ])
+        await expect.poll(() => instance.ui.opened.length).toBe(1)
+        instance.ui.press('\u001b')
+        await run
+        expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+        await instance.prompt(
+          [text('Should I continue?'), text('Continuing.')],
+          'Continue the approved task',
+        )
+        expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      } finally {
+        await instance.close()
+      }
+    },
+  )
+
+  test('keeps waiting when only one of two queued async forms is answered', async () => {
+    const instance = await harness(ask, false, true)
+    try {
+      await instance.prompt([
+        seed(),
+        call('AskQuestion', { ...question, runAsync: true }),
+        call('AskQuestion', { ...question, runAsync: true }),
+        text('Should I continue?'),
+      ])
+      await instance.respond([text('Should I continue?')], '\r')
+      expect(instance.ui.opened).toHaveLength(2)
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+      await instance.respond([text('Should I continue?'), text('Continuing.')], '\r')
+      expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('clears synchronous answered questions', async () => {
+    const instance = await harness(ask, false, true)
+    try {
+      const run = instance.prompt([
+        seed(),
+        call('AskQuestion', question),
+        text('Should I continue?'),
+        text('Continuing.'),
+      ])
+      await expect.poll(() => instance.ui.opened.length).toBe(1)
+      instance.ui.press('\r')
+      await run
+      expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('headless skipped questions do not leave a phantom pending form', async () => {
+    const instance = await harness(ask)
+    try {
+      await instance.prompt([
+        seed(),
+        call('AskQuestion', { ...question, runAsync: true }),
+        text('Should I continue?'),
+        text('Continuing.'),
+      ])
+      expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      expect(instance.ui.opened).toHaveLength(0)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('keeps material conversational decisions with ask loaded', async () => {
+    const instance = await harness(ask)
+    try {
+      await instance.prompt([seed(), text(materialDecision)])
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('does not nudge while async questions remain open', async () => {
+    const instance = await harness(ask, false, true)
+    try {
+      await instance.prompt([
+        seed(),
+        call('AskQuestion', { ...question, runAsync: true }),
+        ...Array.from({ length: 12 }, (_, index) =>
+          call('write', { path: 'result.txt', content: String(index) }),
+        ),
+        text('Awaiting the open form.'),
+      ])
+      expect(instance.customMessages('todo-mid-run-nudge')).toHaveLength(0)
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('session shutdown closes an async question without a stale follow-up', async () => {
+    const instance = await harness(ask, false, true)
+    try {
+      await instance.prompt([
+        seed(),
+        call('AskQuestion', { ...question, runAsync: true }),
+        text('Waiting.'),
+      ])
+      await instance.session.extensionRunner.emit({ type: 'session_shutdown', reason: 'reload' })
+      instance.ui.press('\r')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(instance.customMessages('ask-question-completion')).toHaveLength(0)
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+    } finally {
+      await instance.close()
+    }
+  })
+})
+
 describe('todo reminders through AgentSession', () => {
+  test('waits for a real extension UI prompt even without ask loaded', async () => {
+    let opened = false
+    let pending: Promise<boolean> | undefined
+    const instance = await harness(
+      (pi) => {
+        pi.on('agent_end', (_event, ctx) => {
+          if (opened) return
+          opened = true
+          pending = ctx.ui.custom<boolean>((_tui, _theme, _keys, done) => ({
+            render: () => ['Choose the deployment target'],
+            invalidate() {},
+            handleInput: () => done(true),
+          }))
+        })
+      },
+      false,
+      true,
+    )
+    try {
+      await instance.prompt([seed(), text('Should I continue?')])
+      expect(instance.ui.opened).toHaveLength(1)
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+      instance.ui.press('\r')
+      await pending
+      await instance.prompt(
+        [text('Should I continue?'), text('Continuing.')],
+        'Continue the approved task',
+      )
+      expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+    } finally {
+      await instance.close()
+    }
+  })
+
+  test('respects a real abort while a question tool is running', async () => {
+    const instance = await harness(ask, false, true)
+    try {
+      const run = instance.prompt([seed(), call('AskQuestion', question)])
+      await expect.poll(() => instance.ui.opened.length).toBe(1)
+      await instance.session.abort()
+      await run
+      expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+    } finally {
+      await instance.close()
+    }
+  })
+
   test('resets the cycle on each user prompt without a synthetic continuation hook', async () => {
     const instance = await harness()
     try {
@@ -289,7 +528,42 @@ describe('todo reminders through AgentSession', () => {
     }
   })
 
+  test.each(['Stop.', 'Cancel the remaining tasks.', 'Please pause.', 'Pare.', 'Não continue.'])(
+    'respects user stop requests: %s',
+    async (prompt) => {
+      const instance = await harness()
+      try {
+        await instance.prompt([seed(), text('Which target should I use?')])
+        await instance.prompt([text('Should I continue?')], prompt)
+        expect(instance.customMessages('todo-reminder')).toHaveLength(0)
+        await instance.prompt(
+          [text('Should I continue?'), text('Continuing.')],
+          'Continue the approved task',
+        )
+        expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      } finally {
+        await instance.close()
+      }
+    },
+  )
+
+  test.each(['Posso continuar?', 'Should I continue?', 'Ready. **Posso continuar?**'])(
+    'does not let redundant permission silence actionable tasks: %s',
+    async (question) => {
+      const instance = await harness()
+      try {
+        await instance.prompt([seed(), text(question), text('Continuing the approved task.')])
+        expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      } finally {
+        await instance.close()
+      }
+    },
+  )
+
   test.each([
+    materialDecision,
+    'Should I continue with the production deployment?',
+    'Posso continuar? Which target should I use?',
     'Qual arquivo devo alterar?',
     'Qual opção prefere?',
     'Confirme antes de continuar.',

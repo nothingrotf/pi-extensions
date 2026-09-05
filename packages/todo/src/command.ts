@@ -94,6 +94,21 @@ export function matchTodo(todos: readonly Todo[], query: string): TodoMatch {
   return { kind: 'ambiguous', todos: matches }
 }
 
+export function startTodo(todos: readonly Todo[], id: string, now: number): Todo[] {
+  const demoted = todos.map((todo): Todo => {
+    if (todo.id === id || todo.status !== 'in_progress') {
+      return { ...todo, dependencies: [...todo.dependencies] }
+    }
+    return {
+      ...todo,
+      status: 'pending',
+      updatedAt: String(now),
+      dependencies: [...todo.dependencies],
+    }
+  })
+  return setStatus(demoted, id, 'in_progress', now)
+}
+
 export function setStatus(
   todos: readonly Todo[],
   id: string,
