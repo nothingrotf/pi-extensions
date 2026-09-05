@@ -180,6 +180,9 @@ export function validateQuestions(questions: readonly AskQuestionItem[]): string
       if (option.id.trim().length === 0) {
         return `Question ${question.id} has an empty option ID`
       }
+      if (option.label.trim().length === 0) {
+        return `Question ${question.id} has an empty option label`
+      }
       if (option.id === OtherOptionId) {
         return `Option ID ${OtherOptionId} is reserved`
       }

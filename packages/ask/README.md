@@ -43,6 +43,7 @@ Restart Pi after installation.
 Set `runAsync` to `true` to return before the user answers.
 
 Pi delivers the later answer as a session message and starts a follow-up turn.
+If the user skips an async form, Pi delivers its rejection with the next user prompt. It does not start another turn.
 
 ## Controls
 
@@ -72,6 +73,24 @@ A successful answer contains one item for each question.
 A freeform answer uses `freeformText`. The sentinel option ID never appears in `selectedOptionIds`.
 
 Print mode and JSON mode reject questions because no interactive form exists.
+
+## Outstanding questions
+
+Ask publishes `ask:state` on Pi's shared event bus:
+
+```json
+{ "version": 1, "pending": 2, "paused": false }
+```
+
+`pending` counts open and queued forms, including `runAsync`. Answered, skipped, failed, and aborted forms are removed.
+
+`paused` means that the user skipped or aborted a form. The next user message clears it. Headless rejection does not set it.
+
+The `ask:state:request` event requests the current snapshot. Session start, tree navigation, and shutdown clear the state. They also discard old queued forms and late async completions.
+
+Historical tool results do not restore the state because those forms are no longer open.
+
+Todo uses this optional protocol to avoid reminders while questions are outstanding or the user has skipped a form. Neither package requires the other.
 
 ## TUI
 

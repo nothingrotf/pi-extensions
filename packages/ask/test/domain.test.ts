@@ -147,6 +147,17 @@ describe('validation and results', () => {
     ).toBe(`Option ID ${OtherOptionId} is reserved`)
   })
 
+  it('rejects empty option labels', () => {
+    expect(
+      validateQuestions([
+        {
+          ...questions[0],
+          options: [{ id: 'blank', label: '   ' }],
+        },
+      ]),
+    ).toBe('Question language has an empty option label')
+  })
+
   it('formats selected IDs, labels, and freeform text for the model', () => {
     expect(
       formatAnswers(questions, [

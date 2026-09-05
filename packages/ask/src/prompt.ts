@@ -168,7 +168,7 @@ export class AskQuestionPrompt implements Component, Focusable {
     this.addWrapped(
       lines,
       ' ',
-      this.theme.fg('accent', this.theme.bold(normalizedTitle(this.input.title))),
+      this.theme.fg('accent', this.theme.bold(clean(normalizedTitle(this.input.title)))),
       renderWidth,
     )
     lines.push('')

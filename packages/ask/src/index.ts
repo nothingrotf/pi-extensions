@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
-import { Text } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, Text } from '@earendil-works/pi-tui'
 
 import {
   type AskAnswer,
@@ -45,6 +45,10 @@ class AsyncQuestionQueue {
     this.startNext()
   }
 
+  clear(): void {
+    this.tasks.length = 0
+  }
+
   private startNext(): void {
     if (this.active !== undefined) {
       return
@@ -66,10 +70,24 @@ class AsyncQuestionQueue {
   }
 }
 
-function promptUser(input: AskQuestionInput, ctx: ExtensionContext): Promise<AskPromptResult> {
-  return ctx.ui.custom<AskPromptResult>((tui, theme, _keybindings, done) => {
-    return new AskQuestionPrompt({ input, theme, tui, done })
-  })
+async function promptUser(
+  input: AskQuestionInput,
+  ctx: ExtensionContext,
+  signal: AbortSignal,
+): Promise<AskPromptResult> {
+  const skipped: AskPromptResult = { kind: 'skipped', reason: 'Questions cancelled' }
+  if (signal.aborted) return skipped
+  let cancel: (() => void) | undefined
+  try {
+    return await ctx.ui.custom<AskPromptResult>((tui, theme, _keybindings, done) => {
+      cancel = () => done(skipped)
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) cancel()
+      return new AskQuestionPrompt({ input, theme, tui, done })
+    })
+  } finally {
+    if (cancel !== undefined) signal.removeEventListener('abort', cancel)
+  }
 }
 
 function resultFromPrompt(input: AskQuestionInput, result: AskPromptResult): AskQuestionDetails {
@@ -101,6 +119,10 @@ function answerForQuestion(
 
 const ASK_ICON = '?'
 
+function cleanLine(value: string): string {
+  return stripTerminalSequences(value).replace(/[\r\n\t]/gu, ' ')
+}
+
 interface AskRenderState {
   hasResult?: boolean
 }
@@ -109,9 +131,9 @@ function askStatusLine(
   options: { icon: string; meta?: readonly string[]; title?: string },
   theme: Theme,
 ): string {
-  const meta = (options.meta ?? []).filter((part) => part.length > 0)
+  const meta = (options.meta ?? []).map(cleanLine).filter((part) => part.length > 0)
   const suffix = meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''
-  return `${options.icon} ${theme.fg('accent', options.title ?? 'Ask')}${suffix}`
+  return `${options.icon} ${theme.fg('accent', cleanLine(options.title ?? 'Ask'))}${suffix}`
 }
 
 function optionMarker(multi: boolean, selected: boolean): string {
@@ -123,14 +145,14 @@ function questionLabel(question: AskQuestionItem, theme: Theme): string {
   const meta: string[] = []
   if (question.allowMultiple) meta.push('multi')
   meta.push(`options:${question.options.length}`)
-  return `${theme.fg('dim', `[${question.id}]`)} ${theme.fg('dim', meta.join(' · '))}`
+  return `${theme.fg('dim', `[${cleanLine(question.id)}]`)} ${theme.fg('dim', meta.join(' · '))}`
 }
 
 export function renderQuestionLines(question: AskQuestionItem, theme: Theme): string[] {
-  const lines = [questionLabel(question, theme), theme.fg('accent', question.prompt)]
+  const lines = [questionLabel(question, theme), theme.fg('accent', cleanLine(question.prompt))]
   for (const option of question.options) {
     lines.push(
-      ` ${theme.fg('dim', optionMarker(question.allowMultiple, false))} ${theme.fg('muted', option.label)}`,
+      ` ${theme.fg('dim', optionMarker(question.allowMultiple, false))} ${theme.fg('muted', cleanLine(option.label))}`,
     )
   }
   return lines
@@ -151,13 +173,13 @@ function renderAnswerLines(
     const isSelected = selected.has(option.id)
     const marker = optionMarker(question.allowMultiple, isSelected)
     lines.push(
-      ` ${theme.fg(isSelected ? 'success' : 'dim', marker)} ${theme.fg(isSelected ? 'toolOutput' : 'muted', option.label)}`,
+      ` ${theme.fg(isSelected ? 'success' : 'dim', marker)} ${theme.fg(isSelected ? 'toolOutput' : 'muted', cleanLine(option.label))}`,
     )
   }
   if (custom) {
-    const [first = '', ...rest] = answer.freeformText.split('\n')
-    lines.push(` ${theme.fg('success', '✔')} ${theme.fg('toolOutput', first)}`)
-    for (const line of rest) lines.push(`   ${theme.fg('toolOutput', line)}`)
+    const [first = '', ...rest] = stripTerminalSequences(answer.freeformText).split('\n')
+    lines.push(` ${theme.fg('success', '✔')} ${theme.fg('toolOutput', cleanLine(first))}`)
+    for (const line of rest) lines.push(`   ${theme.fg('toolOutput', cleanLine(line))}`)
   }
   return lines
 }
@@ -200,7 +222,7 @@ function renderSuccess(details: AskQuestionDetails, theme: Theme): Text {
     ),
   ]
   details.questions.forEach((question) => {
-    lines.push('', questionLabel(question, theme), theme.fg('accent', question.prompt))
+    lines.push('', questionLabel(question, theme), theme.fg('accent', cleanLine(question.prompt)))
     lines.push(
       ...renderAnswerLines(question, answerForQuestion(question.id, details.answers), theme),
     )
@@ -234,7 +256,7 @@ function renderDetails(details: AskQuestionDetails, theme: Theme): Text {
 }
 
 export function railDetail(questions: readonly AskQuestionItem[]): string {
-  return questions.map((question) => question.prompt).join(' · ')
+  return questions.map((question) => cleanLine(question.prompt)).join(' · ')
 }
 
 export function railSummary(details: AskQuestionDetails): string {
@@ -245,8 +267,10 @@ export function railSummary(details: AskQuestionDetails): string {
     if (answer === undefined) continue
     const labels = question.options
       .filter((option) => answer.selectedOptionIds.includes(option.id))
-      .map((option) => option.label)
-    if (answer.freeformText.length > 0) labels.push(answer.freeformText.split('\n')[0] ?? '')
+      .map((option) => cleanLine(option.label))
+    if (answer.freeformText.length > 0) {
+      labels.push(cleanLine(answer.freeformText.split('\n')[0] ?? ''))
+    }
     if (labels.length > 0) parts.push(labels.join(', '))
   }
   return parts.join(' · ')
@@ -257,6 +281,33 @@ export default function ask(pi: ExtensionAPI): void {
   const rail = new RailBridge(pi, ['AskQuestion'])
   const asyncResults = new Map<string, AskQuestionDetails>()
   const asyncInvalidators = new Map<string, () => void>()
+  const pending = new Map<string, AbortController>()
+  let paused = false
+
+  const publishState = () => {
+    pi.events.emit('ask:state', { version: 1, pending: pending.size, paused })
+  }
+  const reset = () => {
+    queue.clear()
+    for (const controller of pending.values()) controller.abort()
+    pending.clear()
+    paused = false
+    asyncResults.clear()
+    asyncInvalidators.clear()
+    publishState()
+  }
+  const unsubscribe = pi.events.on('ask:state:request', publishState)
+  pi.on('session_start', reset)
+  pi.on('session_tree', reset)
+  pi.on('session_shutdown', () => {
+    reset()
+    unsubscribe()
+  })
+  pi.on('message_start', (event) => {
+    if (event.message.role !== 'user') return
+    paused = false
+    publishState()
+  })
 
   pi.registerTool<typeof AskQuestionSchema, AskQuestionDetails, AskRenderState>({
     name: 'AskQuestion',
@@ -270,7 +321,7 @@ export default function ask(pi: ExtensionAPI): void {
     ],
     parameters: AskQuestionSchema,
     executionMode: 'sequential',
-    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const validationError = validateQuestions(params.questions)
       if (validationError !== null) {
         const details = errorDetails(params.title, params.questions, validationError)
@@ -291,22 +342,78 @@ export default function ask(pi: ExtensionAPI): void {
           details,
         }
       }
+      const controller = new AbortController()
+      const abort = () => {
+        paused = true
+        controller.abort()
+        pending.delete(toolCallId)
+        publishState()
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      controller.signal.addEventListener(
+        'abort',
+        () => signal?.removeEventListener('abort', abort),
+        { once: true },
+      )
+      pending.set(toolCallId, controller)
+      if (signal?.aborted) abort()
+      publishState()
+      const finish = () => {
+        signal?.removeEventListener('abort', abort)
+        if (pending.get(toolCallId) === controller) {
+          pending.delete(toolCallId)
+          publishState()
+        }
+      }
+      const resolveQuestion = async () => {
+        const result = await promptUser(params, ctx, controller.signal)
+        if (!controller.signal.aborted && result.kind === 'skipped') paused = true
+        return resultFromPrompt(params, result)
+      }
       if (params.runAsync === true) {
         queue.enqueue(async () => {
-          const result = await promptUser(params, ctx)
-          const details = resultFromPrompt(params, result)
-          asyncResults.set(toolCallId, details)
-          asyncInvalidators.get(toolCallId)?.()
-          asyncInvalidators.delete(toolCallId)
-          pi.sendMessage(
-            {
-              customType: asyncMessageType,
-              content: resultText(details),
-              display: false,
-              details,
-            },
-            { triggerTurn: true, deliverAs: 'followUp' },
-          )
+          let details: AskQuestionDetails
+          try {
+            details = await resolveQuestion()
+          } catch (error) {
+            details = errorDetails(
+              params.title,
+              params.questions,
+              error instanceof Error ? error.message : String(error),
+            )
+          }
+          try {
+            if (controller.signal.aborted) return
+            asyncResults.set(toolCallId, details)
+            if (rail.active) {
+              rail.report({
+                detail: railDetail(params.questions),
+                doneLabel: 'Ask',
+                runningLabel: 'Ask',
+                summary: railSummary(details),
+                status: details.status === 'error' ? 'error' : 'ok',
+                toolCallId,
+                iconKey: 'ask',
+                toolName: 'AskQuestion',
+              })
+            }
+            asyncInvalidators.get(toolCallId)?.()
+            asyncInvalidators.delete(toolCallId)
+            pi.sendMessage(
+              {
+                customType: asyncMessageType,
+                content: resultText(details),
+                display: false,
+                details,
+              },
+              {
+                triggerTurn: details.status !== 'rejected',
+                deliverAs: details.status === 'rejected' ? 'nextTurn' : 'followUp',
+              },
+            )
+          } finally {
+            finish()
+          }
         })
         const details = asyncDetails(params.title, params.questions, toolCallId)
         return {
@@ -314,11 +421,14 @@ export default function ask(pi: ExtensionAPI): void {
           details,
         }
       }
-      const result = await promptUser(params, ctx)
-      const details = resultFromPrompt(params, result)
-      return {
-        content: [{ type: 'text', text: resultText(details) }],
-        details,
+      try {
+        const details = await resolveQuestion()
+        return {
+          content: [{ type: 'text', text: resultText(details) }],
+          details,
+        }
+      } finally {
+        finish()
       }
     },
     renderShell: 'self',
@@ -345,7 +455,12 @@ export default function ask(pi: ExtensionAPI): void {
       context.state.hasResult = true
       const details = decodeAskQuestionDetails(result.details)
       if (rail.active) {
-        const status: RailStatus = context.isError ? 'error' : options.isPartial ? 'pending' : 'ok'
+        const status: RailStatus =
+          context.isError || details?.status === 'error'
+            ? 'error'
+            : options.isPartial || details?.status === 'async'
+              ? 'pending'
+              : 'ok'
         rail.report({
           detail: railDetail(context.args.questions),
           doneLabel: 'Ask',
