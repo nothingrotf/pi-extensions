@@ -13,6 +13,12 @@ import { Type } from 'typebox'
 import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
 
+import {
+  GoalActivitySchema,
+  GoalActivityTracker,
+  type GoalActivity,
+  type GoalProgressEvent,
+} from './activity.ts'
 import { type GoalCheckRunner, ProjectGoalCheckRunner } from './checks.ts'
 import {
   goalSubcommands,
@@ -62,6 +68,7 @@ const statusKey = 'pi-goal'
 const toolName = 'goal'
 const continuationDelayMs = 800
 
+export const GOAL_ACTIVITY_EVENT = '@nothingrotf/goal/activity'
 export const GOAL_REVIEW_START_EVENT = '@nothingrotf/goal/review-start'
 export const GOAL_REVIEW_VERDICT_EVENT = '@nothingrotf/goal/review-verdict'
 export const GOAL_REVIEW_STOP_EVENT = '@nothingrotf/goal/review-stop'
@@ -97,6 +104,7 @@ const GoalToolDetailsSchema = Type.Object({
   loop: Type.Union([GoalLoopStateSchema, Type.Null()]),
   remainingTokens: Type.Union([Type.Number(), Type.Null()]),
   completionBudgetReport: Type.Union([Type.String(), Type.Null()]),
+  activity: Type.Optional(GoalActivitySchema),
 })
 
 type GoalToolDetails = Static<typeof GoalToolDetailsSchema>
@@ -139,7 +147,10 @@ function addTokenUsage(left: GoalTokenUsage, right: GoalTokenUsage): GoalTokenUs
 function describeTool(details: GoalToolDetails): string {
   const goal = details.goal
   if (goal === null) return 'No active goal.'
-  const phase = details.loop?.phase ?? goal.status
+  const phase =
+    goal.status === 'active' || goal.status === 'budget-limited'
+      ? (details.activity?.phase ?? details.loop?.phase ?? goal.status)
+      : goal.status
   let text = `Goal: ${goal.objective}\nStatus: ${phase}\nTokens: ${goal.tokensUsed} used`
   if (goal.tokenBudget !== undefined) text += ` / ${goal.tokenBudget} budget`
   const remaining = remainingTokens(goal)
@@ -152,13 +163,19 @@ function describeTool(details: GoalToolDetails): string {
       text += '\nIndependent completion review requested for the end of this turn.'
     }
   }
+  if (details.activity !== undefined) {
+    text += `\nActivity: ${details.activity.detail}`
+    for (const check of details.activity.checks) text += `\n${check.label}: ${check.status}`
+    if (details.activity.model !== undefined) text += `\nReviewer: ${details.activity.model}`
+    if (details.activity.tool !== undefined) text += `\nReviewer tool: ${details.activity.tool}`
+  }
   if (details.completionBudgetReport !== null) {
     text += `\n\n${details.completionBudgetReport}`
   }
   return text
 }
 
-function goalDetails(state: GoalModeState): string {
+function goalDetails(state: GoalModeState, activity?: GoalActivity): string {
   const goal = state.goal
   const used = formatTokens(goal.tokensUsed)
   const budgetLine =
@@ -167,7 +184,7 @@ function goalDetails(state: GoalModeState): string {
       : `${used} (no budget)`
   const lines = [
     `Objective: ${goal.objective}`,
-    `Status: ${state.enabled ? state.loop.phase : goal.status}`,
+    `Status: ${state.enabled ? (activity?.phase ?? state.loop.phase) : goal.status}`,
     `Reviews: ${state.loop.iteration} / ${state.loop.maxIterations}`,
     `Tokens: ${budgetLine}`,
     `Time spent: ${formatDuration(goal.timeUsedSeconds * 1000)}`,
@@ -329,9 +346,22 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   let reviewSteeringTail: Promise<void> = Promise.resolve()
   let reviewGeneration = 0
   let turnCounter = 0
+  const coderTools = new Map<string, string>()
   const checkRunner = dependencies.checkRunner ?? new ProjectGoalCheckRunner()
   const reviewer = dependencies.reviewer ?? new FreshGoalReviewer()
-  const overlay = new GoalOverlay(() => state)
+  const activity = new GoalActivityTracker(() => {
+    refreshStatus()
+    pi.events.emit(GOAL_ACTIVITY_EVENT, {
+      version: 1,
+      goalId: state?.goal.id,
+      status: state?.goal.status ?? 'none',
+      activity: activity.get(),
+    })
+  })
+  const overlay = new GoalOverlay(
+    () => state,
+    () => ({ activity: activity.get(), usage: runtime.liveUsage() }),
+  )
 
   const runtime = new GoalRuntime({
     getState: () => state,
@@ -397,32 +427,78 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
     reviewInputState = undefined
     reviewImages = []
     reviewRestartRequested = false
+    activity.clear()
     await reviewer.cancel(reason).catch(() => {})
     if (wait) await operation?.catch(() => {})
     if (reviewPromise === operation) reviewPromise = undefined
   }
 
-  const continuationBlocked = (ctx: ExtensionContext): boolean => {
-    if (!isEnabled()) return true
-    if (isLoopActive(ctx.sessionManager.getBranch())) return true
-    if (!ctx.isIdle() || ctx.hasPendingMessages()) return true
-    if (ctx.hasUI && ctx.ui.getEditorText().trim().length > 0) return true
-    return state?.goal.status !== 'active' || state.loop.phase !== 'between'
+  const continuationBlocker = (ctx: ExtensionContext): string | undefined => {
+    if (isLoopActive(ctx.sessionManager.getBranch()))
+      return 'Waiting for the other loop · resumes automatically'
+    if (!ctx.isIdle()) return 'Waiting for the parent agent · resumes automatically'
+    if (ctx.hasPendingMessages()) return 'Waiting for queued messages · resumes automatically'
+    if (ctx.hasUI && ctx.ui.getEditorText().trim().length > 0)
+      return 'Waiting for the editor draft · resumes when cleared or submitted'
+    return undefined
   }
 
   const scheduleContinuation = (ctx: ExtensionContext) => {
     cancelContinuation()
-    if (continuationBlocked(ctx)) return
-    continuationTimer = setTimeout(() => {
+    const goalId = state?.goal.id
+    const generation = reviewGeneration
+    const eligible = () =>
+      generation === reviewGeneration &&
+      goalId !== undefined &&
+      state?.goal.id === goalId &&
+      state.enabled &&
+      state.goal.status === 'active' &&
+      state.loop.phase === 'between'
+    if (!eligible() || goalId === undefined) return
+    const retry = () => {
       continuationTimer = undefined
-      if (continuationBlocked(ctx)) return
+      if (!eligible()) return
+      const blocker = continuationBlocker(ctx)
+      if (blocker !== undefined) {
+        activity.transition(goalId, 'waiting', blocker)
+        continuationTimer = setTimeout(retry, continuationDelayMs)
+        continuationTimer.unref?.()
+        return
+      }
       const prompt = runtime.buildContinuationPrompt()
-      if (prompt === undefined) return
-      pi.sendMessage(
-        { customType: 'goal-continuation', content: prompt, display: false },
-        { triggerTurn: true, deliverAs: 'followUp' },
-      )
-    }, continuationDelayMs)
+      if (prompt === undefined) {
+        activity.transition(goalId, 'waiting', 'No continuation available · /goal resume')
+        return
+      }
+      activity.transition(goalId, 'queued', 'Continuation queued · no action needed')
+      try {
+        pi.sendMessage(
+          { customType: 'goal-continuation', content: prompt, display: false },
+          { triggerTurn: true, deliverAs: 'followUp' },
+        )
+      } catch (error) {
+        runtime
+          .pauseGoal({ goalId, phase: 'between' })
+          .then((paused) => {
+            if (paused !== undefined)
+              ctx.ui.notify('Continuation delivery failed. Goal paused · /goal resume', 'error')
+          })
+          .catch((pauseError) =>
+            ctx.ui.notify(
+              pauseError instanceof Error ? pauseError.message : String(pauseError),
+              'error',
+            ),
+          )
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error')
+      }
+    }
+    activity.transition(
+      goalId,
+      'waiting',
+      continuationBlocker(ctx) ?? 'Continuing automatically · no action needed',
+    )
+    continuationTimer = setTimeout(retry, continuationDelayMs)
+    continuationTimer.unref?.()
   }
 
   const exitGoalMode = (options: {
@@ -482,6 +558,24 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
     }
     if (next?.enabled !== true) {
       cancelContinuation()
+      activity.clear()
+    } else if (
+      next.loop.phase === 'between' &&
+      activity.get()?.phase !== 'waiting' &&
+      activity.get()?.phase !== 'queued'
+    ) {
+      activity.transition(
+        next.goal.id,
+        'waiting',
+        'Preparing automatic continuation · no action needed',
+      )
+    } else if (activity.get()?.goalId !== next.goal.id) {
+      activity.transition(
+        next.goal.id,
+        context?.isIdle() === false ? 'coding' : 'queued',
+        'Goal open · waiting for coder to start',
+        true,
+      )
     }
     syncToolExposure(state !== undefined)
     refreshStatus()
@@ -494,6 +588,12 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   ) => {
     const started = await runtime.beginReview()
     if (started === undefined || generation !== reviewGeneration) return
+    activity.transition(
+      started.goal.id,
+      'checks',
+      'Running automated checks · no action needed',
+      true,
+    )
     pi.events.emit(GOAL_REVIEW_START_EVENT, {
       version: 1,
       goalId: started.goal.id,
@@ -504,6 +604,22 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
     let checks: Awaited<ReturnType<GoalCheckRunner['run']>> = []
     let reviewUsage: GoalTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     let applied = false
+    const onProgress = (event: GoalProgressEvent) => {
+      if (
+        generation !== reviewGeneration ||
+        controller.signal.aborted ||
+        state?.enabled !== true ||
+        state.goal.id !== started.goal.id ||
+        state.loop.phase !== 'reviewing'
+      )
+        return
+      if (event.type === 'reviewer' && event.tokens !== undefined) {
+        activity.progress({
+          ...event,
+          tokens: event.tokens + reviewUsage.input + reviewUsage.output + reviewUsage.cacheWrite,
+        })
+      } else activity.progress(event)
+    }
     try {
       try {
         checks = await checkRunner.run({
@@ -511,7 +627,9 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
           runtimeProbe: started.loop.runtimeProbe,
           signal: controller.signal,
           trusted: ctx.isProjectTrusted(),
+          onProgress,
         })
+        for (const check of checks) onProgress({ type: 'check-end', check })
         while (true) {
           if (generation !== reviewGeneration || controller.signal.aborted) return
           const current = state
@@ -519,6 +637,7 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
           reviewInputState = cloneGoalState(current)
           const images = [...reviewImages]
           reviewRestartRequested = false
+          onProgress({ type: 'reviewer', phase: 'starting-reviewer', tokens: 0 })
           try {
             const reviewed = enforceAutomatedChecks(
               await reviewer.review({
@@ -527,6 +646,7 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
                 images,
                 signal: controller.signal,
                 state: reviewInputState,
+                onProgress,
               }),
               checks,
             )
@@ -869,7 +989,7 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
       ctx.ui.notify('No goal set.')
       return
     }
-    ctx.ui.notify(goalDetails(state))
+    ctx.ui.notify(goalDetails(state, activity.get()))
   }
 
   const openMenu = async (kind: 'active' | 'paused', ctx: ExtensionCommandContext) => {
@@ -996,6 +1116,7 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   })
 
   pi.on('session_shutdown', async () => {
+    coderTools.clear()
     cancelContinuation()
     await cancelReview('The parent session shut down.')
     await runtime.onTaskAborted({ reason: 'internal' })
@@ -1010,11 +1131,14 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   })
 
   pi.on('agent_start', async (_event, ctx) => {
+    coderTools.clear()
     context = ctx
     cancelContinuation()
     if (reviewPromise !== undefined)
       await cancelReview('The parent agent started another coding turn.')
     await runtime.beginCodingTurn()
+    if (state?.enabled === true)
+      activity.transition(state.goal.id, 'coding', 'Coder working · type to steer', true)
   })
 
   pi.on('turn_start', () => {
@@ -1033,7 +1157,30 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
     }
   })
 
+  const observeCoder = () => {
+    if (state?.enabled !== true || state.loop.phase !== 'coding') return
+    const tool = coderTools.values().next().value
+    activity.transition(state.goal.id, 'coding', `Coder working · ${tool ?? 'awaiting response'}`)
+    activity.touch()
+  }
+
+  pi.on('message_update', () => {
+    if (Date.now() - (activity.get()?.updatedAt ?? 0) >= 250) observeCoder()
+  })
+
+  pi.on('tool_execution_update', () => {
+    if (Date.now() - (activity.get()?.updatedAt ?? 0) >= 250) observeCoder()
+  })
+
+  pi.on('tool_execution_start', (event) => {
+    if (state?.enabled !== true || state.loop.phase !== 'coding') return
+    coderTools.set(event.toolCallId, event.toolName)
+    observeCoder()
+  })
+
   pi.on('tool_execution_end', async (event) => {
+    coderTools.delete(event.toolCallId)
+    observeCoder()
     if (event.toolName === toolName) {
       await runtime.onGoalToolCompleted()
       return
@@ -1042,6 +1189,7 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   })
 
   pi.on('agent_end', async (event, ctx) => {
+    coderTools.clear()
     context = ctx
     await runtime.onAgentEnd({ currentUsage: usage })
     if (!lastAssistantAborted(event.messages)) return
@@ -1258,6 +1406,9 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
         remainingTokens: remainingTokens(resultGoal),
         completionBudgetReport: null,
       }
+      const live = activity.get()
+      if (live !== undefined && live.goalId === resultGoal?.id)
+        details.activity = structuredClone(live)
       return {
         content: [{ type: 'text', text: describeTool(details) }],
         details,

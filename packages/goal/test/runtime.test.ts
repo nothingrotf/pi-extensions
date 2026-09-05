@@ -161,6 +161,23 @@ describe('goal runtime accounting', () => {
     expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(2_000)
   })
 
+  test('projects live usage without persistence or double counting after a flush', async () => {
+    const harness = createHarness({ state: createState() })
+    harness.runtime.onTurnStart('turn-live', createUsage())
+    harness.advance(2500)
+    harness.setUsage({ input: 2, output: 3, cacheRead: 900, cacheWrite: 1 })
+    const writes = harness.persists.length
+    expect(harness.runtime.liveUsage()).toEqual({ tokensUsed: 6, timeUsedSeconds: 2 })
+    expect(harness.runtime.liveUsage()).toEqual({ tokensUsed: 6, timeUsedSeconds: 2 })
+    expect(harness.persists).toHaveLength(writes)
+    expect(harness.getState()?.goal.tokensUsed).toBe(0)
+    await harness.runtime.flushUsage('suppressed')
+    expect(harness.runtime.liveUsage()).toEqual({ tokensUsed: 6, timeUsedSeconds: 2 })
+    await harness.runtime.onTaskAborted({ reason: 'interrupted' })
+    harness.advance(10000)
+    expect(harness.runtime.liveUsage()).toEqual({ tokensUsed: 6, timeUsedSeconds: 2 })
+  })
+
   test('steers once when the token budget is reached', async () => {
     const harness = createHarness({
       state: createState({ tokenBudget: 10, tokensUsed: 8 }),

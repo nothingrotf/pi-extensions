@@ -401,6 +401,25 @@ export class GoalRuntime {
     }
   }
 
+  liveUsage(): { tokensUsed: number; timeUsedSeconds: number } | undefined {
+    const state = this.#host.getState()
+    if (state === undefined) return undefined
+    let tokensUsed = state.goal.tokensUsed
+    let timeUsedSeconds = state.goal.timeUsedSeconds
+    if (state.enabled && isAccountingStatus(state.goal)) {
+      if (this.#turnSnapshot?.activeGoalId === state.goal.id) {
+        tokensUsed += goalTokenDelta(this.#host.getCurrentUsage(), this.#turnSnapshot.baselineUsage)
+      }
+      if (this.#wallClock.activeGoalId === state.goal.id) {
+        timeUsedSeconds += Math.max(
+          0,
+          Math.floor((this.#now() - this.#wallClock.lastAccountedAt) / 1000),
+        )
+      }
+    }
+    return { tokensUsed, timeUsedSeconds }
+  }
+
   async flushUsage(
     steering: GoalBudgetSteering,
     currentUsage: GoalTokenUsage = this.#host.getCurrentUsage(),
@@ -505,11 +524,25 @@ export class GoalRuntime {
     })
   }
 
-  async pauseGoal(): Promise<GoalModeState | undefined> {
+  async pauseGoal(expected?: {
+    goalId: string
+    phase: GoalModeState['loop']['phase']
+  }): Promise<GoalModeState | undefined> {
     return await this.#withAccounting(async () => {
+      const current = this.#host.getState()
+      if (
+        expected !== undefined &&
+        (current?.goal.id !== expected.goalId || current.loop.phase !== expected.phase)
+      )
+        return undefined
       await this.#flushUsageLocked('suppressed')
       const state = this.#getStateClone()
       if (state === undefined) return undefined
+      if (
+        expected !== undefined &&
+        (state.goal.id !== expected.goalId || state.loop.phase !== expected.phase)
+      )
+        return undefined
       if (state.goal.status === 'complete') return state
       state.enabled = false
       state.mode = 'active'

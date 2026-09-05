@@ -5,6 +5,7 @@ import { dirname, join, parse } from 'node:path'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import type { GoalProgressEvent } from './activity.ts'
 import type { GoalCheckKind, GoalCheckResult } from './state.ts'
 
 const PackageScriptsSchema = Type.Object(
@@ -49,6 +50,7 @@ interface ProcessOutcome {
 }
 
 export interface GoalCheckRequest {
+  onProgress?: (event: GoalProgressEvent) => void
   cwd: string
   runtimeProbe: boolean
   signal: AbortSignal
@@ -360,8 +362,31 @@ async function runCommand(
   command: CheckCommand,
   cwd: string,
   signal: AbortSignal,
+  onProgress: GoalCheckRequest['onProgress'],
 ): Promise<GoalCheckResult> {
-  const outcome = await executeCommand(command, cwd, signal)
+  if (signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
+  emitProgress(onProgress, {
+    type: 'check-start',
+    kind: command.kind,
+    label: command.label,
+    command: commandText(command),
+  })
+  let outcome: ProcessOutcome
+  try {
+    outcome = await executeCommand(command, cwd, signal)
+  } catch (error) {
+    emitProgress(onProgress, {
+      type: 'check-end',
+      check: {
+        kind: command.kind,
+        label: command.label,
+        command: commandText(command),
+        status: 'unavailable',
+        durationMs: 0,
+      },
+    })
+    throw error
+  }
   const result: GoalCheckResult = {
     kind: command.kind,
     label: command.label,
@@ -382,52 +407,75 @@ function unavailableProjectChecks(reason: string, runtimeProbe: boolean): GoalCh
   return results
 }
 
+function emitProgress(onProgress: GoalCheckRequest['onProgress'], event: GoalProgressEvent): void {
+  try {
+    Promise.resolve(onProgress?.(event)).catch(() => {})
+  } catch {}
+}
+
 export class ProjectGoalCheckRunner implements GoalCheckRunner {
   async run(request: GoalCheckRequest): Promise<GoalCheckResult[]> {
+    const results: GoalCheckResult[] = []
+    const append = (...checks: GoalCheckResult[]) => {
+      for (const check of checks) {
+        results.push(check)
+        const progressCheck = { ...check }
+        delete progressCheck.output
+        emitProgress(request.onProgress, { type: 'check-end', check: progressCheck })
+      }
+      return results
+    }
+    if (request.signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
     if (!request.trusted) {
-      return [
+      return append(
         unavailable('scope', 'Review scope', 'Project trust is disabled.'),
         ...unavailableProjectChecks('Project trust is disabled.', request.runtimeProbe),
-      ]
+      )
     }
-    const scope = await runCommand(workspaceScopeCommand(), request.cwd, request.signal)
+    const scope = await runCommand(
+      workspaceScopeCommand(),
+      request.cwd,
+      request.signal,
+      request.onProgress,
+    )
     const reviewScope =
       scope.status === 'passed'
         ? { ...scope, output: scope.output ?? 'The Git working tree is clean.' }
         : unavailable('scope', 'Review scope', scope.output ?? 'Git scope is unavailable.')
+    append(reviewScope)
+    if (request.signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
     let manifest: ProjectManifest | undefined
     try {
       manifest = await findManifest(request.cwd)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      const results = unavailableProjectChecks(
-        'Fix the project manifest before verification.',
-        request.runtimeProbe,
-      )
-      return [
-        reviewScope,
-        ...results.map((result): GoalCheckResult =>
+      if (request.signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
+      return append(
+        ...unavailableProjectChecks(
+          'Fix the project manifest before verification.',
+          request.runtimeProbe,
+        ).map((result): GoalCheckResult =>
           result.kind === 'typecheck'
             ? { ...result, status: 'failed', output: reason.slice(-1_600) }
             : result,
         ),
-      ]
+      )
     }
+    if (request.signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
     if (manifest === undefined) {
-      return [
-        reviewScope,
+      return append(
         ...unavailableProjectChecks(
           'No package.json exists in the directory tree.',
           request.runtimeProbe,
         ),
-      ]
+      )
     }
-    const results: GoalCheckResult[] = [reviewScope]
     for (const item of commandsFor(manifest, request.runtimeProbe)) {
+      if (request.signal.aborted) throw new GoalCheckAbortedError('Goal checks were aborted.')
       if ('program' in item) {
-        results.push(await runCommand(item, manifest.directory, request.signal))
+        append(await runCommand(item, manifest.directory, request.signal, request.onProgress))
       } else {
-        results.push(item)
+        append(item)
       }
     }
     return results

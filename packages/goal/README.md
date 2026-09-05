@@ -103,7 +103,9 @@ Before the final available attempt, the coder receives a directive to reconsider
 
 Each reviewer gets only read/search tools, current requirements, check results, and prior findings. Parent conversation history, extensions, skills, and prompt templates are not loaded into the reviewer. Repository instructions follow the parent session's project trust setting.
 
-A review has a ten-minute deadline. Cancellation allows up to one second for provider cleanup; a provider that ignores cancellation cannot hold the Goal controller indefinitely.
+A review has a ten-minute deadline, including contract loading, model setup, session creation, and inference.
+Cancellation allows up to one second for provider cleanup. A provider that ignores cancellation cannot hold the Goal controller indefinitely.
+Late session creation disposes the session instead of starting a stale prompt.
 
 ## Project checks
 
@@ -168,9 +170,36 @@ Slash commands remain available during review.
 The panel above the editor wraps the complete objective within the terminal width, without a trailing ellipsis.
 Resizing the terminal reflows the objective while preserving the title, usage totals, and footer actions.
 
+The panel separates the coder turn from the open goal. Only an independent PASS produces the final goal result.
+
+Live phases include:
+
+- `coding`: the parent agent is active.
+- `checking`: automated checks run before review.
+- `starting reviewer`: the independent session initializes.
+- `reviewing`: the reviewer requests model responses or uses tools.
+- `waiting`: continuation waits for a specific blocker to clear.
+- `queued`: the next coder turn is queued but does not yet run.
+
+The panel shows check outcomes, phase duration, reviewer model, current tool, observed tokens, and review-history indicators.
+Narrow terminals prioritize the reviewer's operation over its model name.
+The review number identifies the current attempt, not a completion percentage.
+
+One display timer updates active animations every 150 milliseconds and slows to one second after six seconds without activity.
+Waiting states use the slower cadence. Pause, drop, and shutdown stop the timer.
+The elapsed clock does not imply provider progress. A separate line reports the age of the last observed activity event.
+Providers can withhold usage until a message finishes. Token counters use reported usage, not estimates, and exclude cached reads like the budget ledger.
+
+Display ticks do not write session entries. Live projections include unflushed usage without changing the durable accounting baseline.
+
+Continuation waits for editor drafts, pending messages, parent activity, or an external loop without losing its retry.
+Clearing a temporary blocker resumes scheduling automatically. A delivery exception pauses the goal and permits explicit recovery through `/goal resume`.
+
 ## Persistence
 
 The package writes version 3 state to `pi-goal-mode` custom entries.
+Live activity remains transient. It stores at most four check summaries and excludes check output, tool arguments, and reasoning content.
+A restored review does not retain a fictitious live worker.
 
 Persisted state includes:
 
@@ -191,9 +220,14 @@ The decoder migrates version 2 goal entries to version 3 state.
 
 The extension emits these Pi events:
 
+- `@nothingrotf/goal/activity`
 - `@nothingrotf/goal/review-start`
 - `@nothingrotf/goal/review-verdict`
 - `@nothingrotf/goal/review-stop`
+
+Activity events publish the goal identifier, goal status, and transient activity snapshot for status consumers.
+Only semantic activity changes emit these events. Display ticks do not emit activity events.
+The goal tool also returns the current activity snapshot.
 
 Each verdict also creates a `pi-goal-review` custom entry.
 
@@ -201,7 +235,7 @@ Each verdict also creates a `pi-goal-review` custom entry.
 
 Goal still runs checks and review when a Loop extension controls cadence.
 
-Goal does not create a second wake while an external loop remains active. If another coder turn starts during review, the old review is cancelled and its verdict is discarded. The next settled turn is reviewed against current files.
+Goal does not send a second coder turn while an external loop remains active. Its local scheduling timer checks for release of that blocker. If another coder turn starts during review, the old review is cancelled and its verdict is discarded. The next settled turn is reviewed against current files.
 
 ## Compatibility
 
@@ -210,3 +244,5 @@ The package targets the repository Pi catalog (`0.84.4` or newer) and is validat
 ## Development
 
 Run `bun run check` and `bun run test` from the repository root. Goal tests cover persistence, accounting, convergence, project subprocesses, lifecycle races, and fresh reviews using the actual Pi SDK with a deterministic local provider. The SDK tests require no network calls or model credits.
+They cover cancellation and deadlines during initialization, late-session disposal, progress callbacks, and parallel reviewer tools.
+Lifecycle tests cover temporary blockers, failed delivery, repeated tool activity, stale progress, timer cleanup, and heartbeat persistence.

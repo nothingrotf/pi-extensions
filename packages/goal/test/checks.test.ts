@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, test } from 'vite-plus/test'
 
 import { GoalCheckAbortedError, ProjectGoalCheckRunner } from '../src/checks.ts'
+import type { GoalCheckResult } from '../src/state.ts'
 
 const execute = promisify(execFile)
 const temporaryDirectories: string[] = []
@@ -49,6 +50,100 @@ function processExists(pid: number): boolean {
 }
 
 describe('project goal checks', () => {
+  test('reports command boundaries and missing checks without exposing output', async () => {
+    const directory = await project(
+      JSON.stringify({
+        packageManager: 'bun@1.4.0',
+        scripts: { check: 'node -e "console.log(\'private output\')"' },
+      }),
+    )
+    const events: Array<{ type: string; check?: GoalCheckResult; command?: string }> = []
+    const request = {
+      cwd: directory,
+      runtimeProbe: true,
+      signal: new AbortController().signal,
+      trusted: true,
+      onProgress: (event: { type: string; check?: GoalCheckResult; command?: string }) => {
+        events.push(structuredClone(event))
+        if (event.check !== undefined) event.check.status = 'failed'
+      },
+    }
+    const results = await new ProjectGoalCheckRunner().run(request)
+    expect(events.map((event) => event.type)).toEqual([
+      'check-start',
+      'check-end',
+      'check-start',
+      'check-end',
+      'check-end',
+      'check-end',
+    ])
+    expect(events[2]?.command).toBe('bun run check')
+    expect(
+      events.filter((event) => event.type === 'check-end').map((event) => event.check?.kind),
+    ).toEqual(results.map((result) => result.kind))
+    expect(JSON.stringify(events)).not.toContain('private output')
+    expect(results[1]?.status).toBe('passed')
+    expect(results[1]?.output).toContain('private output')
+  })
+
+  test.each([true, false])('isolates throwing callbacks with project trust %s', async (trusted) => {
+    const directory = await project('{invalid manifest')
+    let completions = 0
+    const request = {
+      cwd: directory,
+      runtimeProbe: true,
+      signal: new AbortController().signal,
+      trusted,
+      onProgress: (event: { type: string }) => {
+        if (event.type === 'check-end') completions += 1
+        throw new Error('UI unavailable')
+      },
+    }
+    const results = await new ProjectGoalCheckRunner().run(request)
+    expect(completions).toBe(4)
+    expect(results[1]?.status).toBe(trusted ? 'failed' : 'unavailable')
+  })
+
+  test('isolates rejected progress promises', async () => {
+    const directory = await project('{}')
+    const request = {
+      cwd: directory,
+      runtimeProbe: false,
+      signal: new AbortController().signal,
+      trusted: true,
+      onProgress: async () => {
+        throw new Error('Async UI unavailable')
+      },
+    }
+    expect(await new ProjectGoalCheckRunner().run(request)).toHaveLength(3)
+  })
+
+  test('honors cancellation from command progress before launching the command', async () => {
+    const directory = await project(
+      JSON.stringify({
+        packageManager: 'bun@1.4.0',
+        scripts: { check: "node -e \"require('fs').writeFileSync('ran', 'yes')\"" },
+      }),
+    )
+    const controller = new AbortController()
+    const completed: GoalCheckResult[] = []
+    const request = {
+      cwd: directory,
+      runtimeProbe: false,
+      signal: controller.signal,
+      trusted: true,
+      onProgress: (event: { type: string; command?: string; check?: GoalCheckResult }) => {
+        if (event.type === 'check-start' && event.command === 'bun run check') controller.abort()
+        if (event.check !== undefined) completed.push(event.check)
+      },
+    }
+    await expect(new ProjectGoalCheckRunner().run(request)).rejects.toBeInstanceOf(
+      GoalCheckAbortedError,
+    )
+    expect(completed.at(-1)).toMatchObject({ kind: 'typecheck', status: 'unavailable' })
+    await expect(access(join(directory, 'ran'))).rejects.toThrow(Error)
+  })
+
   test('runs typecheck, tests, and the optional runtime probe', async () => {
     const directory = await project(
       JSON.stringify({

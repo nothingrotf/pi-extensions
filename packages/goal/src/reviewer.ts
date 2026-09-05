@@ -12,6 +12,7 @@ import {
   type ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 
+import type { GoalProgressEvent } from './activity.ts'
 import { loadGoalContract } from './contracts.ts'
 import {
   decodeGoalReviewerOutput,
@@ -24,6 +25,7 @@ import type { GoalCheckResult, GoalModeState, GoalTokenUsage } from './state.ts'
 const defaultReviewTimeoutMs = 10 * 60 * 1_000
 
 export interface GoalReviewRequest {
+  onProgress?: (event: GoalProgressEvent) => void
   checks: readonly GoalCheckResult[]
   ctx: ExtensionContext
   images?: ImageContent[]
@@ -69,15 +71,61 @@ function assistantText(message: AssistantMessage): string {
     .trim()
 }
 
-async function createReviewModelRuntime(ctx: ExtensionContext): Promise<ModelRuntime> {
-  const runtime = await ModelRuntime.create({ refreshOnCreate: false })
+function scopedRefresh<TContext extends { signal: AbortSignal }, TResult>(
+  refresh: (context: TContext) => Promise<TResult>,
+  signal: AbortSignal,
+): { refresh: (context: TContext) => Promise<TResult>; completed: Promise<void> } {
+  const completed = Promise.withResolvers<void>()
+  let pending: Promise<TResult> | undefined
+  return {
+    completed: completed.promise,
+    refresh: (context) => {
+      signal.throwIfAborted()
+      if (pending === undefined) {
+        pending = Promise.resolve().then(() => {
+          signal.throwIfAborted()
+          return refresh({ ...context, signal })
+        })
+        completed.resolve(pending.then(() => {}))
+      }
+      return pending
+    },
+  }
+}
+
+async function createReviewModelRuntime(
+  ctx: ExtensionContext,
+  signal: AbortSignal,
+): Promise<ModelRuntime> {
+  const runtime = await ModelRuntime.create({ refreshOnCreate: false, signal })
+  signal.throwIfAborted()
+  const refreshes: Promise<void>[] = []
   for (const providerId of ctx.modelRegistry.getRegisteredProviderIds()) {
     const nativeProvider = ctx.modelRegistry.getRegisteredNativeProvider(providerId)
     const providerConfig = ctx.modelRegistry.getRegisteredProviderConfig(providerId)
-    if (nativeProvider !== undefined) runtime.registerNativeProvider(nativeProvider)
-    else if (providerConfig !== undefined) runtime.registerProvider(providerId, providerConfig)
+    if (nativeProvider !== undefined) {
+      const provider = { ...nativeProvider }
+      if (nativeProvider.refreshModels !== undefined) {
+        const scoped = scopedRefresh(nativeProvider.refreshModels.bind(nativeProvider), signal)
+        provider.refreshModels = scoped.refresh
+        refreshes.push(scoped.completed)
+      }
+      runtime.registerNativeProvider(provider)
+    } else if (providerConfig !== undefined) {
+      const config = { ...providerConfig }
+      if (providerConfig.refreshModels !== undefined) {
+        const scoped = scopedRefresh(providerConfig.refreshModels.bind(providerConfig), signal)
+        config.refreshModels = scoped.refresh
+        refreshes.push(scoped.completed)
+      }
+      runtime.registerProvider(providerId, config)
+    }
   }
-  await runtime.refresh({ allowNetwork: false })
+  await withCancellation(
+    () => Promise.all([runtime.refresh({ allowNetwork: false, signal }), ...refreshes]),
+    signal,
+  )
+  signal.throwIfAborted()
   return runtime
 }
 
@@ -119,9 +167,12 @@ function createSessionManager(ctx: ExtensionContext): SessionManager {
 async function createReviewSession(
   ctx: ExtensionContext,
   state: GoalModeState,
+  signal: AbortSignal,
 ): Promise<{ model: string; session: AgentSession }> {
+  signal.throwIfAborted()
   const model = resolveReviewModel(ctx, state)
-  const runtime = await createReviewModelRuntime(ctx)
+  const runtime = await createReviewModelRuntime(ctx, signal)
+  signal.throwIfAborted()
   const settingsManager = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   })
@@ -129,13 +180,14 @@ async function createReviewSession(
     agentDir: getAgentDir(),
     appendSystemPrompt: [goalReviewerSystemPrompt],
     cwd: ctx.cwd,
-    settingsManager,
+    settingsManager: SettingsManager.inMemory({}, { projectTrusted: ctx.isProjectTrusted() }),
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
   })
   await loader.reload()
+  signal.throwIfAborted()
   const options: CreateAgentSessionOptions = {
     cwd: ctx.cwd,
     model,
@@ -146,15 +198,20 @@ async function createReviewSession(
     tools: ['read', 'grep', 'find', 'ls'],
   }
   if (ctx.thinkingLevel !== undefined) options.thinkingLevel = ctx.thinkingLevel
+  signal.throwIfAborted()
   const created = await createAgentSession(options)
-  if (created.modelFallbackMessage !== undefined) {
+  try {
+    signal.throwIfAborted()
+    if (created.modelFallbackMessage !== undefined) throw new Error(created.modelFallbackMessage)
+    created.session.setSessionName(
+      `Goal review ${state.loop.iteration + 1}/${state.loop.maxIterations}`,
+    )
+    signal.throwIfAborted()
+    return { model: modelName(model), session: created.session }
+  } catch (error) {
     created.session.dispose()
-    throw new Error(created.modelFallbackMessage)
+    throw error
   }
-  created.session.setSessionName(
-    `Goal review ${state.loop.iteration + 1}/${state.loop.maxIterations}`,
-  )
-  return { model: modelName(model), session: created.session }
 }
 
 function failedChecks(checks: readonly GoalCheckResult[]): GoalCheckResult[] {
@@ -208,48 +265,65 @@ async function settleAbort(request: Promise<void> | undefined): Promise<void> {
   }
 }
 
+async function withCancellation<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted()
+  const aborted = Promise.withResolvers<never>()
+  const abort = () => aborted.reject(signal.reason)
+  signal.addEventListener('abort', abort, { once: true })
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => {
+        signal.throwIfAborted()
+        return operation()
+      }),
+      aborted.promise,
+    ])
+  } finally {
+    signal.removeEventListener('abort', abort)
+  }
+}
+
 async function promptWithCancellation(
   session: AgentSession,
   prompt: string,
   images: ImageContent[] | undefined,
   signal: AbortSignal,
-  timeoutMs: number,
 ): Promise<void> {
-  if (signal.aborted) throw new GoalReviewAbortedError('Goal review was aborted.')
-  let timeout: ReturnType<typeof setTimeout> | undefined
+  signal.throwIfAborted()
   let abortRequest: Promise<void> | undefined
-  let rejectAbort: ((error: GoalReviewAbortedError) => void) | undefined
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject
-  })
   const abort = () => {
     abortRequest = session.abort()
     abortRequest.catch(() => {})
-    rejectAbort?.(new GoalReviewAbortedError('Goal review was aborted.'))
   }
   signal.addEventListener('abort', abort, { once: true })
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      abortRequest = session.abort()
-      abortRequest.catch(() => {})
-      reject(new Error(`Goal review exceeded ${timeoutMs} ms.`))
-    }, timeoutMs)
-  })
   try {
     const promptOptions: PromptOptions = {
       expandPromptTemplates: false,
       source: 'extension',
+      preflightResult: () => signal.throwIfAborted(),
     }
-    const request =
-      images === undefined || images.length === 0
-        ? session.prompt(prompt, promptOptions)
-        : session.prompt(prompt, { ...promptOptions, images })
-    await Promise.race([request, abortPromise, timeoutPromise])
+    await withCancellation(
+      () =>
+        images === undefined || images.length === 0
+          ? session.prompt(prompt, promptOptions)
+          : session.prompt(prompt, { ...promptOptions, images }),
+      signal,
+    )
+    signal.throwIfAborted()
   } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
     signal.removeEventListener('abort', abort)
     await settleAbort(abortRequest)
   }
+}
+
+function emitProgress(onProgress: GoalReviewRequest['onProgress'], event: GoalProgressEvent): void {
+  try {
+    Promise.resolve(onProgress?.(event)).catch(() => {})
+  } catch {}
+}
+
+function totalTokens(usage: GoalTokenUsage): number {
+  return usage.input + usage.output + usage.cacheWrite
 }
 
 export class FreshGoalReviewer implements GoalReviewer {
@@ -262,7 +336,13 @@ export class FreshGoalReviewer implements GoalReviewer {
     if (this.#controller !== undefined) throw new Error('A goal review is already active.')
     const controller = new AbortController()
     this.#controller = controller
-    const signal = AbortSignal.any([request.signal, controller.signal])
+    const cancellation = AbortSignal.any([request.signal, controller.signal])
+    const deadline = new AbortController()
+    const signal = AbortSignal.any([cancellation, deadline.signal])
+    const timeout = setTimeout(
+      () => deadline.abort(new Error(`Goal review exceeded ${this.timeoutMs} ms.`)),
+      this.timeoutMs,
+    )
     let model = request.state.loop.reviewModel ?? 'inherit'
     let usage = emptyUsage()
     let report = ''
@@ -271,29 +351,64 @@ export class FreshGoalReviewer implements GoalReviewer {
     let session: AgentSession | undefined
     let unsubscribe: (() => void) | undefined
     try {
-      if (signal.aborted) throw new GoalReviewAbortedError('Goal review was aborted.')
-      const contract = await loadGoalContract(request.ctx.cwd, request.state.goal.objective)
-      if (signal.aborted) throw new GoalReviewAbortedError('Goal review was aborted.')
-      const created = await createReviewSession(request.ctx, request.state)
-      session = created.session
+      signal.throwIfAborted()
+      emitProgress(request.onProgress, { type: 'reviewer', phase: 'starting-reviewer', tokens: 0 })
+      const contract = await withCancellation(
+        () => loadGoalContract(request.ctx.cwd, request.state.goal.objective),
+        signal,
+      )
+      const created = await withCancellation(async () => {
+        const result = await createReviewSession(request.ctx, request.state, signal)
+        if (signal.aborted) {
+          result.session.dispose()
+          signal.throwIfAborted()
+        }
+        session = result.session
+        return result
+      }, signal)
       model = created.model
-      this.#active = session
-      unsubscribe = session.subscribe((event) => {
+      this.#active = created.session
+      let lastStreamingProgress = 0
+      const activeTools = new Map<string, string>()
+      const progress = (tokens: number) => {
+        if (signal.aborted) return
+        const event: GoalProgressEvent = { type: 'reviewer', phase: 'reviewing', model, tokens }
+        const tool = activeTools.values().next().value
+        if (tool !== undefined) event.tool = tool
+        emitProgress(request.onProgress, event)
+      }
+      unsubscribe = created.session.subscribe((event) => {
+        if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
+          if (event.type === 'tool_execution_start')
+            activeTools.set(event.toolCallId, event.toolName)
+          else activeTools.delete(event.toolCallId)
+          progress(totalTokens(usage))
+          return
+        }
+        if (event.type === 'message_update' && event.message.role === 'assistant') {
+          const now = Date.now()
+          if (now - lastStreamingProgress >= 250) {
+            lastStreamingProgress = now
+            progress(totalTokens(addUsage(usage, event.message)))
+          }
+          return
+        }
         if (event.type !== 'message_end' || event.message.role !== 'assistant') return
         usage = addUsage(usage, event.message)
         stopReason = event.message.stopReason
         failure = event.message.errorMessage
         const text = assistantText(event.message)
         if (text.length > 0) report = text
+        progress(totalTokens(usage))
       })
+      progress(0)
       await promptWithCancellation(
-        session,
+        created.session,
         renderGoalReviewPrompt(request.state, request.checks, contract),
         request.images,
         signal,
-        this.timeoutMs,
       )
-      if (session.getSteeringMessages().length > 0) {
+      if (created.session.getSteeringMessages().length > 0) {
         throw new GoalReviewSteeringPendingError('The reviewer has unread user steering.', usage)
       }
       if (stopReason !== 'stop')
@@ -315,7 +430,7 @@ export class FreshGoalReviewer implements GoalReviewer {
       )
     } catch (error) {
       if (error instanceof GoalReviewSteeringPendingError) throw error
-      if (error instanceof GoalReviewAbortedError || signal.aborted) {
+      if (error instanceof GoalReviewAbortedError || cancellation.aborted) {
         const reason = error instanceof Error ? error.message : String(error)
         throw new GoalReviewAbortedError(reason, usage)
       }
@@ -333,6 +448,7 @@ export class FreshGoalReviewer implements GoalReviewer {
         request.checks,
       )
     } finally {
+      clearTimeout(timeout)
       unsubscribe?.()
       session?.dispose()
       if (this.#active === session) this.#active = undefined

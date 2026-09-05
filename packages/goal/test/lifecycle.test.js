@@ -104,11 +104,17 @@ function harness(options = {}) {
   const statuses = new Map()
   const widgetCalls = []
   let widget
-  const tui = { requestRender() {} }
+  let renderRequests = 0
+  const tui = {
+    requestRender() {
+      renderRequests += 1
+    },
+  }
   let activeTools = ['read', 'bash', 'goal']
   let idle = true
   let pending = false
   let editorText = ''
+  let deliveryFailures = options.deliveryFailures ?? 0
   let selectAnswer
   let confirmAnswer = true
   let editorAnswer
@@ -120,6 +126,10 @@ function harness(options = {}) {
       entries.push({ type: 'custom', customType, data })
     },
     sendMessage(message, sendOptions) {
+      if (message.customType === 'goal-continuation' && deliveryFailures > 0) {
+        deliveryFailures -= 1
+        throw new Error('Continuation delivery failed')
+      }
       messages.push({ message, options: sendOptions })
     },
     sendUserMessage(content, sendOptions) {
@@ -235,6 +245,7 @@ function harness(options = {}) {
     busEvents,
     statuses,
     widgetCalls,
+    renderRequests: () => renderRequests,
     reviewer,
     checkRunner,
     renderWidget(width = 120) {
@@ -362,7 +373,7 @@ describe('goal lifecycle', () => {
       },
     })
     expect(instance.userMessages).toEqual([{ content: 'ship the release', options: undefined }])
-    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · coding 1/8 ▾')
+    expect(instance.renderWidget().join('\n')).toContain('⟲ goal · queued 1/8 ▾')
     const injected = await instance.emit('before_agent_start', { systemPrompt: 'base' })
     expect(injected.message.content).toContain('<objective>\nship the release\n</objective>')
     expect(injected.message.content).toContain('Only reviewer PASS can complete the goal.')
@@ -394,6 +405,140 @@ describe('goal lifecycle', () => {
       options: { triggerTurn: true, deliverAs: 'followUp' },
     })
     expect(instance.messages.at(-1).message.content).toContain('Missing release notes.')
+  })
+
+  test.each(['editor', 'pending', 'busy'])(
+    'resumes automatically after a temporary %s blocker clears',
+    async (blocker) => {
+      const instance = harness()
+      await instance.emit('session_start')
+      await instance.command('goal', 'finish migration')
+      await runTurn(instance)
+      if (blocker === 'editor') instance.setEditorText('draft')
+      if (blocker === 'pending') instance.setPending(true)
+      if (blocker === 'busy') instance.setIdle(false)
+      await vi.advanceTimersByTimeAsync(800)
+      expect(
+        instance.messages.filter((item) => item.message.customType === 'goal-continuation'),
+      ).toHaveLength(0)
+      expect(instance.renderWidget().join('\n')).toContain('waiting')
+      instance.setEditorText('')
+      instance.setPending(false)
+      instance.setIdle(true)
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(
+        instance.messages.filter((item) => item.message.customType === 'goal-continuation'),
+      ).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(2400)
+      expect(
+        instance.messages.filter((item) => item.message.customType === 'goal-continuation'),
+      ).toHaveLength(1)
+      await instance.emit('session_shutdown')
+      expect(vi.getTimerCount()).toBe(0)
+    },
+  )
+
+  test('publishes live review stages without heartbeat persistence and rejects stale events', async () => {
+    const gate = Promise.withResolvers()
+    const checkRunner = {
+      async run(request) {
+        request.onProgress({
+          type: 'check-start',
+          kind: 'test',
+          label: 'Tests',
+          command: 'bun run test',
+        })
+        await gate.promise
+        return passingChecks()
+      },
+    }
+    const reviewer = new FakeReviewer()
+    const instance = harness({ checkRunner, reviewer })
+    await instance.emit('session_start')
+    await instance.command('goal', 'finish migration')
+    reviewer.hold()
+    await runTurn(instance)
+    expect(instance.renderWidget().join('\n')).toContain('checking 1/5')
+    expect(instance.renderWidget().join('\n')).toContain('Tests · running')
+    const writes = instance.entries.length
+    await vi.advanceTimersByTimeAsync(1250)
+    expect(instance.renderRequests()).toBeGreaterThan(0)
+    expect(instance.renderWidget().join('\n')).toContain('1s in this phase')
+    expect(instance.entries).toHaveLength(writes)
+    const detail = await instance.tool({ op: 'get' })
+    expect(detail.details.activity.phase).toBe('checks')
+    gate.resolve()
+    await flushAsync()
+    expect(instance.renderWidget().join('\n')).toContain('starting reviewer')
+    const progress = reviewer.calls[0].onProgress
+    progress({
+      type: 'reviewer',
+      phase: 'reviewing',
+      model: 'local/reviewer',
+      tool: 'read',
+      tokens: 30,
+    })
+    expect(instance.renderWidget().join('\n')).toContain('local/reviewer · read · 30 tokens')
+    await vi.advanceTimersByTimeAsync(7100)
+    expect(instance.renderWidget().join('\n')).toContain('No new activity event')
+    await instance.command('goal', 'pause')
+    progress({ type: 'reviewer', phase: 'reviewing', tool: 'stale-tool', tokens: 999 })
+    expect(instance.renderWidget().join('\n')).toContain('paused')
+    expect(instance.renderWidget().join('\n')).not.toContain('stale-tool')
+    expect(vi.getTimerCount()).toBe(0)
+    await instance.emit('session_shutdown')
+  })
+
+  test('keeps a blocker present before review completion and cancels its retry on pause', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    await instance.command('goal', 'finish migration')
+    instance.setEditorText('draft')
+    await runTurn(instance)
+    expect(instance.renderWidget().join('\n')).toContain('Waiting for the editor draft')
+    await vi.advanceTimersByTimeAsync(1600)
+    instance.setEditorText('')
+    await vi.advanceTimersByTimeAsync(800)
+    expect(
+      instance.messages.filter((item) => item.message.customType === 'goal-continuation'),
+    ).toHaveLength(1)
+    await runTurn(instance)
+    await instance.command('goal', 'pause')
+    const count = instance.messages.length
+    await vi.advanceTimersByTimeAsync(2400)
+    expect(instance.messages).toHaveLength(count)
+    expect(vi.getTimerCount()).toBe(0)
+    await instance.emit('session_shutdown')
+  })
+
+  test('pauses on continuation delivery failure and permits explicit recovery', async () => {
+    const instance = harness({ deliveryFailures: 1 })
+    await instance.emit('session_start')
+    await instance.command('goal', 'finish migration')
+    await runTurn(instance)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(latestState(instance).goal.status).toBe('paused')
+    expect(vi.getTimerCount()).toBe(0)
+    await instance.command('goal', 'resume')
+    expect(latestState(instance).enabled).toBe(true)
+    await instance.emit('session_shutdown')
+  })
+
+  test('renews observed activity for consecutive calls of the same tool', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    await instance.command('goal', 'finish migration')
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', { toolCallId: 'first', toolName: 'read', args: {} })
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(instance.renderWidget().join('\n')).toContain('No new activity event')
+    await instance.emit('tool_execution_start', {
+      toolCallId: 'second',
+      toolName: 'read',
+      args: {},
+    })
+    expect(instance.renderWidget().join('\n')).not.toContain('No new activity event')
+    await instance.emit('session_shutdown')
   })
 
   test('uses complete as a review request and exits only after PASS', async () => {
