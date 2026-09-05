@@ -393,7 +393,7 @@ describe('pending narration row', () => {
     expect(later).toContain('Thinking..')
   })
 
-  test('uses the Empryo spinner and dot cadence', () => {
+  test('uses the HUD spinner and dot cadence', () => {
     expect(actionSpinnerFrame(0)).toBe('⠋')
     expect(actionSpinnerFrame(3)).toBe('⠙')
     expect(actionSpinnerFrame(9)).toBe('⠼')

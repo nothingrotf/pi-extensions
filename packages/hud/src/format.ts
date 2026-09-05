@@ -1,3 +1,4 @@
+import type { AssistantMessage, Usage } from '@earendil-works/pi-ai'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 
 const escapeCode = 27
@@ -80,7 +81,7 @@ export function prettyModel(id: string | undefined): string {
   }
   const base = safeId.split('/').at(-1) ?? safeId
   const words = base
-    .replace(/^(claude|grok|gpt|gemini|openai)-/iu, '')
+    .replace(/^(claude|grok|gemini|openai)-/iu, '')
     .split('-')
     .filter(Boolean)
   const merged: string[] = []
@@ -94,7 +95,11 @@ export function prettyModel(id: string | undefined): string {
   }
   return merged
     .map((word) =>
-      /^[a-z]/u.test(word) ? `${word.charAt(0).toUpperCase()}${word.slice(1)}` : word,
+      /^gpt$/iu.test(word)
+        ? 'GPT'
+        : /^[a-z]/u.test(word)
+          ? `${word.charAt(0).toUpperCase()}${word.slice(1)}`
+          : word,
     )
     .join(' ')
 }
@@ -130,6 +135,38 @@ export function contextSummary(ctx: ExtensionContext): { label: string; percent:
   return { label: `${labelPercent}/${formatCount(contextWindow)}`, percent }
 }
 
+export function buildCacheLabel(ctx: ExtensionContext, pending?: AssistantMessage): string {
+  const total = { input: 0, cacheRead: 0, cacheWrite: 0 }
+  const branch = ctx.sessionManager.getBranch()
+  if (
+    pending?.usage &&
+    !branch.some((entry) => entry.type === 'message' && entry.message === pending)
+  ) {
+    total.input = pending.usage.input
+    total.cacheRead = pending.usage.cacheRead
+    total.cacheWrite = pending.usage.cacheWrite
+  }
+  for (const entry of branch) {
+    if (entry.type !== 'message' || entry.message.role !== 'assistant') continue
+    const usage = entry.message.usage
+    if (!usage || ![usage.input, usage.cacheRead, usage.cacheWrite].every(Number.isFinite)) continue
+    total.input += usage.input
+    total.cacheRead += usage.cacheRead
+    total.cacheWrite += usage.cacheWrite
+  }
+  return formatCacheLabel(total)
+}
+
+export function formatCacheLabel(
+  usage: Pick<Usage, 'input' | 'cacheRead' | 'cacheWrite'> | undefined,
+): string {
+  if (usage === undefined) return ''
+  const input = usage.input + usage.cacheRead + usage.cacheWrite
+  if (!Number.isFinite(input) || input <= 0 || !Number.isFinite(usage.cacheRead)) return ''
+  const percent = Math.max(0, Math.min(100, Math.round((usage.cacheRead / input) * 100)))
+  return `⛁ ${percent}% cached`
+}
+
 export function buildContextLabel(ctx: ExtensionContext): string {
   return contextSummary(ctx).label
 }
@@ -142,36 +179,9 @@ export function formatCwd(cwd: string): string {
   if (!cwd) {
     return '--'
   }
-  const home = (process.env.HOME ?? process.env.USERPROFILE ?? '').replace(/[\\/]+$/u, '')
-  const networkPath = /^[\\/]{2}[^\\/]/u.test(cwd)
-  let path = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
-  const normalizedHome = home.replace(/\\/gu, '/')
-  if (normalizedHome && (path === normalizedHome || path.startsWith(`${normalizedHome}/`))) {
-    path = `~${path.slice(normalizedHome.length)}`
-  }
-  const parts = path.split('/').filter(Boolean)
-  if (parts.length === 0) {
-    return path || '/'
-  }
-  const homePath = parts[0] === '~'
-  const drivePath = /^[A-Za-z]:\//u.test(path)
-  if (networkPath) {
-    if (parts.length <= 4) {
-      return `//${parts.join('/')}`
-    }
-    return `//${parts[0]}/${parts[1]}/…/${parts.slice(-2).join('/')}`
-  }
-  if (parts.length <= (homePath ? 3 : 2)) {
-    if (homePath || drivePath) {
-      return parts.join('/')
-    }
-    return `/${parts.join('/')}`
-  }
-  const tail = parts.slice(-2).join('/')
-  if (homePath) {
-    return `~/…/${tail}`
-  }
-  return drivePath ? `${parts[0]}/…/${tail}` : `…/${tail}`
+  const path = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
+  if (/^[A-Za-z]:$/u.test(path)) return `${path}/`
+  return path.split('/').at(-1) || '/'
 }
 
 export function formatResetIn(date: Date): string {

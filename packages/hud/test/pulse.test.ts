@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { empryoBrand, empryoBrandDim } from '../src/colors.ts'
+import { hudBrand, hudBrandDim } from '../src/colors.ts'
 import {
   pulseFaint,
   pulseFrame,
@@ -87,7 +87,7 @@ describe('pulse', () => {
   })
 
   test('mixes the pulse color in Oklab', () => {
-    expect(pulseFrame(1, empryoBrandDim, empryoBrand)).toMatchObject({
+    expect(pulseFrame(1, hudBrandDim, hudBrand)).toMatchObject({
       color: { b: 72, g: 42, r: 49 },
       glyph: pulseFaint,
     })

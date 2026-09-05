@@ -245,16 +245,16 @@ export function formatDuration(ms: number | undefined): string {
   return remainder > 0 ? `${String(minutes)}m ${String(remainder)}s` : `${String(minutes)}m`
 }
 
-function empryoAnimationTick(tick: number): number {
+function animationFrameIndex(tick: number): number {
   return Math.floor((tick * animationTickMs) / spinnerTickMs) % spinnerFrames.length
 }
 
 export function actionSpinnerFrame(tick: number): string {
-  return spinnerFrames[empryoAnimationTick(tick)] ?? spinnerFrames[0]
+  return spinnerFrames[animationFrameIndex(tick)] ?? spinnerFrames[0]
 }
 
 export function pendingDotsFrame(tick: number): string {
-  return dotFrames[Math.floor(empryoAnimationTick(tick) / 4)] ?? dotFrames[0]
+  return dotFrames[Math.floor(animationFrameIndex(tick) / 4)] ?? dotFrames[0]
 }
 
 function statusGlyph(status: RailStatus, theme: RailTheme, tick: number): string {

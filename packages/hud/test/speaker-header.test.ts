@@ -3,12 +3,12 @@ import { describe, expect, test } from 'vite-plus/test'
 
 import {
   ansiForeground,
-  empryoBrand,
-  empryoBrandAlt,
-  empryoBrandDim,
-  empryoTextFaint,
-  empryoTextMuted,
-  empryoTextPrimary,
+  hudBrand,
+  hudBrandAlt,
+  hudBrandDim,
+  hudTextFaint,
+  hudTextMuted,
+  hudTextPrimary,
 } from '../src/colors.ts'
 import {
   formatSpeakerClock,
@@ -27,7 +27,7 @@ const timestamp = new Date(2026, 0, 15, 9, 5, 3).getTime()
 const assistant: SpeakerHeaderData = {
   assistant: true,
   glyph: '●',
-  label: 'Empryo',
+  label: 'Assistant',
   timestamp,
 }
 
@@ -70,10 +70,10 @@ describe('speaker header', () => {
 
   test('renders the settled assistant header', () => {
     const line = speakerHeaderLine(assistant, theme, undefined, 0)
-    expect(plain(line)).toBe(`● Empryo · ${formatSpeakerClock(timestamp)}`)
-    expect(line).toContain(`${ansiForeground(empryoBrand)}●`)
-    expect(line).toContain(`\x1b[1m${ansiForeground(empryoTextPrimary)} Empryo`)
-    expect(line).toContain(`${ansiForeground(empryoTextFaint)} · `)
+    expect(plain(line)).toBe(`● Assistant · ${formatSpeakerClock(timestamp)}`)
+    expect(line).toContain(`${ansiForeground(hudBrand)}●`)
+    expect(line).toContain(`\x1b[1m${ansiForeground(hudTextPrimary)} Assistant`)
+    expect(line).toContain(`${ansiForeground(hudTextFaint)} · `)
   })
 
   test('renders the static user header', () => {
@@ -89,17 +89,17 @@ describe('speaker header', () => {
 
   test('starts live output at the exact rest frame', () => {
     const line = speakerHeaderLine(assistant, theme, frame(), 0)
-    expect(plain(line)).toBe(`· Empryo · ${formatSpeakerClock(timestamp)}`)
-    expect(line).toContain(`${ansiForeground(empryoBrandDim)}·`)
-    expect(line).toContain(`\x1b[1m${ansiForeground(empryoTextPrimary)} Empryo`)
-    expect(line).not.toContain(ansiForeground(empryoBrandAlt))
+    expect(plain(line)).toBe(`· Assistant · ${formatSpeakerClock(timestamp)}`)
+    expect(line).toContain(`${ansiForeground(hudBrandDim)}·`)
+    expect(line).toContain(`\x1b[1m${ansiForeground(hudTextPrimary)} Assistant`)
+    expect(line).not.toContain(ansiForeground(hudBrandAlt))
   })
 
   test('animates the glyph color and name after one tick', () => {
     const line = speakerHeaderLine(assistant, theme, frame({ tick: 1 }), 0)
-    expect(plain(line)).toBe(`· Empryo · ${formatSpeakerClock(timestamp)}`)
-    expect(line).not.toContain(`${ansiForeground(empryoBrandDim)}·`)
-    expect(line).not.toContain(`${ansiForeground(empryoBrand)}·`)
+    expect(plain(line)).toBe(`· Assistant · ${formatSpeakerClock(timestamp)}`)
+    expect(line).not.toContain(`${ansiForeground(hudBrandDim)}·`)
+    expect(line).not.toContain(`${ansiForeground(hudBrand)}·`)
     expect(line.split('\x1b[38;2;').length).toBeGreaterThan(4)
   })
 
@@ -113,7 +113,7 @@ describe('speaker header', () => {
     const line = speakerHeaderLine(assistant, theme, frame({ tick: 4 }), 0)
     expect(line).toContain('\x1b[1m\x1b[38;2;')
     const bold = line.slice(line.indexOf('\x1b[1m'), line.indexOf('\x1b[22m'))
-    expect(plain(bold)).toBe(' Empryo')
+    expect(plain(bold)).toBe(' Assistant')
   })
 
   test('uses the live message timestamp when supplied', () => {
@@ -124,8 +124,8 @@ describe('speaker header', () => {
 
   test('uses the static fallback when motion is disabled', () => {
     const line = speakerHeaderLine(assistant, theme, frame({ motion: false, tick: 4 }), 0)
-    expect(plain(line).startsWith('● Empryo')).toBe(true)
-    expect(line).toContain(`${ansiForeground(empryoBrand)}●`)
+    expect(plain(line).startsWith('● Assistant')).toBe(true)
+    expect(line).toContain(`${ansiForeground(hudBrand)}●`)
     expect(line.split('\x1b[38;2;')).toHaveLength(4)
   })
 
@@ -136,9 +136,9 @@ describe('speaker header', () => {
       spinner: '⠏',
     })
     expect(plain(line)).toBe('⠏ waiting for the model · 30s')
-    expect(line).toContain(`${ansiForeground(empryoBrandDim)}⠏`)
-    expect(line).toContain(`${ansiForeground(empryoTextMuted)} waiting for the model`)
-    expect(line).toContain(`${ansiForeground(empryoTextFaint)} · 30s`)
+    expect(line).toContain(`${ansiForeground(hudBrandDim)}⠏`)
+    expect(line).toContain(`${ansiForeground(hudTextMuted)} waiting for the model`)
+    expect(line).toContain(`${ansiForeground(hudTextFaint)} · 30s`)
   })
 })
 
@@ -152,9 +152,9 @@ describe('SpeakerHeaderComponent', () => {
     current = frame({ active: false, tick: 11 })
     const settled = component.render(40)[0] ?? ''
 
-    expect(plain(initial).trimStart().startsWith('· Empryo')).toBe(true)
+    expect(plain(initial).trimStart().startsWith('· Assistant')).toBe(true)
     expect(animated).not.toBe(initial)
-    expect(plain(settled).trimStart().startsWith('● Empryo')).toBe(true)
+    expect(plain(settled).trimStart().startsWith('● Assistant')).toBe(true)
     expect(settled.split('\x1b[38;2;')).toHaveLength(4)
     expect(visibleWidth(settled)).toBe(40)
   })
@@ -162,7 +162,7 @@ describe('SpeakerHeaderComponent', () => {
   test('keeps the header at the transcript edge', () => {
     const component = new SpeakerHeaderComponent(assistant, theme)
     const line = plain(component.render(40)[0] ?? '')
-    expect(line.startsWith('● Empryo')).toBe(true)
+    expect(line.startsWith('● Assistant')).toBe(true)
     expect(visibleWidth(line)).toBe(40)
   })
 
@@ -198,10 +198,5 @@ describe('speaker motion gate', () => {
   test('disables motion for any NO_MOTION value', () => {
     expect(speakerMotionEnabled({ NO_MOTION: '1' })).toBe(false)
     expect(speakerMotionEnabled({ NO_MOTION: '0' })).toBe(false)
-  })
-
-  test('disables motion for EMPRYO_NO_MOTION=1 only', () => {
-    expect(speakerMotionEnabled({ EMPRYO_NO_MOTION: '1' })).toBe(false)
-    expect(speakerMotionEnabled({ EMPRYO_NO_MOTION: 'true' })).toBe(true)
   })
 })

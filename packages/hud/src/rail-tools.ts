@@ -242,11 +242,12 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
     if (entry.type === 'custom' && entry.customType === railEntryType) {
       const turn = decodeRailEntry(entry.data)
       if (turn !== undefined) {
-        byEntryTurn.set(turn, store)
-        renderedStores.add(store)
-        const turns = turnsByStore.get(store) ?? new Set<number>()
+        const target = byEntryTurn.get(turn) ?? store
+        byEntryTurn.set(turn, target)
+        renderedStores.add(target)
+        const turns = turnsByStore.get(target) ?? new Set<number>()
         turns.add(turn)
-        turnsByStore.set(store, turns)
+        turnsByStore.set(target, turns)
         maxTurn = Math.max(maxTurn, turn)
       }
       continue

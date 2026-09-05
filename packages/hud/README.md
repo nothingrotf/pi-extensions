@@ -5,13 +5,21 @@ It replaces the default footer and adds speaker headers, an action rail, a pre-r
 
 The left side shows:
 
-- the current workspace
-- the Git branch and working tree counters
-- the provider, model, and reasoning effort
-- the active goal status from `@nothingrotf/goal`
+- the current folder name, without its parent path
+- the Git branch with a glyph and dirty marker, such as `⎇ main*`
+- the model, effort, and Fast status
+- goal and loop statuses
 
-The right side shows provider quota windows and context use.
+The right side shows context use, session cache percentage, and provider quota windows.
+Model labels use the model ID with lowercase effort and Fast labels, such as `gpt-6-astra:xhigh [fast]`.
+Other extension statuses, including MCP tools, stay hidden.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
+Fast Mode uses the status from `@nothingrotf/fast-mode`. Unavailable Fast Mode stays hidden.
+The session cache percentage divides cache-read tokens by all input tokens on the current branch, including cache writes. It stays hidden until response usage is available.
+
+Footer groups use `·` separators. Flexible space keeps the right group aligned with the terminal edge.
+The stock editor's lower rule stays hidden between the input and footer. The upper rule stays visible.
+A fixed `›` marks the first visible input row without entering the submitted text.
 
 The transcript labels each message author and closes each agent run with one usage row:
 
@@ -37,9 +45,9 @@ Both effects share one subscriber-owned 70 ms clock. The header settles before t
 
 The clock uses the system locale with two-digit hours and minutes. The settled glyph and name stay bold and static.
 
-Set `NO_MOTION` to any value to disable the header animation. `EMPRYO_NO_MOTION=1` also disables it.
+Set `NO_MOTION=1` to disable the header animation.
 
-The HUD names the active model instead of the literal `Empryo` product name. The user label stays `You`.
+The HUD displays the active model name. The user label stays `You`.
 
 The row totals every assistant message in the run. It shows the duration, cost, token counts, cache share, and output rate.
 

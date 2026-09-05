@@ -5,14 +5,14 @@ import {
   applyOpacity,
   assistantAnsi,
   buildRailPalette,
-  empryoBrand,
-  empryoBrandAlt,
-  empryoBrandDim,
-  empryoTextDim,
-  empryoTextFaint,
-  empryoTextMuted,
-  empryoTextPrimary,
-  empryoTextSecondary,
+  hudBrand,
+  hudBrandAlt,
+  hudBrandDim,
+  hudTextDim,
+  hudTextFaint,
+  hudTextMuted,
+  hudTextPrimary,
+  hudTextSecondary,
   mixOklab,
   parseTrueColor,
   railPaletteFromAnsi,
@@ -58,7 +58,7 @@ describe('buildRailPalette', () => {
     expect(parseTrueColor(palette.web)).toEqual({ b: 139, g: 173, r: 104 })
   })
 
-  test('matches the settled colors emitted by Empryo', () => {
+  test('matches the settled HUD colors', () => {
     const palette = buildRailPalette(0.75)
     expect(parseTrueColor(palette.branch)).toEqual({ b: 63, g: 46, r: 49 })
     expect(parseTrueColor(palette.ok)).toEqual({ b: 128, g: 162, r: 119 })
@@ -87,14 +87,14 @@ describe('role accents', () => {
   })
 
   test('exposes the exact speaker animation colors', () => {
-    expect(empryoBrand).toEqual({ b: 172, g: 105, r: 128 })
-    expect(empryoBrandAlt).toEqual({ b: 240, g: 199, r: 167 })
-    expect(empryoBrandDim).toEqual({ b: 69, g: 40, r: 46 })
-    expect(empryoTextDim).toEqual({ b: 114, g: 88, r: 93 })
-    expect(empryoTextFaint).toEqual({ b: 84, g: 62, r: 66 })
-    expect(empryoTextMuted).toEqual({ b: 148, g: 119, r: 125 })
-    expect(empryoTextPrimary).toEqual({ b: 242, g: 228, r: 232 })
-    expect(empryoTextSecondary).toEqual({ b: 192, g: 164, r: 170 })
+    expect(hudBrand).toEqual({ b: 172, g: 105, r: 128 })
+    expect(hudBrandAlt).toEqual({ b: 240, g: 199, r: 167 })
+    expect(hudBrandDim).toEqual({ b: 69, g: 40, r: 46 })
+    expect(hudTextDim).toEqual({ b: 114, g: 88, r: 93 })
+    expect(hudTextFaint).toEqual({ b: 84, g: 62, r: 66 })
+    expect(hudTextMuted).toEqual({ b: 148, g: 119, r: 125 })
+    expect(hudTextPrimary).toEqual({ b: 242, g: 228, r: 232 })
+    expect(hudTextSecondary).toEqual({ b: 192, g: 164, r: 170 })
   })
 })
 
@@ -105,19 +105,19 @@ describe('applyOpacity', () => {
 })
 
 describe('mixOklab', () => {
-  test('matches the empryo culori interpolation', () => {
-    expect(mixOklab(empryoTextDim, empryoBrandAlt, 0.22)).toEqual({ b: 140, g: 111, r: 109 })
-    expect(mixOklab(empryoTextPrimary, empryoBrandAlt, 0.55)).toEqual({
+  test('matches the Oklab interpolation', () => {
+    expect(mixOklab(hudTextDim, hudBrandAlt, 0.22)).toEqual({ b: 140, g: 111, r: 109 })
+    expect(mixOklab(hudTextPrimary, hudBrandAlt, 0.55)).toEqual({
       b: 241,
       g: 212,
       r: 196,
     })
-    expect(mixOklab(empryoBrandDim, empryoBrand, 0.45)).toEqual({ b: 113, g: 68, r: 81 })
+    expect(mixOklab(hudBrandDim, hudBrand, 0.45)).toEqual({ b: 113, g: 68, r: 81 })
   })
 
   test('clamps both ends', () => {
-    expect(mixOklab(empryoBrandDim, empryoBrand, -1)).toEqual(empryoBrandDim)
-    expect(mixOklab(empryoBrandDim, empryoBrand, 2)).toEqual(empryoBrand)
+    expect(mixOklab(hudBrandDim, hudBrand, -1)).toEqual(hudBrandDim)
+    expect(mixOklab(hudBrandDim, hudBrand, 2)).toEqual(hudBrand)
   })
 })
 

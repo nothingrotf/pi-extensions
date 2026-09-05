@@ -53,7 +53,7 @@ describe('fileTypeKey', () => {
 })
 
 describe('argumentGlyphs', () => {
-  test('emits the Empryo file glyph in Nerd Font mode', () => {
+  test('emits the file glyph in Nerd Font mode', () => {
     setIconMode('nerd')
     expect(argumentGlyphs('read', { path: 'src/index.ts' })).toEqual(['\uE628'])
   })

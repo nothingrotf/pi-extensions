@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vite-plus/test'
 
-import { ansiForeground, empryoBrandAlt, empryoTextPrimary } from '../src/colors.ts'
+import { ansiForeground, hudBrandAlt, hudTextPrimary } from '../src/colors.ts'
 import {
   shimmerHighlights,
   shimmerPeriodMs,
@@ -87,8 +87,8 @@ describe('shimmer wave', () => {
 
   test('uses one highlight position for a supplementary glyph', () => {
     const colors = {
-      baseAnsi: ansiForeground(empryoTextPrimary),
-      tintAnsi: ansiForeground(empryoBrandAlt),
+      baseAnsi: ansiForeground(hudTextPrimary),
+      tintAnsi: ansiForeground(hudBrandAlt),
     }
     expect(shimmerTextAtTick('\u{F031B}', colors, 0)).toBe(
       shimmerTextAtTick('\u{F031B}', colors, 13),
@@ -99,8 +99,8 @@ describe('shimmer wave', () => {
     const painted = shimmerTextAtTick(
       ' 5.6 Sol',
       {
-        baseAnsi: ansiForeground(empryoTextPrimary),
-        tintAnsi: ansiForeground(empryoBrandAlt),
+        baseAnsi: ansiForeground(hudTextPrimary),
+        tintAnsi: ansiForeground(hudBrandAlt),
       },
       1,
     )

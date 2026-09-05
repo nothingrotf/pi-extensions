@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 
 import { AnimationClock } from './animation-clock.ts'
 import { sweepEditors } from './editor-border.ts'
-import { contextSummary, prettyEffort, prettyModel } from './format.ts'
+import { buildCacheLabel, contextSummary } from './format.ts'
 import { emptyGitStatus, readGitStatus, type GitStatus } from './git.ts'
 import { hudCommandCompletions, parseHudCommand, resolveToggle } from './hud-command.ts'
 import { askResultPatch, askRows, normalizeAskPatch } from './rail-ask.ts'
@@ -125,6 +125,7 @@ export default function hud(pi: ExtensionAPI): void {
     effortLevel: '',
     contextLabel: '--',
     contextPercent: null,
+    cacheLabel: '',
     usage: null,
   }
   let active = false
@@ -211,6 +212,36 @@ export default function hud(pi: ExtensionAPI): void {
   railCwd = process.cwd()
   applyRailTools(pi, railFor, railCwd, railEnabled)
 
+  const restoreRailAnchors = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI || ctx.mode !== 'tui') return
+    const visibleTurns = new Set<number>()
+    const retainedToolCallIds = new Set<string>()
+    for (const entry of ctx.sessionManager.buildContextEntries()) {
+      if (entry.type === 'custom' && entry.customType === railEntryType) {
+        const turn = decodeRailEntry(entry.data)
+        if (turn !== undefined) visibleTurns.add(turn)
+      }
+      if (entry.type !== 'message' || entry.message.role !== 'assistant') continue
+      for (const block of entry.message.content) {
+        if (block.type !== 'toolCall') continue
+        retainedToolCallIds.add(block.id)
+      }
+    }
+    for (const [turn, store] of railsByTurn) {
+      if (visibleTurns.has(turn)) continue
+      const actions = store.values()
+      if (actions.length === 0) continue
+      if (
+        turn !== railTurn &&
+        !actions.some((action) => retainedToolCallIds.has(action.toolCallId))
+      ) {
+        continue
+      }
+      pi.appendEntry(railEntryType, { turn })
+      if (turn === railTurn) railTurnPending = false
+    }
+  }
+
   const restoreRails = (ctx: ExtensionContext) => {
     const session = mapSessionRails(ctx.sessionManager.getBranch(), ctx.cwd)
     railsByToolCallId = session.byToolCallId
@@ -228,6 +259,7 @@ export default function hud(pi: ExtensionAPI): void {
     railPseudoIds = new Set<string>()
     fallbackToolCallIds = new Set<string>()
     persistedRailReports = new Map<string, string>()
+    restoreRailAnchors(ctx)
     requestRender?.()
   }
 
@@ -264,13 +296,17 @@ export default function hud(pi: ExtensionAPI): void {
   const sync = (ctx: ExtensionContext) => {
     state.cwd = ctx.cwd
     state.providerLabel = ctx.model?.provider ?? ''
-    state.modelLabel = prettyModel(ctx.model?.id)
+    state.modelLabel = ctx.model?.id ?? 'no-model'
     state.effortLevel = ctx.model?.reasoning ? pi.getThinkingLevel() : ''
-    state.effortLabel = prettyEffort(state.effortLevel)
+    state.effortLabel = state.effortLevel.toLowerCase()
     const context = contextSummary(ctx)
     state.contextLabel = context.label
     state.contextPercent = context.percent
     render()
+  }
+
+  const syncCache = (ctx: ExtensionContext) => {
+    state.cacheLabel = buildCacheLabel(ctx)
   }
 
   const refreshUsage = (ctx: ExtensionContext) => {
@@ -344,6 +380,7 @@ export default function hud(pi: ExtensionAPI): void {
     generation += 1
     const life = generation
     ctx.ui.setWorkingVisible(false)
+    syncCache(ctx)
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       let disposed = false
@@ -485,6 +522,8 @@ export default function hud(pi: ExtensionAPI): void {
   pi.registerEntryRenderer(railStateEntryType, () => undefined)
 
   pi.on('session_tree', (_event, ctx) => {
+    syncCache(ctx)
+    if (active) sync(ctx)
     transcriptLayoutFix?.markDirty()
     restoreRails(ctx)
     spacerFix?.markDirty()
@@ -647,6 +686,7 @@ export default function hud(pi: ExtensionAPI): void {
   pi.on('message_end', (event, ctx) => {
     if (event.message.role === 'user') speakerSpacingFix?.markDirty()
     if (event.message.role === 'assistant') {
+      state.cacheLabel = buildCacheLabel(ctx, event.message)
       railVoice.finish(event.message)
       reconcileRailVoice()
     }
@@ -858,6 +898,11 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('session_compact', (_event, ctx) => {
+    syncCache(ctx)
+    restoreRailAnchors(ctx)
+    transcriptLayoutFix?.markDirty()
+    spacerFix?.markDirty()
+    speakerSpacingFix?.markDirty()
     if (active) {
       sync(ctx)
     }

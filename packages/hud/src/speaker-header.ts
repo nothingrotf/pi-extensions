@@ -5,12 +5,12 @@ import {
   ansiForeground,
   ansiReset,
   assistantAnsi,
-  empryoBrand,
-  empryoBrandAlt,
-  empryoBrandDim,
-  empryoTextFaint,
-  empryoTextMuted,
-  empryoTextPrimary,
+  hudBrand,
+  hudBrandAlt,
+  hudBrandDim,
+  hudTextFaint,
+  hudTextMuted,
+  hudTextPrimary,
   userAnsi,
 } from './colors.ts'
 import { pulseFrame } from './pulse.ts'
@@ -38,11 +38,11 @@ export type SpeakerHeaderSource = (timestamp: number) => SpeakerHeaderFrame
 export type SpeakerHeaderTheme = Pick<Theme, 'bold'>
 
 const brandAnsi = assistantAnsi()
-const brandAltAnsi = ansiForeground(empryoBrandAlt)
-const brandDimAnsi = ansiForeground(empryoBrandDim)
-const textFaintAnsi = ansiForeground(empryoTextFaint)
-const textMutedAnsi = ansiForeground(empryoTextMuted)
-const textPrimaryAnsi = ansiForeground(empryoTextPrimary)
+const brandAltAnsi = ansiForeground(hudBrandAlt)
+const brandDimAnsi = ansiForeground(hudBrandDim)
+const textFaintAnsi = ansiForeground(hudTextFaint)
+const textMutedAnsi = ansiForeground(hudTextMuted)
+const textPrimaryAnsi = ansiForeground(hudTextPrimary)
 const clockFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 
 export function formatSpeakerClock(timestamp: number): string {
@@ -51,7 +51,7 @@ export function formatSpeakerClock(timestamp: number): string {
 }
 
 export function speakerMotionEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
-  return !environment.NO_MOTION && environment.EMPRYO_NO_MOTION !== '1'
+  return !environment.NO_MOTION
 }
 
 function staticSpeakerLine(
@@ -81,7 +81,7 @@ export function speakerHeaderLine(
     return staticSpeakerLine(data, theme, frame?.timestamp ?? data.timestamp)
   }
   if (frame.tick === initialTick) return initialLiveLine(data, theme, frame.timestamp)
-  const pulse = pulseFrame(frame.tick, empryoBrandDim, empryoBrand)
+  const pulse = pulseFrame(frame.tick, hudBrandDim, hudBrand)
   const glyph = `${ansiForeground(pulse.color)}${pulse.glyph}${ansiReset}`
   const name = theme.bold(
     shimmerTextAtTick(

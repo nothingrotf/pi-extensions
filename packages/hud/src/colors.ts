@@ -28,23 +28,23 @@ export type RailTint =
 
 export type RailPalette = { [K in RailTint]: string }
 
-export const empryoBrand: Rgb = { b: 172, g: 105, r: 128 }
-export const empryoBrandAlt: Rgb = { b: 240, g: 199, r: 167 }
-export const empryoBrandDim: Rgb = { b: 69, g: 40, r: 46 }
-export const empryoTextDim: Rgb = { b: 114, g: 88, r: 93 }
-export const empryoTextFaint: Rgb = { b: 84, g: 62, r: 66 }
-export const empryoTextMuted: Rgb = { b: 148, g: 119, r: 125 }
-export const empryoTextPrimary: Rgb = { b: 242, g: 228, r: 232 }
-export const empryoTextSecondary: Rgb = { b: 192, g: 164, r: 170 }
+export const hudBrand: Rgb = { b: 172, g: 105, r: 128 }
+export const hudBrandAlt: Rgb = { b: 240, g: 199, r: 167 }
+export const hudBrandDim: Rgb = { b: 69, g: 40, r: 46 }
+export const hudTextDim: Rgb = { b: 114, g: 88, r: 93 }
+export const hudTextFaint: Rgb = { b: 84, g: 62, r: 66 }
+export const hudTextMuted: Rgb = { b: 148, g: 119, r: 125 }
+export const hudTextPrimary: Rgb = { b: 242, g: 228, r: 232 }
+export const hudTextSecondary: Rgb = { b: 192, g: 164, r: 170 }
 
-const empryoBackground: Rgb = { b: 28, g: 18, r: 20 }
-const empryoError: Rgb = { b: 154, g: 140, r: 239 }
-const empryoFile: Rgb = { b: 104, g: 173, r: 115 }
-const empryoGenome: Rgb = { b: 104, g: 173, r: 155 }
-const empryoShell: Rgb = { b: 155, g: 104, r: 173 }
-const empryoSuccess: Rgb = { b: 171, g: 216, r: 159 }
-const empryoUser: Rgb = { b: 232, g: 203, r: 151 }
-const empryoWeb: Rgb = { b: 139, g: 173, r: 104 }
+const hudBackground: Rgb = { b: 28, g: 18, r: 20 }
+const hudError: Rgb = { b: 154, g: 140, r: 239 }
+const hudFile: Rgb = { b: 104, g: 173, r: 115 }
+const hudGenome: Rgb = { b: 104, g: 173, r: 155 }
+const hudShell: Rgb = { b: 155, g: 104, r: 173 }
+const hudSuccess: Rgb = { b: 171, g: 216, r: 159 }
+const hudUser: Rgb = { b: 232, g: 203, r: 151 }
+const hudWeb: Rgb = { b: 139, g: 173, r: 104 }
 
 export function parseTrueColor(ansi: string): Rgb | undefined {
   const match = /38;2;(\d+);(\d+);(\d+)m/u.exec(ansi)
@@ -129,31 +129,31 @@ export function applyOpacity(color: Rgb, opacity: number): Rgb {
 
 export function buildRailPalette(bodyOpacity = 1): RailPalette {
   const body = (color: Rgb) => ansiForeground(applyOpacity(color, bodyOpacity))
-  const caret = mixOklab(empryoBrandAlt, empryoBackground, 0.3)
-  const headFail = mixOklab(empryoError, empryoTextSecondary, 0.35)
+  const caret = mixOklab(hudBrandAlt, hudBackground, 0.3)
+  const headFail = mixOklab(hudError, hudTextSecondary, 0.35)
   return {
-    agent: body(empryoBrand),
-    arg: body(empryoTextSecondary),
-    ask: body(empryoShell),
-    branch: body(empryoTextFaint),
+    agent: body(hudBrand),
+    arg: body(hudTextSecondary),
+    ask: body(hudShell),
+    branch: body(hudTextFaint),
     caret: ansiForeground(caret),
-    dim: body(empryoTextDim),
-    duration: body(empryoTextDim),
-    fail: body(empryoError),
-    faint: body(empryoTextFaint),
-    genome: body(empryoGenome),
-    groupCaret: body(empryoTextMuted),
-    head: ansiForeground(empryoTextSecondary),
+    dim: body(hudTextDim),
+    duration: body(hudTextDim),
+    fail: body(hudError),
+    faint: body(hudTextFaint),
+    genome: body(hudGenome),
+    groupCaret: body(hudTextMuted),
+    head: ansiForeground(hudTextSecondary),
     headFail: ansiForeground(headFail),
-    native: body(empryoFile),
-    neutral: body(empryoTextMuted),
-    ok: body(empryoSuccess),
-    pseudo: body(empryoBrandDim),
-    pseudoBody: body(empryoTextDim),
-    read: body(empryoFile),
-    shell: body(empryoShell),
-    text: body(empryoTextPrimary),
-    web: body(empryoWeb),
+    native: body(hudFile),
+    neutral: body(hudTextMuted),
+    ok: body(hudSuccess),
+    pseudo: body(hudBrandDim),
+    pseudoBody: body(hudTextDim),
+    read: body(hudFile),
+    shell: body(hudShell),
+    text: body(hudTextPrimary),
+    web: body(hudWeb),
   }
 }
 
@@ -162,11 +162,11 @@ export function railPaletteFromAnsi(bodyOpacity = 1): RailPalette {
 }
 
 export function assistantAnsi(): string {
-  return ansiForeground(empryoBrand)
+  return ansiForeground(hudBrand)
 }
 
 export function userAnsi(): string {
-  return ansiForeground(empryoUser)
+  return ansiForeground(hudUser)
 }
 
 export const ansiReset = '\x1b[39m'

@@ -8,7 +8,7 @@ import {
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { ansiForeground, ansiReset, empryoTextPrimary } from './colors.ts'
+import { ansiForeground, ansiReset, hudTextPrimary } from './colors.ts'
 import { childrenOf, maxTreeDepth, walkComponents } from './component-tree.ts'
 import { RailComponent } from './rail-entry.ts'
 import {
@@ -60,7 +60,7 @@ type AssistantMessageLike = Component &
 type UserMessageLike = Component & PaddedMessage & Static<typeof UserMessageSchema>
 type ToolExecutionLike = Component & Static<typeof ToolExecutionComponentSchema>
 
-const primaryAnsi = ansiForeground(empryoTextPrimary)
+const primaryAnsi = ansiForeground(hudTextPrimary)
 const primaryTextStyle = {
   color: (text: string) => `${primaryAnsi}${text}${ansiReset}`,
 }

@@ -1,8 +1,11 @@
+import { stripVTControlCharacters } from 'node:util'
+
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import { emptyGitStatus } from '../src/git.ts'
 import {
+  branchSegment,
   effortColor,
   goalStatusKey,
   renderHud,
@@ -19,11 +22,12 @@ function state(overrides: Partial<HudState> = {}): HudState {
     cwd: '/Users/dev/projects/pi-extensions',
     git: emptyGitStatus(),
     providerLabel: 'anthropic',
-    modelLabel: 'Opus 4.8',
-    effortLabel: 'High',
+    modelLabel: 'claude-opus-4-8',
+    effortLabel: 'high',
     effortLevel: 'high',
     contextLabel: '42%/1.0M',
     contextPercent: 42,
+    cacheLabel: '⛁ 80% cached',
     usage: {
       provider: 'Claude',
       fetchedAt: 0,
@@ -58,14 +62,102 @@ describe('effortColor', () => {
 })
 
 describe('compact HUD', () => {
-  test('paints the effort label with the thinking level color', () => {
+  test('renders the branch glyph and dirty marker in one color', () => {
+    const git = {
+      ...emptyGitStatus(),
+      branch: 'main',
+      modified: 63,
+      untracked: 27,
+      dirty: true,
+    }
+    expect(branchSegment(theme, git)).toBe('⎇ main*')
+    expect(branchSegment({ fg: (token, text) => `<${token}>${text}</${token}>` }, git)).toBe(
+      '<warning>⎇ main*</warning>',
+    )
+  })
+
+  test('omits other tools and places fast mode after effort', () => {
+    const statuses = new Map([
+      ['fast-mode', 'Fast requested'],
+      ['pi-goal', 'goal: shipping'],
+      ['pi-loop', 'loop: active'],
+      ['other', '\x1b[31mReview\nready\x1b[0m'],
+    ])
+    const [line = ''] = renderHud(theme, state(), statuses, 220)
+    expect(line).toContain('🎯 goal: shipping · ↻ loop: active')
+    expect(line).not.toContain('Review ready')
+    expect(line).toContain('claude-opus-4-8:high [fast]')
+    expect(line.trimEnd()).toMatch(/42%\/1\.0M · ⛁ 80% cached · 5h 3% 3h37m · wk 92% 1d19h$/u)
+    expect(line.match(/fast/gu)).toHaveLength(1)
+    expect(line).not.toContain('\x1b')
+  })
+
+  test('keeps model left and context cache right without MCP statuses', () => {
+    const value = state({
+      providerLabel: 'openai-codex',
+      modelLabel: 'gpt-6-astra',
+      effortLabel: 'xhigh',
+      effortLevel: 'xhigh',
+      usage: null,
+    })
+    for (const fast of [false, true]) {
+      const statuses = new Map([['mcp', 'MCPs: figma linear']])
+      if (fast) statuses.set('fast-mode', 'Fast requested')
+      const [line = ''] = renderHud(theme, value, statuses, 100)
+      expect(line).toContain(`gpt-6-astra:xhigh${fast ? ' [fast]' : ''}`)
+      expect(line.trimEnd()).toMatch(/42%\/1\.0M · ⛁ 80% cached$/u)
+      expect(line).not.toContain('MCPs')
+      expect(line).not.toContain('openai-codex')
+    }
+  })
+
+  test('hides unavailable fast mode and preserves error diagnostics', () => {
+    const [unavailable = ''] = renderHud(
+      theme,
+      state(),
+      new Map([['fast-mode', 'Fast unavailable']]),
+      180,
+    )
+    expect(unavailable).not.toContain('Fast unavailable')
+    expect(unavailable).toContain('claude-opus-4-8:high')
+
+    const [error = ''] = renderHud(
+      theme,
+      state(),
+      new Map([['fast-mode', 'Fast state error']]),
+      180,
+    )
+    expect(error).toContain('claude-opus-4-8:high Fast state error')
+
+    const [disabled = ''] = renderHud(
+      theme,
+      state({ cacheLabel: '', effortLabel: '' }),
+      new Map(),
+      180,
+    )
+    expect(disabled).not.toContain('Fast')
+    expect(disabled).not.toContain('cached')
+    expect(disabled).toContain('claude-opus-4-8')
+    expect(disabled.trimEnd()).toMatch(/42%\/1\.0M · 5h 3% 3h37m · wk 92% 1d19h$/u)
+  })
+
+  test('uses the assigned colors for footer identity segments', () => {
     const tagged: HudTheme = {
       fg: (token, text) => `<${token}>${text}</${token}>`,
     }
-    const value = state({ effortLevel: 'max', effortLabel: 'Max', usage: null })
-    const [line = ''] = renderHud(tagged, value, new Map(), 400)
+    const value = state({
+      git: { ...emptyGitStatus(), branch: 'main', dirty: true, modified: 1 },
+      effortLevel: 'max',
+      effortLabel: 'max',
+      usage: null,
+    })
+    const [line = ''] = renderHud(tagged, value, new Map([['fast-mode', 'Fast requested']]), 400)
 
-    expect(line).toContain('<thinkingMax>(Max)</thinkingMax>')
+    expect(line).toContain('<accent>pi-extensions</accent>')
+    expect(line).toContain('<muted> · </muted>')
+    expect(line).toContain('<warning>⎇ main*</warning>')
+    expect(line).toContain('<text>claude-opus-4-8</text><text>:max</text> <text>[fast]</text>')
+    expect(line).toContain('<success>42%/1.0M</success><muted> · </muted><dim>⛁ 80% cached</dim>')
   })
 
   test('draws the compact layout in one physical row', () => {
@@ -80,10 +172,12 @@ describe('compact HUD', () => {
     })
     const [line = ''] = renderHud(theme, value, new Map([[goalStatusKey, 'goal: shipping']]), 200)
 
-    expect(line).toContain('…/projects/pi-extensions · feature/hud [+1 !2]')
-    expect(line).toContain(' · anthropic/Opus 4.8 (High)')
-    expect(line).toContain(' · 🎯 goal: shipping')
-    expect(line).toContain('5h 3% 3h37m   wk 92% 1d19h · 42%/1.0M')
+    expect(line).toContain(
+      'pi-extensions · ⎇ feature/hud* · claude-opus-4-8:high · 🎯 goal: shipping',
+    )
+    expect(line.trimEnd()).toMatch(/5h 3% 3h37m · wk 92% 1d19h$/u)
+    expect(line).toContain(' · ')
+    expect(visibleWidth(line)).toBe(200)
     expect(line).not.toContain('ctx ')
     expect(line).not.toContain('\n')
   })
@@ -125,6 +219,16 @@ describe('compact HUD', () => {
     expect(line).not.toContain('\r')
   })
 
+  test('omits empty styled groups without leaving phantom separators', () => {
+    const ansiTheme: HudTheme = { fg: (_token, text) => `\x1b[31m${text}\x1b[39m` }
+    const value = state({ cacheLabel: '', usage: null, effortLabel: '' })
+    const [line = ''] = renderHud(ansiTheme, value, new Map(), 100)
+    expect(stripVTControlCharacters(line)).toMatch(
+      /^ pi-extensions · claude-opus-4-8 +42%\/1\.0M $/u,
+    )
+    expect(visibleWidth(line)).toBe(100)
+  })
+
   test('omits separators for absent optional data', () => {
     const [line = ''] = renderHud(
       theme,
@@ -132,8 +236,6 @@ describe('compact HUD', () => {
       new Map(),
       120,
     )
-    expect(line).toContain('…/projects/pi-extensions')
-    expect(line).toContain('42%/1.0M')
-    expect(line).not.toContain(' ·  · ')
+    expect(line.trim()).toMatch(/^pi-extensions +42%\/1\.0M · ⛁ 80% cached$/u)
   })
 })

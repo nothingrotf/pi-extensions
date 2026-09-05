@@ -36,12 +36,14 @@ export type HudState = {
   effortLevel: string
   contextLabel: string
   contextPercent: number | null
+  cacheLabel: string
   usage: UsageSnapshot | null
 }
 
 export const goalStatusKey = 'pi-goal'
 
 function color(theme: HudTheme, token: HudColor, text: string): string {
+  if (!text) return ''
   try {
     return theme.fg(token, text)
   } catch {
@@ -80,11 +82,11 @@ function justify(left: string, right: string, width: number): string {
   const available = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0
   const leftWidth = visibleWidth(left)
   const rightWidth = visibleWidth(right)
-  if (leftWidth + 1 + rightWidth <= available) {
+  if (leftWidth + 2 + rightWidth <= available) {
     return `${left}${' '.repeat(Math.max(0, available - leftWidth - rightWidth))}${right}`
   }
-  if (rightWidth + 2 <= available) {
-    return justify(truncateToWidth(left, available - rightWidth - 1, '…'), right, available)
+  if (rightWidth + 3 <= available) {
+    return justify(truncateToWidth(left, available - rightWidth - 2, '…'), right, available)
   }
   return truncateToWidth(right || left, available, '')
 }
@@ -94,9 +96,8 @@ function row(theme: HudTheme, width: number, left: string, right: string): strin
   if (safeWidth === 0) {
     return ''
   }
-  const outer = safeWidth >= 2 ? 1 : 0
-  const inner = Math.max(0, safeWidth - outer * 2)
-  const line = `${' '.repeat(outer)}${justify(left, right, inner)}${' '.repeat(outer)}`
+  const padding = safeWidth >= 2 ? ' ' : ''
+  const line = `${padding}${justify(left, right, safeWidth - padding.length * 2)}${padding}`
   return truncateToWidth(line.replace(/[\r\n]/gu, ' '), safeWidth, '')
 }
 
@@ -104,20 +105,9 @@ export function branchSegment(theme: HudTheme, git: GitStatus): string {
   if (!git.branch) {
     return ''
   }
-  const flags: string[] = []
-  if (git.conflicted) flags.push(`=${git.conflicted}`)
-  if (git.staged) flags.push(`+${git.staged}`)
-  if (git.modified) flags.push(`!${git.modified}`)
-  if (git.added) flags.push(`A${git.added}`)
-  if (git.deleted) flags.push(`D${git.deleted}`)
-  if (git.renamed) flags.push(`R${git.renamed}`)
-  if (git.copied) flags.push(`C${git.copied}`)
-  if (git.untracked) flags.push(`?${git.untracked}`)
-  if (git.ahead) flags.push(`↑${git.ahead}`)
-  if (git.behind) flags.push(`↓${git.behind}`)
   const token = git.dirty ? 'warning' : 'success'
-  const branch = color(theme, token, sanitizeScalar(git.branch))
-  return flags.length > 0 ? `${branch} ${color(theme, 'dim', `[${flags.join(' ')}]`)}` : branch
+  const marker = git.dirty ? '*' : ''
+  return color(theme, token, `⎇ ${sanitizeScalar(git.branch)}${marker}`)
 }
 
 export const loopStatusKey = 'pi-loop'
@@ -161,7 +151,7 @@ export function usageSegment(theme: HudTheme, usage: UsageSnapshot | null): stri
       const resetText = reset ? ` ${color(theme, 'dim', reset)}` : ''
       return `${color(theme, 'dim', sanitizeScalar(window.label))} ${color(theme, loadColor(percent), `${Math.round(percent)}%`)}${resetText}`
     })
-    .join('   ')
+    .join(color(theme, 'muted', ' · '))
 }
 
 function normalizeUsage(percent: number): number {
@@ -169,16 +159,11 @@ function normalizeUsage(percent: number): number {
 }
 
 function modelSegment(theme: HudTheme, state: HudState): string {
-  const provider = sanitizeScalar(state.providerLabel)
   const model = sanitizeScalar(state.modelLabel)
-  if (!provider || !model || model === 'no-model') {
+  if (!model || model === 'no-model') {
     return ''
   }
-  const identity = `${color(theme, 'muted', provider)}${color(theme, 'muted', '/')}${color(theme, 'text', model)}`
-  const effort = sanitizeScalar(state.effortLabel)
-  return effort
-    ? `${identity} ${color(theme, effortColor(state.effortLevel), `(${effort})`)}`
-    : identity
+  return color(theme, 'text', model)
 }
 
 export function renderHud(
@@ -187,7 +172,7 @@ export function renderHud(
   statuses: ReadonlyMap<string, string>,
   width: number,
 ): string[] {
-  const separator = color(theme, 'dim', ' · ')
+  const separator = color(theme, 'muted', ' · ')
   const workspace = color(theme, 'accent', sanitizeScalar(formatCwd(state.cwd)))
   const branch = branchSegment(theme, state.git)
   const identity = modelSegment(theme, state)
@@ -196,7 +181,14 @@ export function renderHud(
   const contextToken = state.contextPercent === null ? 'dim' : loadColor(state.contextPercent)
   const context = color(theme, contextToken, sanitizeScalar(state.contextLabel))
   const usage = usageSegment(theme, state.usage)
-  const left = [workspace, branch, identity, goal, loop].filter(Boolean).join(separator)
-  const right = [usage, context].filter(Boolean).join(separator)
+  const cache = color(theme, 'dim', sanitizeScalar(state.cacheLabel))
+  const fastStatus = sanitizeScalar(statuses.get('fast-mode'))
+  const fastLabel = fastStatus === 'Fast unavailable' ? '' : fastStatus
+  const fast = color(theme, 'text', fastLabel === 'Fast requested' ? '[fast]' : fastLabel)
+  const effortLabel = sanitizeScalar(state.effortLabel)
+  const effort = identity && effortLabel ? color(theme, 'text', `:${effortLabel}`) : ''
+  const model = `${identity}${effort}${fast ? ` ${fast}` : ''}`
+  const left = [workspace, branch, model, goal, loop].filter(Boolean).join(separator)
+  const right = [context, cache, usage].filter(Boolean).join(separator)
   return [row(theme, width, left, right)]
 }

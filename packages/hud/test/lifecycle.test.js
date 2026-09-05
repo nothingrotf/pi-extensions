@@ -1,8 +1,10 @@
+import { SessionManager } from '@earendil-works/pi-coding-agent'
 import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
 
-function harness() {
+function harness(sessionManager = SessionManager.inMemory()) {
+  const renderers = new Map()
   const handlers = new Map()
   const commands = new Map()
   const appended = []
@@ -33,11 +35,14 @@ function harness() {
     registerCommand(name, command) {
       commands.set(name, command)
     },
-    registerEntryRenderer() {},
+    registerEntryRenderer(name, renderer) {
+      renderers.set(name, renderer)
+    },
     registerMarkdownTransformer() {},
     registerTool() {},
     appendEntry(customType, data) {
       appended.push({ customType, data })
+      sessionManager.appendCustomEntry(customType, data)
     },
   }
   const ctx = {
@@ -45,9 +50,7 @@ function harness() {
     mode: 'tui',
     cwd: process.cwd(),
     model: undefined,
-    sessionManager: {
-      getBranch: () => [],
-    },
+    sessionManager,
     getContextUsage() {
       return { tokens: 0, contextWindow: 272_000, percent: 0 }
     },
@@ -113,6 +116,20 @@ function harness() {
   }
   return {
     appended: () => appended,
+    sessionManager,
+    transcript: () =>
+      sessionManager
+        .buildContextEntries()
+        .flatMap((entry) => {
+          if (entry.type !== 'custom') return []
+          const component = renderers.get(entry.customType)?.(
+            entry,
+            { expanded: false },
+            { bold: (text) => text, fg: (_color, text) => text },
+          )
+          return component?.render(100) ?? []
+        })
+        .join('\n'),
     commandNames: () => [...commands.keys()],
     emit,
     emitEvent: (channel, data) => eventHandlers.get(channel)?.(data),
@@ -132,6 +149,173 @@ function harness() {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
 
 describe('HUD lifecycle', () => {
+  test('restores cache share and updates it after responses and tree navigation', async () => {
+    const session = SessionManager.inMemory()
+    const appendUsage = (input, cacheRead, cacheWrite) =>
+      session.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Done' }],
+        api: 'anthropic-messages',
+        provider: 'anthropic',
+        model: 'claude-opus-4-8',
+        stopReason: 'stop',
+        timestamp: Date.now(),
+        usage: {
+          input,
+          cacheRead,
+          cacheWrite,
+          output: 10,
+          totalTokens: input + cacheRead + cacheWrite + 10,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      })
+    const first = appendUsage(100, 800, 100)
+    const instance = harness(session)
+    await instance.emit('session_start')
+    const footer = instance.mount()
+    try {
+      expect(footer.render(180).join('')).toContain('0%/272k · ⛁ 80% cached')
+      const next = {
+        ...session.getLeafEntry().message,
+        usage: {
+          ...session.getLeafEntry().message.usage,
+          input: 300,
+          cacheRead: 100,
+          cacheWrite: 100,
+        },
+      }
+      await instance.emit('message_end', { message: next })
+      expect(footer.render(180).join('')).toContain('⛁ 60% cached')
+      session.appendMessage(next)
+      session.branch(first)
+      await instance.emit('session_tree')
+      expect(footer.render(180).join('')).toContain('⛁ 80% cached')
+      appendUsage(0, 0, 0)
+      await instance.emit('message_end', { message: session.getLeafEntry().message })
+      expect(footer.render(180).join('')).toContain('⛁ 80% cached')
+    } finally {
+      await instance.emit('session_shutdown')
+    }
+  })
+
+  test('keeps the live rail visible after split-turn compaction and reload', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      detail: 'repository',
+      doneLabel: 'Indexed',
+      status: 'ok',
+      toolCallId: 'external',
+    })
+    expect(instance.transcript()).toContain('Indexed')
+    const kept = instance.sessionManager.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Continue the task' }],
+      timestamp: Date.now(),
+    })
+    instance.sessionManager.appendCompaction('Earlier work', kept, 100_000)
+    await instance.emit('session_compact')
+    expect(instance.transcript()).toContain('Indexed')
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Verified',
+      status: 'ok',
+      toolCallId: 'next',
+    })
+    expect(instance.transcript()).toContain('Verified')
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript()).toContain('Indexed')
+    expect(restored.transcript()).toContain('Verified')
+    await restored.emit('session_shutdown')
+    await instance.emit('session_shutdown')
+  })
+
+  test('does not duplicate retained anchors and repairs repeated compactions', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Indexed',
+      status: 'ok',
+      toolCallId: 'external',
+    })
+    const original = instance.sessionManager.getBranch()[0]
+    instance.sessionManager.appendCompaction('Earlier work', original.id, 100_000)
+    await instance.emit('session_compact')
+    expect(instance.appended().filter((entry) => entry.customType === 'hud-rail')).toHaveLength(1)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const kept = instance.sessionManager.appendMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Continue' }],
+        timestamp: Date.now(),
+      })
+      instance.sessionManager.appendCompaction('Earlier work', kept, 100_000)
+      await instance.emit('session_compact')
+      await instance.emit('session_compact')
+      expect(instance.transcript().match(/Indexed/g)).toHaveLength(1)
+    }
+    expect(instance.appended().filter((entry) => entry.customType === 'hud-rail')).toHaveLength(3)
+    await instance.emit('session_shutdown')
+  })
+
+  test('keeps a restored anchor attached to its original turn', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Indexed',
+      status: 'ok',
+      toolCallId: 'external',
+    })
+    const kept = instance.sessionManager.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'external', name: 'read', arguments: { path: 'a.ts' } }],
+      timestamp: Date.now(),
+    })
+    await instance.emit('agent_end')
+    instance.sessionManager.appendMessage({
+      role: 'user',
+      content: 'Next task',
+      timestamp: Date.now(),
+    })
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Verified',
+      status: 'ok',
+      toolCallId: 'next',
+    })
+    instance.sessionManager.appendCompaction('Earlier work', kept, 100_000)
+    await instance.emit('session_compact')
+    expect(instance.transcript().match(/Indexed/g)).toHaveLength(1)
+    expect(instance.transcript().match(/Verified/g)).toHaveLength(1)
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript().match(/Indexed/g)).toHaveLength(1)
+    expect(restored.transcript().match(/Verified/g)).toHaveLength(1)
+    await restored.emit('session_shutdown')
+    await instance.emit('session_shutdown')
+  })
+
+  test('repairs a missing anchor when a compacted session resumes', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      doneLabel: 'Indexed',
+      status: 'ok',
+      toolCallId: 'external',
+    })
+    const kept = instance.sessionManager.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Continue' }],
+      timestamp: Date.now(),
+    })
+    instance.sessionManager.appendCompaction('Earlier work', kept, 100_000)
+    expect(instance.transcript()).not.toContain('Indexed')
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript()).toContain('Indexed')
+    await restored.emit('session_shutdown')
+    await instance.emit('session_shutdown')
+  })
+
   test('disposing an old footer twice does not disable its replacement', async () => {
     const instance = harness()
     await instance.emit('session_start')
