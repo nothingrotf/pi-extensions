@@ -9,9 +9,9 @@ The package follows the Cursor Agent loop behavior:
 - An optional watcher can wake a dynamic loop before its fallback timer.
 - A prompt can change after each dynamic tick.
 - A stop cancels the active timer and watcher.
-- A repeat loop re-sends one prompt after every settled turn, with an optional iteration or duration limit. This mode ports the `/loop` of oh-my-pi.
+- A repeat loop re-sends one prompt after every settled turn, with an optional iteration or duration limit.
 
-The extension stores its state in the Pi session. A resumed session restores the active schedule.
+The extension stores its state in the Pi session. A resumed session restores scheduled timers and watchers. Repeat loops resume in a paused state.
 TUI and RPC sessions support loops. One-shot print and JSON modes reject them.
 
 ## Install
@@ -71,7 +71,7 @@ Only one loop can run in a session. Pi requests confirmation before a replacemen
 
 ## Goal mode
 
-While any loop is active, `@nothingrotf/goal` does not send its own continuation. The loop owns the wake cadence, as in oh-my-pi.
+While any loop is active, `@nothingrotf/goal` does not send its own continuation. The loop owns the wake cadence.
 
 ## Development
 
