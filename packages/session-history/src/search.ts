@@ -39,7 +39,7 @@ function queryTerms(query: string): string[] {
 function countOccurrences(text: string, term: string): number {
   let count = 0
   let offset = 0
-  while (offset < text.length) {
+  while (offset < text.length && count < 20) {
     const index = text.indexOf(term, offset)
     if (index < 0) break
     count += 1

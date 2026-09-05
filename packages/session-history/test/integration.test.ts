@@ -1,4 +1,14 @@
-import { appendFile, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -544,6 +554,113 @@ describe('session history integration', () => {
     expect(result.pagination.total).toBe(100)
   })
 
+  it.each(['x'.repeat(513), Array.from({ length: 65 }, (_, index) => `q${index}`).join(' ')])(
+    'rejects excessive query work',
+    async (query) => {
+      const state = await fixture()
+      await expect(
+        new SessionHistoryStore(state.current).execute({ action: 'search', query }),
+      ).rejects.toMatchObject({ code: 'INVALID_QUERY' })
+    },
+  )
+
+  it('rejects changes between discovery and snapshot loading and recovers on retry', async () => {
+    const state = await fixture()
+    const path = await writeSimpleSession(
+      state.cwd,
+      state.directory,
+      'race-session',
+      'old_marker',
+      10,
+    )
+    let inspections = 0
+    const store = new SessionHistoryStore(state.current, async (candidate) => {
+      const before = await stat(candidate)
+      if (candidate === path && ++inspections === 2) {
+        await writeFile(path, (await readFile(path, 'utf8')).replace('old_marker', 'new_marker'))
+      }
+      return before
+    })
+    await expect(
+      store.execute({ action: 'read', session_id: 'race-session' }),
+    ).rejects.toMatchObject({ code: 'SESSION_CHANGED' })
+    expect(store.cacheDiagnostics().entries).toBe(0)
+    expect(
+      JSON.stringify((await store.execute({ action: 'read', session_id: 'race-session' })).data),
+    ).toContain('new_marker')
+  })
+
+  it('bounds broad timelines and tool activity without hiding omitted coverage', async () => {
+    const state = await fixture()
+    const parent = state.prior.getSessionFile()
+    if (parent === undefined) throw new Error('Missing fixture path.')
+    for (let index = 0; index < 101; index += 1) {
+      const path = await writeSimpleSession(
+        state.cwd,
+        state.directory,
+        `bounded-child-${index}`,
+        'bounded child evidence',
+        index + 10,
+      )
+      const original = await readFile(path, 'utf8')
+      await writeFile(
+        path,
+        original.replace('"version":3', `"version":3,"parentSession":${JSON.stringify(parent)}`),
+      )
+    }
+    const store = new SessionHistoryStore(state.current)
+    for (const action of ['timeline', 'tool_activity']) {
+      const result =
+        action === 'timeline'
+          ? await store.execute({
+              action,
+              session_id: 'prior-session',
+              include_children: true,
+              limit: 200,
+            })
+          : await store.execute({
+              action: 'tool_activity',
+              session_id: 'prior-session',
+              include_children: true,
+              limit: 200,
+            })
+      expect(result.omittedSessions).toBe(4)
+      expect(result.truncated).toBe(true)
+      expect(result.limits.sessionLimit).toBe(100)
+    }
+  })
+
+  it('bounds cache admission and releases missing snapshots after discovery', async () => {
+    const state = await fixture()
+    for (let index = 0; index < 10; index += 1) {
+      await writeSimpleSession(
+        state.cwd,
+        state.directory,
+        `budget-${index}`,
+        `${index}:${'x'.repeat(1024 * 1024)}`,
+        index + 10,
+      )
+    }
+    const store = new SessionHistoryStore(state.current)
+    for (let index = 0; index < 10; index += 1) {
+      await store.execute({ action: 'read', session_id: `budget-${index}`, limit: 1 })
+      const diagnostics = store.cacheDiagnostics()
+      expect(diagnostics.estimatedBytes).toBeLessThanOrEqual(diagnostics.maximumBytes)
+    }
+    expect(store.cacheDiagnostics().entries).toBeGreaterThan(0)
+    expect(store.cacheDiagnostics().entries).toBeLessThan(10)
+    store.clearCache()
+    expect(store.cacheDiagnostics().estimatedBytes).toBe(0)
+    await store.execute({ action: 'read', session_id: 'prior-session' })
+    expect(store.cacheDiagnostics().entries).toBe(1)
+    const path = state.prior.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    await rm(path)
+    await store.execute({ action: 'list' })
+    expect(store.cacheDiagnostics().entries).toBe(0)
+    expect(store.cacheDiagnostics().estimatedBytes).toBe(0)
+  })
+
   it('does not cache one session above the memory limit', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-history-cache-'))
     directories.push(root)
@@ -564,6 +681,7 @@ describe('session history integration', () => {
     const store = new SessionHistoryStore(current)
     const first = await store.execute({ action: 'search', query: 'old_marker' })
     expect(first.data.length).toBe(1)
+    expect(store.cacheDiagnostics().entries).toBe(0)
     const fileStat = await stat(path)
     await writeSimpleSession(cwd, directory, 'large-session', `new_marker ${padding}`, 1)
     await utimes(path, fileStat.atime, fileStat.mtime)
@@ -572,7 +690,69 @@ describe('session history integration', () => {
     expect(second.data.length).toBe(1)
   })
 
-  it('rejects circular child relationships', async () => {
+  it('isolates file removal between discovery and stat and forgets missing parents', async () => {
+    const state = await fixture()
+    const path = state.prior.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    let removed = false
+    const store = new SessionHistoryStore(state.current, async (candidate) => {
+      if (candidate === path && !removed) {
+        removed = true
+        await rm(path)
+      }
+      return stat(candidate)
+    })
+    const listed = await store.execute({ action: 'list', include_children: true })
+    expect(removed).toBe(true)
+    expect(listed.skippedSessions).toBe(2)
+    expect(listed.data).not.toContainEqual(expect.objectContaining({ sessionId: 'prior-session' }))
+    expect(listed.data).toContainEqual(
+      expect.objectContaining({ sessionId: 'child-session', parentSessionId: null }),
+    )
+    expect(JSON.stringify(listed)).not.toContain(state.directory)
+    expect(
+      (await store.execute({ action: 'search', query: 'active branch evidence' })).data.length,
+    ).toBeGreaterThan(0)
+    expect(
+      (await store.execute({ action: 'read', session_id: 'branched-session' })).data.length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('keeps the live current session available when its backing file disappears', async () => {
+    const state = await fixture()
+    const path = state.current.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    let removed = false
+    const store = new SessionHistoryStore(state.current, async (candidate) => {
+      if (candidate === path && !removed) {
+        removed = true
+        await rm(path)
+      }
+      return stat(candidate)
+    })
+    const result = await store.execute({ action: 'read', session_id: 'current-session' })
+    expect(JSON.stringify(result.data)).toContain('current private context')
+    expect(result.skippedSessions).toBe(1)
+  })
+
+  it('rejects ambiguous session IDs while preserving unrelated evidence', async () => {
+    const state = await fixture()
+    const path = state.prior.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    await writeFile(join(state.directory, 'duplicate.jsonl'), await readFile(path, 'utf8'))
+    const store = new SessionHistoryStore(state.current)
+    const listed = await store.execute({ action: 'list', include_children: true })
+    expect(listed.skippedSessions).toBe(5)
+    expect(listed.data).not.toContainEqual(expect.objectContaining({ sessionId: 'prior-session' }))
+    await expect(
+      store.execute({ action: 'read', session_id: 'prior-session' }),
+    ).rejects.toMatchObject({ code: 'MALFORMED_SESSION' })
+    expect(
+      (await store.execute({ action: 'read', session_id: 'branched-session' })).data.length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('quarantines circular ancestry while preserving healthy sessions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'session-history-circular-'))
     directories.push(root)
     const cwd = join(root, 'project')
@@ -589,12 +769,342 @@ describe('session history integration', () => {
       `${JSON.stringify({ type: 'session', version: 3, id: 'second-session', timestamp: timestamp(2), cwd, parentSession: firstPath })}\n${JSON.stringify({ type: 'message', id: 'second-entry', parentId: null, timestamp: timestamp(2), message: { role: 'user', content: 'second', timestamp: 2 } })}\n`,
     )
 
+    const healthyPath = await writeSimpleSession(
+      cwd,
+      directory,
+      'healthy-session',
+      'healthy evidence',
+      3,
+    )
+    const dependent = SessionManager.create(cwd, directory, {
+      id: 'dependent-session',
+      parentSession: firstPath,
+    })
+    dependent.appendMessage({ role: 'user', content: 'dependent evidence', timestamp: 4 })
+    await persistSession(dependent)
+    const store = new SessionHistoryStore(SessionManager.open(healthyPath))
+    const listed = await store.execute({
+      action: 'list',
+      include_current: true,
+      include_children: true,
+    })
+    expect(listed.data).toHaveLength(1)
+    expect(listed.skippedSessions).toBe(3)
+    expect(listed.truncated).toBe(true)
+    expect(
+      (await store.execute({ action: 'search', query: 'healthy evidence', include_current: true }))
+        .data,
+    ).toHaveLength(1)
+    expect(
+      (await store.execute({ action: 'read', session_id: 'healthy-session' })).data,
+    ).toHaveLength(1)
+    for (const session_id of ['first-session', 'second-session', 'dependent-session']) {
+      await expect(store.execute({ action: 'read', session_id })).rejects.toMatchObject({
+        code: 'MALFORMED_SESSION',
+      })
+      await expect(store.execute({ action: 'timeline', session_id })).rejects.toMatchObject({
+        code: 'MALFORMED_SESSION',
+      })
+      await expect(store.execute({ action: 'tool_activity', session_id })).rejects.toMatchObject({
+        code: 'MALFORMED_SESSION',
+      })
+    }
+    const corruptCurrent = new SessionHistoryStore(SessionManager.open(firstPath))
+    expect(
+      (await corruptCurrent.execute({ action: 'list', include_children: true })).data,
+    ).toHaveLength(1)
+    await rm(secondPath)
+    const recovered = await store.execute({
+      action: 'list',
+      include_current: true,
+      include_children: true,
+    })
+    expect(recovered.data).toHaveLength(3)
+    expect(recovered.skippedSessions).toBe(0)
+  })
+
+  it('pairs reused tool identifiers with results on their own branches', async () => {
+    const state = await fixture()
+    const assistant = state.prior
+      .getEntries()
+      .find((entry) => entry.type === 'message' && entry.message.role === 'assistant')
+    if (assistant?.type !== 'message' || assistant.message.role !== 'assistant')
+      throw new Error('Missing assistant fixture.')
+    const path = state.current.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    const current = SessionManager.open(path)
+    const root = current.getEntries()[0]
+    if (root === undefined) throw new Error('Missing root fixture.')
+    for (const isError of [false, true]) {
+      current.branch(root.id)
+      current.appendMessage({
+        ...assistant.message,
+        content: [
+          {
+            type: 'toolCall',
+            id: 'reused-call',
+            name: 'bash',
+            arguments: { command: isError ? 'false' : 'true' },
+          },
+        ],
+      })
+      current.appendMessage({
+        role: 'toolResult',
+        toolCallId: 'reused-call',
+        toolName: 'bash',
+        content: [{ type: 'text', text: isError ? 'failed branch' : 'successful branch' }],
+        isError,
+        timestamp: 3,
+      })
+    }
+    const result = await new SessionHistoryStore(current).execute({
+      action: 'tool_activity',
+      session_id: current.getSessionId(),
+    })
+    expect(result.data).toContainEqual(
+      expect.objectContaining({
+        input: '{"command":"true"}',
+        status: 'completed',
+        result: 'successful branch',
+      }),
+    )
+    expect(result.data).toContainEqual(
+      expect.objectContaining({
+        input: '{"command":"false"}',
+        status: 'failed',
+        result: 'failed branch',
+      }),
+    )
+  })
+
+  it('marks conflicting tool results unknown instead of completed', async () => {
+    const state = await fixture()
+    const path = state.prior.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    await appendFile(
+      path,
+      `${JSON.stringify({ type: 'message', id: 'conflict-result', parentId: 'name-entry', timestamp: timestamp(7), message: { role: 'toolResult', toolCallId: 'completed-call', toolName: 'bash', content: [{ type: 'text', text: 'contradictory failure' }], isError: true, timestamp: 7 } })}\n`,
+    )
+    const result = await new SessionHistoryStore(state.current).execute({
+      action: 'tool_activity',
+      session_id: 'prior-session',
+    })
+    expect(result.data).toContainEqual(
+      expect.objectContaining({
+        toolCallId: 'completed-call',
+        status: 'unknown',
+        resultReference: null,
+      }),
+    )
+  })
+
+  it('advances after all blocks of the anchor entry', async () => {
+    const state = await fixture()
+    const result = await new SessionHistoryStore(state.current).execute({
+      action: 'read',
+      session_id: 'prior-session',
+      entry_id: 'assistant-entry',
+      direction: 'after',
+      limit: 1,
+      view: 'audit',
+    })
+    expect(result.data).toContainEqual(expect.objectContaining({ id: 'completed-result' }))
+  })
+
+  it('invalidates active timeline cursors after branch navigation', async () => {
+    const state = await fixture()
+    const store = new SessionHistoryStore(state.branched)
+    const first = await store.execute({
+      action: 'timeline',
+      session_id: state.branched.getSessionId(),
+      limit: 1,
+    })
+    const cursor = first.pagination.cursor
+    const root = state.branched.getEntries()[0]
+    if (cursor === null || root === undefined) throw new Error('Missing cursor fixture.')
+    state.branched.branch(root.id)
     await expect(
-      new SessionHistoryStore(SessionManager.open(firstPath)).execute({
-        action: 'list',
-        include_children: true,
+      store.execute({
+        action: 'timeline',
+        session_id: state.branched.getSessionId(),
+        limit: 1,
+        cursor,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_CURSOR' })
+  })
+
+  it('paginates every normalized block without repetition or loss', async () => {
+    const state = await fixture()
+    const store = new SessionHistoryStore(state.current)
+    const input = {
+      action: 'read',
+      session_id: 'prior-session',
+      view: 'audit',
+      include_tool_payloads: true,
+    }
+    const whole = await store.execute({ ...input, action: 'read', view: 'audit', limit: 100 })
+    const collected: object[] = []
+    let page = await store.execute({ ...input, action: 'read', view: 'audit', limit: 1 })
+    for (let index = 0; index < 20; index += 1) {
+      collected.push(...page.data)
+      if (page.pagination.cursor === null) break
+      page = await store.execute({
+        ...input,
+        action: 'read',
+        view: 'audit',
+        limit: 1,
+        cursor: page.pagination.cursor,
+      })
+    }
+    expect(collected).toEqual(whole.data)
+    expect(collected).toHaveLength(10)
+  })
+
+  it('matches native compaction behavior without rewriting the snapshot', async () => {
+    const state = await fixture()
+    const first = state.branched.getEntries()[0]
+    const last = state.branched.getEntries().at(-1)
+    if (first === undefined || last === undefined) throw new Error('Missing compaction fixture.')
+    state.branched.appendCompaction('retained summary', last.id, 1000)
+    await persistSession(state.branched)
+    const result = await new SessionHistoryStore(state.current).execute({
+      action: 'read',
+      session_id: state.branched.getSessionId(),
+      view: 'active',
+      limit: 100,
+    })
+    expect(result.data).toContainEqual(expect.objectContaining({ content: 'retained summary' }))
+    expect(result.data).toContainEqual(expect.objectContaining({ id: last.id }))
+    expect(result.data).not.toContainEqual(expect.objectContaining({ id: first.id }))
+  })
+
+  it.each(['null', 'cycle', 'duplicate', 'orphan'])(
+    'rejects invalid entry structures: %s',
+    async (kind) => {
+      const state = await fixture()
+      const path = await writeSimpleSession(
+        state.cwd,
+        state.directory,
+        'invalid-tree',
+        'evidence',
+        10,
+      )
+      const extra =
+        kind === 'null'
+          ? null
+          : {
+              type: 'custom',
+              id: kind === 'duplicate' ? 'invalid-tree-entry' : 'extra',
+              parentId:
+                kind === 'cycle' ? 'extra' : kind === 'orphan' ? 'missing' : 'invalid-tree-entry',
+              timestamp: timestamp(1),
+              customType: 'test',
+              data: true,
+            }
+      await appendFile(path, `${JSON.stringify(extra)}\n`)
+      await expect(
+        new SessionHistoryStore(state.current).execute({
+          action: 'read',
+          session_id: 'invalid-tree',
+        }),
+      ).rejects.toMatchObject({ code: 'MALFORMED_SESSION' })
+    },
+  )
+
+  it('keeps before windows strictly before the anchor', async () => {
+    const state = await fixture()
+    const store = new SessionHistoryStore(state.current)
+    const first = await store.execute({
+      action: 'read',
+      session_id: 'prior-session',
+      entry_id: 'user-entry',
+      direction: 'before',
+      limit: 100,
+      view: 'audit',
+    })
+    expect(first.data).toEqual([])
+    const second = await store.execute({
+      action: 'read',
+      session_id: 'prior-session',
+      entry_id: 'assistant-entry',
+      direction: 'before',
+      limit: 100,
+      view: 'audit',
+    })
+    expect(second.data).toHaveLength(1)
+    expect(second.data).toContainEqual(expect.objectContaining({ id: 'user-entry' }))
+  })
+
+  it('reads legacy sessions without rewriting evidence', async () => {
+    const state = await fixture()
+    const path = await writeSimpleSession(
+      state.cwd,
+      state.directory,
+      'legacy-session',
+      'legacy evidence',
+      10,
+    )
+    const original = (await readFile(path, 'utf8')).replace('"version":3', '"version":2')
+    await writeFile(path, original)
+    const store = new SessionHistoryStore(state.current)
+    const result = await store.execute({ action: 'read', session_id: 'legacy-session' })
+    expect(JSON.stringify(result.data)).toContain('legacy evidence')
+    expect(await readFile(path, 'utf8')).toBe(original)
+  })
+
+  it('rejects future session versions rather than interpreting them', async () => {
+    const state = await fixture()
+    const path = await writeSimpleSession(
+      state.cwd,
+      state.directory,
+      'future-session',
+      'future evidence',
+      10,
+    )
+    await writeFile(path, (await readFile(path, 'utf8')).replace('"version":3', '"version":999'))
+    await expect(
+      new SessionHistoryStore(state.current).execute({
+        action: 'read',
+        session_id: 'future-session',
+      }),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_SESSION_VERSION' })
+  })
+
+  it('rejects partial histories instead of silently skipping malformed lines', async () => {
+    const state = await fixture()
+    const path = state.prior.getSessionFile()
+    if (path === undefined) throw new Error('Missing fixture path.')
+    await appendFile(path, '{incomplete\n')
+    await expect(
+      new SessionHistoryStore(state.current).execute({
+        action: 'read',
+        session_id: 'prior-session',
       }),
     ).rejects.toMatchObject({ code: 'MALFORMED_SESSION' })
+  })
+
+  it('invalidates cached evidence after same-size rewrites with restored mtime', async () => {
+    const state = await fixture()
+    const path = await writeSimpleSession(
+      state.cwd,
+      state.directory,
+      'rewrite-session',
+      'old_marker',
+      10,
+    )
+    const store = new SessionHistoryStore(state.current)
+    expect((await store.execute({ action: 'search', query: 'old_marker' })).data).toHaveLength(1)
+    const previous = await stat(path)
+    await writeFile(path, (await readFile(path, 'utf8')).replace('old_marker', 'new_marker'))
+    await utimes(path, previous.atime, previous.mtime)
+    expect((await store.execute({ action: 'search', query: 'new_marker' })).data).toHaveLength(1)
+  })
+
+  it('reports skipped files in list responses', async () => {
+    const state = await fixture()
+    const result = await new SessionHistoryStore(state.current).execute({ action: 'list' })
+    expect(result.skippedSessions).toBe(1)
+    expect(result.truncated).toBe(true)
   })
 
   it('keeps valid search results when another file is malformed', async () => {

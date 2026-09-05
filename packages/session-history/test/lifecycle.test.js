@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,7 +67,7 @@ describe('session history lifecycle', () => {
         path,
         `${[header, ...manager.getEntries()].map((entry) => JSON.stringify(entry)).join('\n')}\n`,
       )
-      const result = await harness().execute(
+      const execution = harness().execute(
         'call-1',
         {
           action: 'read',
@@ -81,15 +81,54 @@ describe('session history lifecycle', () => {
         { sessionManager: manager },
       )
 
-      expect(result.details).toEqual(
-        expect.objectContaining({
-          action: 'read',
-          error: expect.objectContaining({ code: 'RESULT_LIMIT_EXCEEDED' }),
-        }),
-      )
+      await expect(execution).rejects.toThrow('RESULT_LIMIT_EXCEEDED')
+      await expect(execution).rejects.toThrow('"action":"read"')
     } finally {
       await rm(cwd, { force: true, recursive: true })
     }
+  })
+
+  it('throws scoped errors so Pi records failed tool execution', async () => {
+    const manager = SessionManager.inMemory('/missing-session-history-project')
+    await expect(
+      harness().execute(
+        'call-error',
+        { action: 'read', session_id: 'invisible' },
+        undefined,
+        undefined,
+        { sessionManager: manager },
+      ),
+    ).rejects.toThrow('OUT_OF_SCOPE')
+  })
+
+  it('reports work exhaustion as an explicit failed tool call', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'history-work-error-'))
+    try {
+      const directory = join(cwd, 'sessions')
+      await mkdir(directory)
+      const path = join(directory, 'oversized.jsonl')
+      await writeFile(path, '')
+      await truncate(path, 33 * 1024 * 1024)
+      const manager = SessionManager.create(cwd, directory, { id: 'work-current' })
+      const execution = harness().execute('call-work', { action: 'list' }, undefined, undefined, {
+        sessionManager: manager,
+      })
+      await expect(execution).rejects.toThrow('WORK_LIMIT_EXCEEDED')
+      await expect(execution).rejects.not.toThrow(cwd)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('honors cancellation before reading session history', async () => {
+    const manager = SessionManager.inMemory('/missing-session-history-project')
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled evaluation'))
+    await expect(
+      harness().execute('call-abort', { action: 'list' }, controller.signal, undefined, {
+        sessionManager: manager,
+      }),
+    ).rejects.toThrow('cancelled evaluation')
   })
 
   it('registers the real tool name and discriminated schema', () => {

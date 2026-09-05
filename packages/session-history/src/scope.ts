@@ -22,8 +22,15 @@ export async function filterProjectSessions<Session extends { cwd: string }>(
   cwd: string,
 ): Promise<Session[]> {
   const visible: Session[] = []
+  const project = await canonicalPath(cwd)
+  const canonicalPaths = new Map<string, string>([[cwd, project]])
   for (const session of sessions) {
-    if (await pathsMatch(session.cwd, cwd)) {
+    let canonical = canonicalPaths.get(session.cwd)
+    if (canonical === undefined) {
+      canonical = await canonicalPath(session.cwd)
+      canonicalPaths.set(session.cwd, canonical)
+    }
+    if (canonical === project) {
       visible.push(session)
     }
   }

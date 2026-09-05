@@ -2,7 +2,7 @@
 
 `@nothingrotf/session-history` adds the `session_history` tool to Pi.
 
-The tool reads native Pi session files through `SessionManager`. It limits every request to the current project.
+The tool streams session metadata and validates snapshots with native Pi parsing and context helpers. Every request stays within the current project.
 
 The tool hides physical session paths. Each session and entry receives a stable `pi-session://` reference.
 
@@ -16,7 +16,9 @@ The tool supports these actions:
 - `timeline` returns compact session events.
 - `tool_activity` pairs tool calls with recorded results.
 
-All responses identify the action. All responses include limits, pagination data, truncation status, redaction status, and skipped session counts.
+Successful responses identify the action and include limits, pagination data, truncation status, redaction status, and skipped session counts.
+
+Failures throw JSON error messages that preserve the action and error code. Pi records these executions as errors instead of successful tool results.
 
 ## Scope
 
@@ -25,6 +27,12 @@ The default scope is the current project directory. The tool resolves symbolic l
 The tool excludes the current session and child sessions by default. Set the applicable include fields to `true` when required.
 
 Child results identify the direct parent and the root session. A missing parent remains `null` and does not stop the request.
+
+Discovery quarantines circular ancestry, duplicate session IDs, and their descendants. Healthy sessions remain available, and `skippedSessions` reports omitted records.
+
+Direct requests for quarantined sessions return `MALFORMED_SESSION`. Discovery reevaluates quarantine on every request, so repaired relationships recover automatically.
+
+Files that disappear or fail metadata inspection are skipped independently. The current session remains readable from live state if its backing file disappears.
 
 The tool rejects a session identifier that is not visible in the current project. It never accepts an arbitrary project directory.
 
@@ -52,15 +60,41 @@ Exact phrases rank above separate terms. Session name matches add a fixed score.
 
 Search includes user text, assistant text, persisted thought, tool calls, tool results, compaction summaries, branch summaries, and custom context messages.
 
-Search indexes the full normalized content. Returned entries and result snippets remain bounded.
+Search indexes the full normalized content within the work limits. Returned entries and result snippets remain bounded.
+
+Queries support up to 512 characters and 64 whitespace-separated terms. Search remains lexical and does not translate or infer paraphrases.
 
 ## Audit behavior
 
 The `active` view uses the entries from `buildContextEntries()`. It follows the active branch and applies native compaction behavior.
 
-The `audit` view uses `getEntries()`. It marks each entry outside the active branch as `abandoned`.
+The `audit` view includes every native entry. It marks each entry outside the active branch as `abandoned`.
+
+Persisted snapshots support session versions 2 and 3. Version 2 migration occurs only in memory.
+
+Version 1 and future versions return `UNSUPPORTED_SESSION_VERSION`. Version 1 lacks stable native entry identifiers.
+
+Malformed JSONL lines, duplicate entry IDs, invalid timestamps, cycles, and missing entry parents reject the snapshot. History reads never migrate files on disk.
 
 Tool status comes only from a recorded tool result. The status is `completed`, `failed`, `missing_result`, or `unknown`.
+
+Pairing requires matching tool names and call IDs within the call's descendant branch. Reused IDs resolve to the nearest ancestor call.
+
+Multiple results for one call produce `unknown`, without a selected result reference. Inspect the audit view to resolve conflicting evidence.
+
+Native `bashExecution` messages appear in search, read, and timeline as `bash_execution`. Their recorded exit codes do not create synthetic tool results.
+
+Native custom messages and message-form branch and compaction summaries preserve their original roles and references.
+
+## Read pagination
+
+`read` accepts a continuation `cursor`. Preserve the original filters, anchor, direction, and payload option when requesting the next page.
+
+A native assistant entry can contain several normalized blocks. Cursor pagination visits every block, even when several blocks share one native reference.
+
+`before` excludes the anchor. `after` starts after every block of the anchor entry.
+
+History changes invalidate cursors. Current-session branch navigation also invalidates cursors, even without appended entries.
 
 ## Data limits
 
@@ -70,9 +104,68 @@ Timeline and tool activity summaries use shorter content. The tool rejects any f
 
 Pi 0.84.4 does not expose a separate tool response limit. This package applies its own limit before it returns content.
 
-Known sensitive field names receive `[REDACTED]` before output. The field set includes `authorization`, `cookie`, `password`, `secret`, and `token`.
+Known sensitive field names receive `[REDACTED]` before output. The field set includes authorization, cookies, passwords, tokens, API keys, client secrets, and private keys.
+
+Matching ignores case, underscores, and hyphens. Unrelated fields such as `tokenCount` remain visible.
 
 Free text can contain other sensitive data. The tool does not claim full secret detection.
+
+The LRU cache uses a 16 MiB estimated normalized-storage budget. This estimate is not a hard process-memory limit.
+
+Discovery evicts cached snapshots that disappear or enter quarantine. Store consumers can inspect `cacheDiagnostics()` and release retained snapshots with `clearCache()`.
+
+A separate 2 MiB metadata cache retains names and bounded previews, not complete conversation bodies. Detached preview strings avoid retaining large source strings.
+
+File identity includes device, inode, size, modification time, and change time. Reads validate the opened file and verify the path identity after consumption.
+
+Mutation detected during a directly requested snapshot load returns `SESSION_CHANGED`. Discovery and multi-session actions can instead skip changed candidates.
+
+Retry the request to obtain a fresh snapshot.
+
+I/O uses 64 KiB batches with at most eight concurrent files. Normalization yields between batches of 128 native entries.
+
+Cancellation stops work at these checkpoints. Parsing one JSON line and synchronous ranking remain non-preemptive.
+
+## Work limits
+
+Successful responses publish work limits under `limits.work`.
+
+| Resource                                       |      Limit |
+| ---------------------------------------------- | ---------: |
+| Files discovered in one directory              |      1,000 |
+| Sessions searched or expanded through children |        100 |
+| Bytes per file                                 |     32 MiB |
+| Bytes read per request                         |    128 MiB |
+| Charged entry visits per request               |    100,000 |
+| Cooperative elapsed-time budget                | 10 seconds |
+
+Search, timeline, and tool activity report capped session coverage through `omittedSessions` and `truncated`.
+
+Other exhausted budgets throw `WORK_LIMIT_EXCEEDED` instead of returning apparently complete results. Oversized directories or files can therefore reject a request during discovery.
+
+These budgets do not guarantee a process-memory ceiling. A large JSON line can still allocate substantially more memory than its serialized size.
+
+## Evaluations
+
+Run reproducible evaluations separately to reduce timing interference:
+
+```sh
+SESSION_HISTORY_EVAL=1 bun run --cwd packages/session-history test -- test/evals.test.ts
+SESSION_HISTORY_EVAL=1 bun run --cwd packages/session-history test -- test/tool-evidence.test.ts
+SESSION_HISTORY_EVAL=1 bun run --cwd packages/session-history test -- test/quality.test.ts
+SESSION_HISTORY_EVAL=1 bun run --cwd packages/session-history test -- test/cancellation.test.ts
+SESSION_HISTORY_HEAP=1 bun run --cwd packages/session-history test -- test/heap.test.ts
+```
+
+The retrieval evaluation checks 30 labeled queries against 3,000 entries. The pairing evaluation compares 10,000 calls against the previous linear-scan strategy.
+
+The quality corpus includes eight retrieval labels, 36 structured-secret cases, and 20 ordinary-field controls.
+
+Heap evaluations cover short blocks, large payloads, and previews of large first messages. They use isolated Node processes with explicit garbage collection.
+
+Ordinary test runs skip opt-in heap and cancellation timing measurements.
+
+Timing and heap results are diagnostic, not hardware-independent CI thresholds.
 
 ## External skill contract
 

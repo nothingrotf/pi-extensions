@@ -2,7 +2,9 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
 import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
 import { SessionHistorySchema } from './schema.ts'
+import { SessionChangedError } from './session-file.ts'
 import { HistoryError, type HistoryResponse, SessionHistoryStore } from './sessions.ts'
+import { WorkLimitError } from './work.ts'
 
 const maximumResponseCharacters = 200_000
 
@@ -14,23 +16,18 @@ interface ErrorResponse {
 
 interface ToolOutput {
   content: Array<{ type: 'text'; text: string }>
-  details: ErrorResponse | HistoryResponse
+  details: HistoryResponse
 }
 
-function toolResult(value: ErrorResponse | HistoryResponse): ToolOutput {
+function toolResult(value: HistoryResponse): ToolOutput {
   const text = JSON.stringify(value)
   if (text.length <= maximumResponseCharacters) {
     return { content: [{ type: 'text', text }], details: value }
   }
-  const error: ErrorResponse = {
-    action: value.action,
-    error: {
-      code: 'RESULT_LIMIT_EXCEEDED',
-      message: 'The response exceeded the total character limit. Use a smaller item limit.',
-    },
-    limits: { responseCharacterLimit: maximumResponseCharacters },
-  }
-  return { content: [{ type: 'text', text: JSON.stringify(error) }], details: error }
+  throw new HistoryError(
+    'RESULT_LIMIT_EXCEEDED',
+    'The response exceeded the total character limit. Use a smaller item limit.',
+  )
 }
 
 export default function sessionHistory(pi: ExtensionAPI): void {
@@ -49,21 +46,28 @@ export default function sessionHistory(pi: ExtensionAPI): void {
     ],
     parameters: SessionHistorySchema,
     executionMode: 'sequential',
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (store === undefined || !store.usesCurrent(ctx.sessionManager)) {
         store = new SessionHistoryStore(ctx.sessionManager)
       }
       try {
-        return toolResult(await store.execute(params))
+        return toolResult(await store.execute(params, signal))
       } catch (error) {
+        signal?.throwIfAborted()
         const historyError =
-          error instanceof HistoryError
+          error instanceof HistoryError ||
+          error instanceof WorkLimitError ||
+          error instanceof SessionChangedError
             ? error
             : new HistoryError('MALFORMED_SESSION', 'The session history request failed.')
-        return toolResult({
+        const failure: ErrorResponse = {
           action: params.action,
           error: { code: historyError.code, message: historyError.message },
-        })
+        }
+        if (historyError.code === 'RESULT_LIMIT_EXCEEDED') {
+          failure.limits = { responseCharacterLimit: maximumResponseCharacters }
+        }
+        throw new Error(JSON.stringify(failure))
       }
     },
     renderShell: 'self',

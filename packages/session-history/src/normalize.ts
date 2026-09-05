@@ -4,7 +4,8 @@ import { Value } from 'typebox/value'
 
 import { entryReference } from './references.ts'
 
-const secretNames = /^(authorization|cookie|password|secret|token)$/i
+const secretNames =
+  /^(authorization|proxyauthorization|cookie|setcookie|password|secret|token|apikey|xapikey|accesstoken|refreshtoken|idtoken|sessiontoken|clientsecret|privatekey)$/i
 const defaultContentLimit = Number.MAX_SAFE_INTEGER
 const maximumDepth = 6
 const maximumCollectionItems = 50
@@ -25,6 +26,7 @@ type SafeContent = string | readonly SafeContentBlock[]
 
 export type EntrySource =
   | 'assistant_message'
+  | 'bash_execution'
   | 'branch_summary'
   | 'compaction_summary'
   | 'custom_message'
@@ -58,7 +60,7 @@ interface SerializedValue {
 }
 
 function serializeValue(value: SerializableValue, depth = 0, fieldName = ''): SerializedValue {
-  if (secretNames.test(fieldName)) {
+  if (secretNames.test(fieldName.replace(/[_-]/g, ''))) {
     return { text: '"[REDACTED]"', redacted: true, truncated: false }
   }
   if (Value.Check(CustomScalarSchema, value)) {
@@ -184,6 +186,7 @@ export function normalizeEntry(
         baseEntry(entry, sessionId, activeIds, '[unsupported message role]', 'session_event', null),
       ]
     }
+    const role = message.role
     if (message.role === 'user') {
       return [
         baseEntry(
@@ -210,6 +213,43 @@ export function normalizeEntry(
             toolCallId: message.toolCallId,
             toolName: message.toolName,
           },
+        ),
+      ]
+    }
+    if (message.role === 'bashExecution') {
+      return [
+        baseEntry(
+          entry,
+          sessionId,
+          activeIds,
+          `Command: ${message.command}\nOutput:\n${message.output}\nExit code: ${message.exitCode ?? 'unknown'}\nCancelled: ${message.cancelled}`,
+          'bash_execution',
+          message.role,
+          { truncated: message.truncated },
+        ),
+      ]
+    }
+    if (message.role === 'custom') {
+      return [
+        baseEntry(
+          entry,
+          sessionId,
+          activeIds,
+          textContent(message.content),
+          'custom_message',
+          message.role,
+        ),
+      ]
+    }
+    if (message.role === 'branchSummary' || message.role === 'compactionSummary') {
+      return [
+        baseEntry(
+          entry,
+          sessionId,
+          activeIds,
+          message.summary,
+          message.role === 'branchSummary' ? 'branch_summary' : 'compaction_summary',
+          message.role,
         ),
       ]
     }
@@ -247,14 +287,7 @@ export function normalizeEntry(
       return normalized
     }
     return [
-      baseEntry(
-        entry,
-        sessionId,
-        activeIds,
-        '[unsupported message role]',
-        'session_event',
-        message.role,
-      ),
+      baseEntry(entry, sessionId, activeIds, '[unsupported message role]', 'session_event', role),
     ]
   }
   if (entry.type === 'custom_message') {

@@ -22,7 +22,7 @@ const ListSchema = Type.Object(
 const SearchSchema = Type.Object(
   {
     action: Type.Literal('search'),
-    query: Type.String({ minLength: 2 }),
+    query: Type.String({ minLength: 2, maxLength: 512 }),
     session_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 50 })),
     include_current: Type.Optional(Type.Boolean()),
     include_children: Type.Optional(Type.Boolean()),
@@ -41,6 +41,7 @@ const ReadSchema = Type.Object(
     action: Type.Literal('read'),
     session_id: Type.String({ minLength: 1 }),
     entry_id: Type.Optional(Type.String({ minLength: 1 })),
+    cursor: Cursor,
     direction: Type.Optional(
       Type.Union([Type.Literal('before'), Type.Literal('after'), Type.Literal('around')]),
     ),
