@@ -1,0 +1,52 @@
+{
+  "name": "@nothingrotf/fast-mode",
+  "version": "0.1.0",
+  "description": "Catalog-aware Fast Mode for OpenAI Codex sessions and subagents.",
+  "keywords": [
+    "codex",
+    "fast-mode",
+    "pi-extension",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "author": "nothingrotf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nothingrotf/pi-extensions",
+    "directory": "packages/fast-mode"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./policy": "./src/policy.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "check": "vp check",
+    "test": "vp test run"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "typebox": "catalog:"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
