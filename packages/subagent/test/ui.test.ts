@@ -295,6 +295,28 @@ describe('subagent TUI', () => {
     ])
   })
 
+  it('preserves result structure and paths while removing terminal controls', () => {
+    const text =
+      'Tests passed\n  /workspace/packages/subagent/src/runtime.ts\n\u001b[31mFailure detail\u001b[0m'
+    expect(
+      eventLines(
+        JSON.stringify({
+          message: {
+            role: 'toolResult',
+            toolName: 'bash',
+            content: [{ type: 'text', text }],
+          },
+        }),
+      ),
+    ).toEqual([
+      {
+        gutter: '←',
+        kind: 'result',
+        text: 'bash: Tests passed\n  /workspace/packages/subagent/src/runtime.ts\nFailure detail',
+      },
+    ])
+  })
+
   it('discards a partial oversized JSONL entry and renders later complete entries', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'subagent-peek-tail-'))
     const sessionFile = join(dir, 'child.jsonl')
@@ -388,6 +410,112 @@ describe('subagent TUI', () => {
     }
   })
 
+  it('keeps eighty agents navigable inside the viewport', () => {
+    const agents = Array.from({ length: 80 }, (_, index) =>
+      snapshot(String(index), `Verify deployed contract ${index}`, 'completed', '/tmp/missing'),
+    )
+    const pane = createPeekPane(
+      () => agents,
+      theme,
+      () => {},
+      () => {},
+      () => {},
+    )
+    try {
+      expect(pane.render(100).length).toBeLessThanOrEqual(28)
+      pane.handleInput('G')
+      const lines = pane.render(100)
+      expect(lines.join('\n')).toContain('80/80')
+      expect(lines.join('\n')).toContain('Verify deployed contract 79')
+      expect(lines.at(-1)).toMatch(/╯$/u)
+    } finally {
+      pane.dispose()
+    }
+  })
+
+  it('resizes, filters, searches, and retains visible selection', () => {
+    const agents = Array.from({ length: 80 }, (_, index) =>
+      snapshot(
+        String(index),
+        `Contract 界面 ${index}`,
+        index === 79 ? 'running' : 'completed',
+        '/tmp/missing',
+      ),
+    )
+    let height = 24
+    const pane = createPeekPane(
+      () => agents,
+      theme,
+      () => {},
+      () => {},
+      () => {},
+      () => height,
+    )
+    try {
+      for (const width of [8, 32, 60, 100, 160]) {
+        for (height of [9, 12, 24, 40]) {
+          pane.handleInput('G')
+          const lines = pane.render(width)
+          expect(lines.length).toBeLessThanOrEqual(height)
+          expect(lines.every((line) => visibleWidth(line) === width)).toBe(true)
+        }
+      }
+      pane.handleInput('\t')
+      expect(pane.render(100).join('\n')).toContain('1/1  Active')
+      expect(pane.render(100).join('\n')).toContain('Contract 界面 79')
+      pane.handleInput('\t')
+      pane.handleInput('/')
+      pane.handleInput('Contract 界面 42')
+      pane.handleInput('\r')
+      expect(pane.render(100).join('\n')).toContain('1/1  All')
+      expect(pane.render(100).join('\n')).toContain('Contract 界面 42')
+      pane.handleInput('/')
+      pane.handleInput('missing')
+      pane.handleInput('\r')
+      expect(pane.render(100).join('\n')).toContain('No matching subagents')
+    } finally {
+      pane.dispose()
+    }
+  })
+
+  it('uses selection backgrounds only on the selected row', () => {
+    const backgrounds: string[] = []
+    const foregrounds: string[] = []
+    const colored: SubagentTheme = {
+      ...theme,
+      bg: (color, text) => {
+        backgrounds.push(color)
+        return text
+      },
+      fg: (color, text) => {
+        foregrounds.push(color)
+        return text
+      },
+    }
+    const pane = createPeekPane(
+      () => [
+        snapshot('one', 'First', 'running', '/tmp/missing'),
+        snapshot('two', 'Second', 'completed', '/tmp/missing'),
+      ],
+      colored,
+      () => {},
+      () => {},
+      () => {},
+    )
+    try {
+      pane.render(100)
+      expect(backgrounds).toEqual(['selectedBg'])
+      expect(foregrounds).toContain('text')
+      expect(foregrounds).toContain('success')
+      backgrounds.length = 0
+      pane.handleInput('\r')
+      pane.render(100)
+      expect(backgrounds).toEqual([])
+    } finally {
+      pane.dispose()
+    }
+  })
+
   it('opens transcript tail, navigates, and confirms cancellation', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'subagent-peek-'))
     const sessionFile = join(dir, 'child.jsonl')
@@ -424,7 +552,8 @@ describe('subagent TUI', () => {
     )
     try {
       const listLines = pane.render(80)
-      expect(listLines.join('\n')).toContain('• Inspect runtime · 2 tools')
+      expect(listLines.join('\n')).toContain('• Inspect runtime')
+      expect(listLines.join('\n')).toContain('2 tools')
       expect(listLines.every((line) => visibleWidth(line) <= 80)).toBe(true)
       pane.handleInput('\r')
       const tailLines = pane.render(80)

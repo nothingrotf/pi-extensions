@@ -24,13 +24,31 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 | Package                                                    | Purpose                                                                           |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | [`@nothingrotf/ask`](packages/ask)                         | Interactive question forms with selectable and freeform answers                   |
+| [`@nothingrotf/compact`](packages/compact)                 | Structured compaction with optional semantic enrichment and history recall        |
 | [`@nothingrotf/fast-mode`](packages/fast-mode)             | Catalog-aware Fast Mode for OpenAI Codex sessions and subagents                   |
 | [`@nothingrotf/goal`](packages/goal)                       | Durable autonomous goal lifecycle for Pi sessions                                 |
 | [`@nothingrotf/hud`](packages/hud)                         | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
 | [`@nothingrotf/loop`](packages/loop)                       | Session loop for recurring and self-paced prompts or skills                       |
+| [`@nothingrotf/pstack`](packages/pstack)                   | Workflow skills and Pi compatibility helpers                                      |
 | [`@nothingrotf/session-history`](packages/session-history) | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |
 | [`@nothingrotf/subagent`](packages/subagent)               | In-process Task runtime with isolated, persistent Pi child sessions               |
 | [`@nothingrotf/todo`](packages/todo)                       | Structured todo lifecycle with session state and a persistent tree                |
+
+## Structured compaction
+
+The `compact` package replaces the default `/compact` summarizer and handles automatic threshold and overflow compaction.
+Deterministic mode preserves source-linked evidence without model calls.
+Optional hybrid mode adds validated semantic interpretations through the active model.
+
+Run `/compact-mode` to open the native settings picker, or use `/compact-mode deterministic` and `/compact-mode hybrid` directly.
+Mode changes persist on the active session branch.
+The `compact_recall` tool retrieves omitted source evidence.
+
+Use only one default compaction provider.
+If pi-vcc remains installed, disable its `overrideDefaultCompaction` setting.
+
+Read the [package documentation](packages/compact/README.md) for configuration and the [evaluation report](packages/compact/evaluation/README.md) for measured tradeoffs.
+The initial synthetic comparison found no accuracy gain from hybrid mode, so deterministic mode remains the default.
 
 ## Development
 

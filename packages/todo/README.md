@@ -94,6 +94,10 @@ After each successful `todo_write` call:
 
 The result text lists the remaining items, the closed counts, and the blocked items.
 
+Restoration scans the active branch backward for the latest valid task snapshot and eager-mode setting independently.
+Failed tool results and malformed snapshots do not replace the last valid list.
+Once both values are found, restoration skips earlier entries.
+
 Validation checks the complete dependency graph after the proposed merge or replacement. It rejects self-dependencies, unknown dependencies, and cycles.
 
 Validation errors throw an exception. Pi records `isError: true`, and the list stays unchanged. Rejected calls do not reset the nudge counter.

@@ -384,22 +384,33 @@ export default function todo(pi: ExtensionAPI): void {
     pi.events.emit('ask:state:request', {})
     todos = []
     eagerMode = defaultEagerMode
-    for (const entry of ctx.sessionManager.getBranch()) {
+    const branch = ctx.sessionManager.getBranch()
+    let foundTodos = false
+    let foundEagerMode = false
+    for (
+      let index = branch.length - 1;
+      index >= 0 && (!foundTodos || !foundEagerMode);
+      index -= 1
+    ) {
+      const entry = branch[index]
+      if (entry === undefined) continue
       if (entry.type === 'custom') {
-        if (entry.customType === userEditEntryType) {
+        if (!foundTodos && entry.customType === userEditEntryType) {
           const edited = decodeUserEditEntry(entry.data)
           if (edited !== null) {
             todos = edited
+            foundTodos = true
           }
-        } else if (entry.customType === eagerEntryType) {
+        } else if (!foundEagerMode && entry.customType === eagerEntryType) {
           const mode = decodeEagerEntry(entry.data)
           if (mode !== null) {
             eagerMode = mode
+            foundEagerMode = true
           }
         }
         continue
       }
-      if (entry.type !== 'message') {
+      if (foundTodos || entry.type !== 'message') {
         continue
       }
       const message = entry.message
@@ -413,6 +424,7 @@ export default function todo(pi: ExtensionAPI): void {
       const details = decodeTodoWriteDetails(message.details)
       if (details !== null) {
         todos = cloneTodos(details.todos)
+        foundTodos = true
       }
     }
     refreshStatus(ctx)

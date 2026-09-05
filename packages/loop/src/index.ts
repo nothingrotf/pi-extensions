@@ -210,14 +210,20 @@ export default function loop(pi: ExtensionAPI): void {
     cancelRepeatTimer()
     state = null
     repeat = null
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== 'custom') {
+    const branch = ctx.sessionManager.getBranch()
+    let foundLoop = false
+    let foundRepeat = false
+    for (let index = branch.length - 1; index >= 0 && (!foundLoop || !foundRepeat); index -= 1) {
+      const entry = branch[index]
+      if (entry?.type !== 'custom') {
         continue
       }
-      if (entry.customType === entryType) {
+      if (!foundLoop && entry.customType === entryType) {
         state = decodeLoopState(entry.data)
-      } else if (entry.customType === repeatEntryType) {
+        foundLoop = true
+      } else if (!foundRepeat && entry.customType === repeatEntryType) {
         repeat = decodeRepeatState(entry.data)
+        foundRepeat = true
       }
     }
     if (isActiveLoop(state)) {

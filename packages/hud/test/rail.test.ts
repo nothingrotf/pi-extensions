@@ -1,7 +1,7 @@
 import type { ToolCall } from '@earendil-works/pi-ai'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { beforeAll, describe, expect, test } from 'vite-plus/test'
+import { beforeAll, describe, expect, test, vi } from 'vite-plus/test'
 
 import {
   hasNerdFontFile,
@@ -1119,6 +1119,119 @@ describe('mapSessionRails', () => {
       },
     },
     type: 'message',
+  })
+
+  test('finalizes long rendered histories without scanning earlier tool mappings', () => {
+    const turns = 256
+    const entries: SessionEntry[] = []
+    for (let turn = 1; turn <= turns; turn++) {
+      entries.push(
+        userEntry,
+        { ...railEntry, data: { turn } },
+        assistantEntry(`kept-${turn}`, `hidden-${turn}`),
+        railReplacementEntry(`kept-${turn}`, turn),
+        toolResultEntry(`kept-${turn}`, `output-${turn}`),
+      )
+    }
+    let visitedMappings = 0
+    const iterator = Map.prototype[Symbol.iterator]
+    const scan = vi
+      .spyOn(Map.prototype, Symbol.iterator)
+      .mockImplementation(function (this: Map<unknown, unknown>) {
+        const entries = iterator.call(this)
+        const next = entries.next.bind(entries)
+        entries.next = () => {
+          const entry = next()
+          if (!entry.done && entry.value[1] instanceof RailStore) visitedMappings++
+          return entry
+        }
+        return entries
+      })
+    let rails: ReturnType<typeof mapSessionRails>
+    try {
+      rails = mapSessionRails(entries)
+    } finally {
+      scan.mockRestore()
+    }
+    expect(rails.maxTurn).toBe(turns)
+    expect(rails.byToolCallId.size).toBe(turns * 2)
+    expect(rails.byEntryTurn.size).toBe(turns)
+    for (let turn = 1; turn <= turns; turn++) {
+      const target = rails.byEntryTurn.get(turn)
+      expect(target).toBe(rails.byToolCallId.get(`kept-${turn}`))
+      expect(target).toBe(rails.byToolCallId.get(`hidden-${turn}`))
+      expect(target?.values().map((action) => action.toolCallId)).toEqual([`kept-${turn}`])
+      expect(target?.values()[0]?.output).toBe(`output-${turn}`)
+    }
+    expect(visitedMappings).toBeLessThanOrEqual(turns * 2)
+  })
+
+  test('reassigns persisted reports to earlier stores and subsequent calls to the current store', () => {
+    const report = {
+      doneLabel: 'Restored',
+      iconKey: 'agent',
+      runningLabel: 'Restoring',
+      status: 'pending',
+      toolCallId: 'shared',
+    } satisfies RailStateTestData['report']
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('first'),
+      railReplacementEntry('first'),
+      userEntry,
+      { ...railEntry, data: { turn: 2 } },
+      assistantEntry('shared', 'hidden'),
+      railStateEntry({ report, turn: 1 }),
+      toolResultEntry('shared', 'earlier output'),
+      assistantEntry('shared'),
+      toolResultEntry('shared', 'current output', true),
+    ])
+    const earlier = rails.byEntryTurn.get(1)
+    const current = rails.byEntryTurn.get(2)
+    expect(rails.byToolCallId.get('shared')).toBe(current)
+    expect(current).not.toBe(earlier)
+    expect(earlier?.values().map((action) => action.toolCallId)).toEqual(['first', 'shared'])
+    expect(earlier?.values()[1]).toMatchObject({
+      doneLabel: 'Restored',
+      output: 'earlier output',
+      status: 'ok',
+    })
+    expect(current?.values().map((action) => action.toolCallId)).toEqual(['shared'])
+    expect(current?.values()[0]).toMatchObject({ output: 'current output', status: 'error' })
+  })
+
+  test('routes late persisted child reports and results to their original turn', () => {
+    const rails = mapSessionRails([
+      userEntry,
+      railEntry,
+      assistantEntry('parent'),
+      railReplacementEntry('parent'),
+      userEntry,
+      { ...railEntry, data: { turn: 2 } },
+      assistantEntry('child'),
+      railStateEntry({
+        report: {
+          doneLabel: 'Read',
+          iconKey: 'read',
+          parentToolCallId: 'parent',
+          runningLabel: 'Reading',
+          status: 'pending',
+          toolCallId: 'child',
+        },
+        turn: 1,
+      }),
+      toolResultEntry('child', 'child output'),
+    ])
+    const earlier = rails.byEntryTurn.get(1)
+    const current = rails.byEntryTurn.get(2)
+    expect(rails.byToolCallId.get('child')).toBe(earlier)
+    expect(earlier?.values()[0]?.children?.[0]).toMatchObject({
+      output: 'child output',
+      status: 'ok',
+      toolCallId: 'child',
+    })
+    expect(current?.values().map((action) => action.toolCallId)).toEqual(['child'])
   })
 
   test('restores persisted argument glyphs', () => {

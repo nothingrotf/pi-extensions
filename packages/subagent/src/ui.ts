@@ -2,7 +2,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import type { TUI } from '@earendil-works/pi-tui'
 
 import { SUBAGENT_SETTLE_LINGER_MS, SubagentsWidget, taskLine } from './format.ts'
-import { createPeekPane } from './peek.ts'
+import { createPeekPane, peekHeight } from './peek.ts'
 import type { SubagentRuntime } from './runtime.ts'
 
 const WIDGET_THROTTLE_MS = 160
@@ -75,15 +75,15 @@ export class SubagentTui {
               })
               .catch((error) => ctx.ui.notify(String(error), 'error'))
           },
+          () => peekHeight(tui.terminal.rows),
         ),
       {
         overlay: true,
         overlayOptions: {
           anchor: 'center',
-          margin: 2,
-          maxHeight: '70%',
-          minWidth: 60,
-          width: '70%',
+          margin: 1,
+          maxHeight: '85%',
+          width: '90%',
         },
       },
     )

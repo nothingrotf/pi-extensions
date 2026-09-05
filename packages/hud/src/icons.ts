@@ -103,7 +103,7 @@ export function terminalSuggestsNerdFont(program: string | undefined): boolean {
 }
 
 function detectNerdFont(): boolean {
-  return hasNerdFontFile(fontDirectories()) || terminalSuggestsNerdFont(process.env.TERM_PROGRAM)
+  return terminalSuggestsNerdFont(process.env.TERM_PROGRAM) || hasNerdFontFile(fontDirectories())
 }
 
 let mode: IconMode = 'auto'

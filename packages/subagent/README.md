@@ -232,6 +232,9 @@ The artifact metadata includes:
 Graph state, workspace state, artifact metadata, isolation attempts, and child records use version 6 checkpoints with version 7 incremental journal entries.
 
 Each incremental entry references the previous state entry. Replay validates the active branch and rejects disconnected journals.
+Latest-state restoration validates journal entries before decoding the final merged state.
+Historical views retain independent snapshots, and restored records remain detached from persisted entries.
+Validation includes structured output and JSON gate values, even in entries superseded by later updates.
 
 Checkpoint frequency depends on both entry count and accumulated bytes. This avoids repeating large retained states after every mutation.
 
@@ -682,9 +685,20 @@ If no other extension owns `/subagents`, `/subagents peek` opens the same pane.
 The pane supports these controls:
 
 - Use `j`, `k`, or the arrow keys to select a child.
-- Press `enter` to tail the child transcript.
-- Press `x` to cancel a running child.
+- Press `enter` to open the child activity.
+- Press `/` to edit a search by description, Agent ID, model, or status.
+- Press `enter` or `escape` to leave search input and retain the filter.
+- Press `tab` to switch between all children and active children.
+- Press `PageUp` or `PageDown` to navigate a page.
+- Press `g` or `Home` to reach the first child or the activity header.
+- Press `G` or `End` to reach the last child or follow new activity.
+- Press `x`, then `y`, to cancel a running child.
 - Press `escape` to return or close the pane.
+
+The list keeps the selected child visible within the terminal height.
+The selected row uses the theme selection background. Other rows use the terminal background and semantic theme colors.
+Activity preserves output line breaks and shows the recent 64 KiB of the session file.
+The activity header contains the full description, model, status, and usage.
 
 Run `/subagents` to show a compact status list.
 

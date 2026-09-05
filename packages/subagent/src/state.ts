@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from '@earendil-works/pi-coding-agent'
-import { type StaticDecode, Type } from 'typebox'
+import { type Static, type StaticDecode, Type } from 'typebox'
+import { Compile } from 'typebox/compile'
 import { Value } from 'typebox/value'
 
 import {
@@ -53,8 +54,25 @@ const RecordJsonFieldsSchema = Type.Pick(RunRecordSchema, [
   'structuredOutput',
 ])
 const RecordsInputSchema = Type.Object({ records: Type.Array(Type.Unknown()) })
+let snapshotValidator: ReturnType<typeof Compile<typeof RuntimeStateSchema>> | undefined
+let deltaValidator: ReturnType<typeof Compile<typeof DeltaSchema>> | undefined
 
 type StateDelta = StaticDecode<typeof DeltaSchema>
+type JournalRecord = Static<typeof RunRecordSchema>
+type JournalState<RecordState extends JournalRecord> = Omit<RuntimeState, 'records'> & {
+  records: RecordState[]
+}
+type JournalSnapshot<RecordState extends JournalRecord> = {
+  migrated: boolean
+  state: JournalState<RecordState>
+}
+type JournalDelta<RecordState extends JournalRecord> = Omit<StateDelta, 'records'> & {
+  records: RecordState[]
+}
+interface JournalDecoder<RecordState extends JournalRecord> {
+  snapshot: <Input>(data: Input) => JournalSnapshot<RecordState> | undefined
+  delta: <Input>(data: Input) => JournalDelta<RecordState>
+}
 type StateChange = Partial<Omit<StateDelta, 'ownerSessionId' | 'previous' | 'version'>>
 
 type OwnerContext = Pick<ExtensionContext, 'sessionManager'>
@@ -235,18 +253,63 @@ function decodeState<Input>(data: Input): DecodedState | undefined {
   }
 }
 
-function readHistory(
+function validateGateJson(gate: Static<typeof GateDefinitionSchema>): void {
+  if (gate.type !== 'json-pointer') return
+  if (gate.op === 'eq') decodeJsonValue(gate.value)
+  if (gate.op === 'in') {
+    for (const value of gate.values) decodeJsonValue(value)
+  }
+}
+
+function validateRecordJson(records: readonly Static<typeof RecordJsonFieldsSchema>[]): void {
+  for (const record of records) {
+    if (record.structuredOutput?.data !== undefined) {
+      decodeJsonValue(record.structuredOutput.data)
+    }
+    const execution = record.execution
+    if (execution !== undefined && execution.version !== 1) {
+      if (execution.outputSchema !== undefined) decodeJsonValue(execution.outputSchema)
+      for (const gate of execution.gates) validateGateJson(gate)
+    }
+    for (const result of record.gateResults ?? []) validateGateJson(result.gate)
+  }
+}
+
+function readSnapshot<Input>(data: Input): JournalSnapshot<JournalRecord> | undefined {
+  snapshotValidator ??= Compile(RuntimeStateSchema)
+  if (!snapshotValidator.Check(data)) return decodeState(data)
+  validateRecordJson(data.records)
+  return { migrated: false, state: data }
+}
+
+function readDelta<Input>(data: Input): Static<typeof DeltaSchema> {
+  deltaValidator ??= Compile(DeltaSchema)
+  if (deltaValidator.Check(data)) {
+    validateRecordJson(data.records)
+    return data
+  }
+  return decodeDelta(data)
+}
+
+function decodeDelta<Input>(data: Input): StateDelta {
+  const delta = Value.Decode(DeltaSchema, data)
+  preserveRecordJson(delta.records, data)
+  return delta
+}
+
+function readHistory<RecordState extends JournalRecord>(
   branch: readonly SessionEntry[],
   ownerSessionId: string,
-  collect?: (state: RuntimeState) => void,
-): DecodedState | undefined {
+  decoder: JournalDecoder<RecordState>,
+  collect?: (state: JournalState<RecordState>) => void,
+): JournalSnapshot<RecordState> | undefined {
   const previous = new Map<string, string>()
-  let restored: DecodedState | undefined
-  let records = new Map<string, RunRecord>()
+  let restored: JournalSnapshot<RecordState> | undefined
+  let records = new Map<string, RecordState>()
   let runs = new Map<string, CoordinationRunState>()
   let workspaces = new Map<string, WorkspaceRecord>()
   let rootStores = new Set<string>()
-  const snapshot = (): RuntimeState => ({
+  const snapshot = (): JournalState<RecordState> => ({
     ownerSessionId,
     records: [...records.values()].sort((left, right) => left.updatedAt - right.updatedAt),
     rootStores: [...rootStores],
@@ -256,11 +319,10 @@ function readHistory(
   })
   for (const entry of branch) {
     if (entry.type !== 'custom' || entry.customType !== STATE_TYPE) continue
-    let delta: StateDelta | undefined
+    let delta: JournalDelta<RecordState> | undefined
     if (Value.Check(DeltaVersionSchema, entry.data)) {
       try {
-        delta = Value.Decode(DeltaSchema, entry.data)
-        preserveRecordJson(delta.records, entry.data)
+        delta = decoder.delta(entry.data)
       } catch {
         throw new Error('The persisted subagent state is invalid.')
       }
@@ -279,7 +341,12 @@ function readHistory(
       for (const workspace of delta.workspaces) workspaces.set(workspace.workspaceId, workspace)
       for (const root of delta.rootStores) rootStores.add(root)
     } else {
-      const decoded = decodeState(entry.data)
+      let decoded: JournalSnapshot<RecordState> | undefined
+      try {
+        decoded = decoder.snapshot(entry.data)
+      } catch {
+        throw new Error('The persisted subagent state is invalid.')
+      }
       if (decoded === undefined) throw new Error('The persisted subagent state is invalid.')
       previous.set(decoded.state.ownerSessionId, entry.id)
       if (decoded.state.ownerSessionId !== ownerSessionId) continue
@@ -296,11 +363,22 @@ function readHistory(
   return restored === undefined ? undefined : { migrated: restored.migrated, state: snapshot() }
 }
 
+function readLatestState(
+  branch: readonly SessionEntry[],
+  ownerSessionId: string,
+): DecodedState | undefined {
+  const restored = readHistory(branch, ownerSessionId, { delta: readDelta, snapshot: readSnapshot })
+  if (restored === undefined) return undefined
+  const decoded = decodeState(restored.state)
+  if (decoded === undefined) throw new Error('The persisted subagent state is invalid.')
+  return { migrated: restored.migrated, state: decoded.state }
+}
+
 export function latestState(
   branch: readonly SessionEntry[],
   ownerSessionId: string,
 ): RuntimeState | undefined {
-  return readHistory(branch, ownerSessionId)?.state
+  return readLatestState(branch, ownerSessionId)?.state
 }
 
 export function stateHistory(
@@ -308,7 +386,9 @@ export function stateHistory(
   ownerSessionId: string,
 ): RuntimeState[] {
   const history: RuntimeState[] = []
-  readHistory(branch, ownerSessionId, (state) => history.push(state))
+  readHistory(branch, ownerSessionId, { delta: decodeDelta, snapshot: decodeState }, (state) => {
+    history.push(state)
+  })
   return history
 }
 
@@ -359,7 +439,7 @@ export class StateStore {
 
   private restoreBranch(ctx: OwnerContext, pinnedRecordIds?: Iterable<string>): void {
     const ownerSessionId = ctx.sessionManager.getSessionId()
-    const restored = readHistory(ctx.sessionManager.getBranch(), ownerSessionId)
+    const restored = readLatestState(ctx.sessionManager.getBranch(), ownerSessionId)
     this.sessionManager = ctx.sessionManager
     this.previous = undefined
     this.changesSinceCheckpoint = CHECKPOINT_INTERVAL

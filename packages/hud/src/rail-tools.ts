@@ -194,6 +194,7 @@ function replacementSegments(
 export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): SessionRails {
   const byEntryTurn = new Map<number, RailStore>()
   const byToolCallId = new Map<string, RailStore>()
+  const toolCallIdsByStore = new Map<RailStore, Set<string>>()
   const parentByToolCallId = new Map<string, string>()
   const settledToolCallIds = new Set<string>()
   const startedAt = new Map<string, number>()
@@ -211,11 +212,20 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
   let store = new RailStore()
   let segments: RailSegment[] = []
   let maxTurn = 0
+  const indexToolCall = (toolCallId: string, target: RailStore) => {
+    const previous = byToolCallId.get(toolCallId)
+    if (previous === target) return
+    if (previous !== undefined) toolCallIdsByStore.get(previous)?.delete(toolCallId)
+    byToolCallId.set(toolCallId, target)
+    const ids = toolCallIdsByStore.get(target) ?? new Set<string>()
+    ids.add(toolCallId)
+    toolCallIdsByStore.set(target, ids)
+  }
   const finalize = () => {
     const rendered = renderedStores.has(store)
     if (rendered) {
-      for (const [toolCallId, target] of byToolCallId) {
-        if (target === store && !renderedToolCallIds.has(toolCallId)) store.remove(toolCallId)
+      for (const toolCallId of toolCallIdsByStore.get(store) ?? []) {
+        if (!renderedToolCallIds.has(toolCallId)) store.remove(toolCallId)
       }
     }
     const projectedSegments = rendered
@@ -272,7 +282,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
         settledWhenReported && state.report.status === 'pending',
       )
       deferredReports.push({ report: state.report, settledWhenReported, target })
-      byToolCallId.set(state.report.toolCallId, target)
+      indexToolCall(state.report.toolCallId, target)
       if (state.report.parentToolCallId !== undefined) {
         parentByToolCallId.set(state.report.toolCallId, state.report.parentToolCallId)
       }
@@ -308,7 +318,7 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
     segments.push(...messageSegments(message))
     for (const block of message.content) {
       if (block.type !== 'toolCall') continue
-      byToolCallId.set(block.id, store)
+      indexToolCall(block.id, store)
       startedAt.set(block.id, message.timestamp)
       store.report(
         block.id,

@@ -286,6 +286,111 @@ describe('todo lifecycle', () => {
     ])
   })
 
+  test.each(['recent', 'old', 'absent'])(
+    'bounds snapshot decoding across long histories with %s eager state',
+    async (eagerPosition) => {
+      let historicalReads = 0
+      let historicalVisits = 0
+      const historical = Array.from({ length: 10_000 }, (_, index) =>
+        index % 2 === 0
+          ? {
+              get type() {
+                historicalVisits += 1
+                return 'custom'
+              },
+              customType: 'pi-todo-user-edit',
+              get data() {
+                historicalReads += 1
+                return { todos: restoredTodos }
+              },
+            }
+          : {
+              get type() {
+                historicalVisits += 1
+                return 'message'
+              },
+              message: {
+                role: 'toolResult',
+                toolName: 'todo_write',
+                get details() {
+                  historicalReads += 1
+                  return { todos: restoredTodos, totalCount: 2, wasMerge: false }
+                },
+              },
+            },
+      )
+      const eager = { type: 'custom', customType: 'pi-todo-eager', data: { mode: 'off' } }
+      const branch = [
+        ...(eagerPosition === 'old' ? [eager] : []),
+        ...historical,
+        ...(eagerPosition === 'recent' ? [eager] : []),
+        toolResult({ todos: [], totalCount: 0, wasMerge: false }),
+      ]
+      Object.freeze(branch)
+      const instance = harness(branch)
+      await instance.emit('session_start')
+      expect((await instance.tool('todo_read', {})).details.todos).toEqual([])
+      await instance.command('eager')
+      expect(instance.notices.at(-1).text).toContain(
+        `Todo eager mode: ${eagerPosition === 'absent' ? 'preferred' : 'off'}`,
+      )
+      expect(historicalReads).toBe(0)
+      if (eagerPosition === 'recent') expect(historicalVisits).toBe(0)
+    },
+  )
+
+  test('restores independent valid states through interleaved edits and branch navigation', async () => {
+    const edited = [{ ...restoredTodos[0], status: 'completed' }]
+    const branch = [
+      { type: 'custom', customType: 'pi-todo-eager', data: { mode: 'off' } },
+      toolResult({ todos: restoredTodos, totalCount: 2, wasMerge: false }),
+      { type: 'custom', customType: 'pi-todo-user-edit', data: { todos: edited } },
+      { type: 'custom', customType: 'pi-todo-eager', data: { mode: 'always' } },
+      { type: 'custom', customType: 'pi-todo-user-edit', data: { todos: [{}] } },
+      toolResult({ todos: 'invalid', totalCount: 0, wasMerge: false }),
+      { type: 'custom', customType: 'pi-todo-eager', data: { mode: 'invalid' } },
+      { type: 'message', message: { role: 'user', content: 'continue' } },
+      { type: 'custom', customType: 'unrelated', data: { todos: [] } },
+      {
+        type: 'message',
+        message: {
+          role: 'toolResult',
+          toolName: 'todo_read',
+          details: { todos: [], totalCount: 0, wasMerge: false },
+        },
+      },
+    ]
+    const instance = harness(branch)
+    await instance.emit('session_start')
+    expect((await instance.tool('todo_read', {})).details.todos).toEqual(edited)
+    await instance.command('eager')
+    expect(instance.notices.at(-1).text).toContain('Todo eager mode: always')
+
+    branch.push(toolResult({ todos: [], totalCount: 0, wasMerge: false }))
+    await instance.emit('session_tree')
+    expect((await instance.tool('todo_read', {})).details.todos).toEqual([])
+    await instance.command('eager')
+    expect(instance.notices.at(-1).text).toContain('Todo eager mode: always')
+
+    branch.splice(2)
+    await instance.emit('session_tree')
+    expect((await instance.tool('todo_read', {})).details.todos).toEqual(restoredTodos)
+    await instance.command('eager')
+    expect(instance.notices.at(-1).text).toContain('Todo eager mode: off')
+
+    branch.splice(
+      0,
+      branch.length,
+      { type: 'custom', customType: 'pi-todo-eager', data: null },
+      { type: 'custom', customType: 'pi-todo-user-edit', data: null },
+      toolResult(null),
+    )
+    await instance.emit('session_tree')
+    expect((await instance.tool('todo_read', {})).details.todos).toEqual([])
+    await instance.command('eager')
+    expect(instance.notices.at(-1).text).toContain('Todo eager mode: preferred')
+  })
+
   test('restores the latest valid branch snapshot before merge', async () => {
     const branch = [
       toolResult({ todos: restoredTodos, totalCount: 2, wasMerge: false }),

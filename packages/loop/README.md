@@ -12,6 +12,8 @@ The package follows the Cursor Agent loop behavior:
 - A repeat loop re-sends one prompt after every settled turn, with an optional iteration or duration limit.
 
 The extension stores its state in the Pi session. A resumed session restores scheduled timers and watchers. Repeat loops resume in a paused state.
+Restoration scans backward for the latest scheduled-loop and repeat-loop checkpoints independently.
+A stopped or invalid latest checkpoint does not revive an earlier active state for that loop type.
 TUI and RPC sessions support loops. One-shot print and JSON modes reject them.
 
 ## Install

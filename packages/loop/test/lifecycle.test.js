@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, test, vi } from 'vite-plus/test'
 
 import loop from '../src/index.ts'
-import { createLoop } from '../src/machine.ts'
+import { createLoop, stopLoop } from '../src/machine.ts'
+import { enableRepeat } from '../src/repeat.ts'
 
 function harness(branch = [], initialIdle = true, mode = 'tui') {
   const handlers = new Map()
@@ -142,6 +143,105 @@ async function waitFor(check) {
 }
 
 describe('loop lifecycle', () => {
+  test.each(['both', 'loop', 'repeat'])(
+    'bounds state decoding across long histories containing %s state',
+    async (kind) => {
+      let historicalReads = 0
+      let historicalVisits = 0
+      const active = createLoop(
+        { prompt: 'check CI', schedule: { mode: 'dynamic', intervalMs: null, watch: null } },
+        100,
+        'history',
+      )
+      const repeated = enableRepeat({ between: 'prompt', prompt: 'retry' }, 100)
+      const historical = Array.from({ length: 10_000 }, (_, index) => {
+        const isLoop = kind === 'loop' || (kind === 'both' && index % 2 === 0)
+        return {
+          get type() {
+            historicalVisits += 1
+            return 'custom'
+          },
+          customType: isLoop ? 'pi-loop-state' : 'pi-loop-repeat',
+          get data() {
+            historicalReads += 1
+            return isLoop ? active : repeated
+          },
+        }
+      })
+      const branch = [...historical]
+      if (kind !== 'repeat') {
+        branch.push({ type: 'custom', customType: 'pi-loop-state', data: stopLoop(active, 'done') })
+      }
+      if (kind !== 'loop') {
+        branch.push({
+          type: 'custom',
+          customType: 'pi-loop-repeat',
+          data: { ...repeated, enabled: false },
+        })
+      }
+      Object.freeze(branch)
+      const instance = harness(branch)
+      try {
+        await instance.emit('session_start')
+        expect(instance.statuses.get('pi-loop')).toBeUndefined()
+        expect(instance.messages).toEqual([])
+        expect(historicalReads).toBe(0)
+        if (kind === 'both') expect(historicalVisits).toBe(0)
+      } finally {
+        await instance.emit('session_shutdown')
+      }
+    },
+  )
+
+  test('restores loop and repeat independently and clears malformed states on branch changes', async () => {
+    const active = createLoop(
+      { prompt: 'check CI', schedule: { mode: 'dynamic', intervalMs: null, watch: null } },
+      100,
+      'branch',
+    )
+    const repeated = enableRepeat({ between: 'prompt', prompt: 'retry' }, 100)
+    const branch = [
+      { type: 'custom', customType: 'pi-loop-state', data: active },
+      { type: 'custom', customType: 'pi-loop-repeat', data: repeated },
+      { type: 'message', message: { role: 'user', content: 'continue' } },
+      { type: 'custom', customType: 'unrelated', data: null },
+    ]
+    const instance = harness(branch)
+    try {
+      await instance.emit('session_start')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop waiting 1 dynamic')
+      expect(latestRepeat(instance)).toMatchObject({ enabled: true, paused: true, prompt: 'retry' })
+      expect(instance.messages).toEqual([])
+
+      branch.push({ type: 'custom', customType: 'pi-loop-state', data: { ...active, prompt: '' } })
+      await instance.emit('session_tree')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop paused 0')
+
+      branch.push({ type: 'custom', customType: 'pi-loop-repeat', data: null })
+      await instance.emit('session_tree')
+      expect(instance.statuses.get('pi-loop')).toBeUndefined()
+      await instance.command('loop', 'status')
+      expect(instance.notices.at(-1).text).toBe('No loop exists in this session.')
+      await instance.command('loop', 'resume')
+      expect(instance.notices.at(-1).text).toBe('No repeat loop exists.')
+
+      branch.splice(4, 1)
+      await instance.emit('session_tree')
+      expect(instance.statuses.get('pi-loop')).toBe('Loop waiting 1 dynamic')
+      await instance.command('loop', 'resume')
+      expect(instance.notices.at(-1).text).toBe('No repeat loop exists.')
+
+      branch.splice(0)
+      await instance.emit('session_tree')
+      expect(instance.statuses.get('pi-loop')).toBeUndefined()
+      await instance.command('loop', 'status')
+      expect(instance.notices.at(-1).text).toBe('No loop exists in this session.')
+      expect(instance.messages).toEqual([])
+    } finally {
+      await instance.emit('session_shutdown')
+    }
+  })
+
   test('rejects a loop in one-shot print mode', async () => {
     const instance = harness([], true, 'print')
     await instance.emit('session_start')

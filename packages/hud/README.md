@@ -182,6 +182,10 @@ It detects structural changes in the transcript containers and batches explicit
 invalidations from lifecycle events. Unchanged animation frames do not rescan
 the message history, and layout fixes do not create polling timers.
 
+Rail restoration indexes tool calls by their owning turn.
+Finalizing a turn checks its own calls instead of rescanning calls from every earlier turn.
+Recognized terminal font hints bypass the fallback font-directory scan.
+
 Settled rails cache their grouped actions and rendered output. Message framing
 and speaker headers reuse unchanged output, retaining only the latest frame per
 component. Content changes, width changes, and theme invalidation refresh the

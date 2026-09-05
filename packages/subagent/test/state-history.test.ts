@@ -286,6 +286,125 @@ describe('StateStore history', () => {
     }
   })
 
+  it('validates codec values in superseded and foreign deltas before replay', () => {
+    for (const foreign of [false, true]) {
+      for (const field of ['structuredOutput', 'outputSchema', 'executionGate', 'gateResult']) {
+        const session = SessionManager.inMemory()
+        const owner = foreign ? 'foreign' : session.getSessionId()
+        session.appendCustomEntry('pi-subagent-state', snapshot(owner, []))
+        const previous = session.getLeafId()
+        const data = Object.fromEntries([['__proto__', Symbol('invalid')]])
+        const source = record(owner, 1)
+        if (field === 'structuredOutput') {
+          Object.assign(source, {
+            structuredOutput: { data, mode: 'strict', source: 'caller', status: 'valid' },
+          })
+        }
+        if (field === 'outputSchema' || field === 'executionGate') {
+          const execution = {
+            agentDescription: '',
+            agentName: 'explore',
+            agentSource: { kind: 'bundled' },
+            cwd: '/tmp',
+            effort: 'high',
+            fast: false,
+            gates:
+              field === 'executionGate'
+                ? [{ op: 'in', path: '', type: 'json-pointer', values: [data] }]
+                : [],
+            model: 'test/model',
+            modelSelector: 'test/model:high',
+            readonly: true,
+            schemaMode: 'strict',
+            systemPrompt: 'Test',
+            tools: [],
+            version: 2,
+          }
+          if (field === 'outputSchema') Object.assign(execution, { outputSchema: data })
+          Object.assign(source, { execution })
+        }
+        if (field === 'gateResult') {
+          Object.assign(source, {
+            gateResults: [
+              { gate: { op: 'eq', path: '', type: 'json-pointer', value: data }, passed: true },
+            ],
+          })
+        }
+        session.appendCustomEntry('pi-subagent-state', {
+          ownerSessionId: owner,
+          previous,
+          records: [source],
+          removedRecords: [],
+          removedRuns: [],
+          removedWorkspaces: [],
+          rootStores: [],
+          runs: [],
+          version: 7,
+          workspaces: [],
+        })
+        session.appendCustomEntry('pi-subagent-state', snapshot(session.getSessionId(), []))
+        expect(() => latestState(session.getBranch(), session.getSessionId())).toThrow(
+          'The persisted subagent state is invalid.',
+        )
+      }
+    }
+  })
+
+  it('preserves corrective decoding and isolates restored records from persisted entries', () => {
+    const session = SessionManager.inMemory()
+    const owner = session.getSessionId()
+    session.appendCustomEntry('pi-subagent-state', {
+      ...snapshot(owner, [record(owner, 1)]),
+      version: '6',
+    })
+    const previous = session.getLeafId()
+    session.appendCustomEntry('pi-subagent-state', {
+      ownerSessionId: owner,
+      previous,
+      records: [{ ...record(owner, 1), updatedAt: '2' }],
+      removedRecords: [],
+      removedRuns: [],
+      removedWorkspaces: [],
+      rootStores: [],
+      runs: [],
+      version: 7,
+      workspaces: [],
+    })
+    const branch = session.getBranch()
+    const restored = latestState(branch, owner)
+    expect(restored?.records).toEqual([{ ...record(owner, 1), updatedAt: 2 }])
+    const first = restored?.records[0]
+    if (first === undefined) throw new Error('The restored record is missing.')
+    first.output = 'changed outside the session'
+    expect(latestState(branch, owner)?.records[0]?.output).toBe(record(owner, 1).output)
+    expect(stateHistory(branch, owner).at(-1)?.records[0]?.updatedAt).toBe(2)
+  })
+
+  it('keeps failed restoration atomic and checks obsolete journal links after checkpoints', () => {
+    const session = SessionManager.inMemory()
+    const store = storeFor(session)
+    store.restore({ sessionManager: session })
+    store.add(record(session.getSessionId(), 1))
+    const before = store.all()
+    session.appendCustomEntry('pi-subagent-state', {
+      ownerSessionId: session.getSessionId(),
+      previous: 'missing-entry',
+      records: [],
+      removedRecords: [],
+      removedRuns: [],
+      removedWorkspaces: [],
+      rootStores: [],
+      runs: [],
+      version: 7,
+      workspaces: [],
+    })
+    session.appendCustomEntry('pi-subagent-state', snapshot(session.getSessionId(), []))
+    expect(() => store.restore({ sessionManager: session })).toThrow(
+      'The persisted subagent state journal is disconnected.',
+    )
+    expect(store.all()).toEqual(before)
+  })
+
   it('retains refcounted pins beyond terminal caps across checkpoints and restore', () => {
     const session = SessionManager.inMemory()
     const store = storeFor(session)
