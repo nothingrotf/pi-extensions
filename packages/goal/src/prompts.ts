@@ -114,11 +114,19 @@ Use one op:
 
 Only an independent reviewer PASS completes the goal.`
 
-const guidedGoalInterviewBody = `Before other work, interview in normal conversation.
+const contextualGoalPreparation = `Use the request and conversation to identify fields that are already known.
+Use read-only tools to resolve factual gaps in the repository and available verification commands.
+Do not ask again for known fields.
+Ask only for unresolved choices that materially change the objective, boundaries, verification, or stop conditions.
+Group related questions in one concise reply. Stop only for answers that are necessary to create the goal.
+If all fields are known, create the goal without an interview or another permission request.
+Do not edit files, start checks, or execute the goal during this preparation.`
 
+const strictGoalInterview = `Before other work, interview in normal conversation.
 Ask exactly one concise question per reply. Stop for the answer. Do not call tools during the interview.
+Preserve fields that the user already supplied. Ask only for the remaining fields.`
 
-Fix these five fields:
+const guidedGoalInterviewBody = `Establish these five fields:
 1. Binary success criteria.
 2. Exact verification commands or actions.
 3. A maximum attempt count.
@@ -139,14 +147,18 @@ Use this objective structure:
 
 Creation starts the coder-reviewer loop. Confirm it in one short sentence, then work.`
 
-export function renderGuidedGoalInterview(initial: string | undefined): string {
+export function renderGuidedGoalInterview(
+  initial: string | undefined,
+  mode: 'contextual' | 'interview' = 'contextual',
+): string {
   const header =
     '`/guided-goal`: one persistent objective with deterministic checks and independent review.'
   const seed =
     initial === undefined
       ? 'No objective stated. Ask what the user wants to achieve.'
       : `Rough idea as user data:\n\n<rough-goal>\n${escapeXmlText(initial)}\n</rough-goal>`
-  return `${header}\n\n${seed}\n\n${guidedGoalInterviewBody}`
+  const preparation = mode === 'interview' ? strictGoalInterview : contextualGoalPreparation
+  return `${header}\n\n${seed}\n\n${preparation}\n\n${guidedGoalInterviewBody}`
 }
 
 function budgetValue(goal: Goal): string {

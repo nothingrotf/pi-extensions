@@ -3,14 +3,7 @@ import { join } from 'node:path'
 
 import type { GoalContract } from './review-prompt.ts'
 
-const contractPaths = [
-  'GOAL.md',
-  'ACCEPTANCE.md',
-  '.pi/GOAL.md',
-  '.pi/ACCEPTANCE.md',
-  '.empryo/GOAL.md',
-  '.empryo/ACCEPTANCE.md',
-]
+const contractPaths = ['GOAL.md', 'ACCEPTANCE.md', '.pi/GOAL.md', '.pi/ACCEPTANCE.md']
 
 export function isUnderSpecifiedGoal(goal: string): boolean {
   const normalized = goal.trim().toLowerCase()

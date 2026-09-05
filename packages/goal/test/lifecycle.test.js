@@ -739,6 +739,22 @@ describe('goal lifecycle', () => {
       '<rough-goal>\nmake &lt;ci&gt; green\n</rough-goal>',
     )
     expect(instance.messages.at(-1).message.content).toContain('max_iterations')
+    expect(instance.messages.at(-1).message.content).toContain('Use read-only tools')
+    expect(instance.messages.at(-1).message.content).toContain('Do not ask again for known fields.')
+    expect(instance.messages.at(-1).message.content).not.toContain(
+      'Do not call tools during the interview.',
+    )
+  })
+
+  test('preserves the explicit conversation-only interview', async () => {
+    const instance = harness()
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('guided-goal', '--interview migrate the service')
+    const content = instance.messages.at(-1).message.content
+    expect(content).toContain('Do not call tools during the interview.')
+    expect(content).toContain('Ask exactly one concise question per reply.')
+    expect(content).toContain('<rough-goal>\nmigrate the service\n</rough-goal>')
+    expect(content).not.toContain('<rough-goal>\n--interview')
   })
 
   test('uses a closed schema and renders review metadata', async () => {

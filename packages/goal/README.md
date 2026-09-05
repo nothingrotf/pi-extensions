@@ -4,7 +4,7 @@
 
 The package keeps the coder active until an independent reviewer returns `PASS`. A self-reported completion only requests review.
 
-The implementation combines persistent goal state and usage accounting from oh-my-pi, explicit objective and budget control as exposed by Codex, and the independent coder-reviewer cycle from Empryo:
+The extension combines persistent goal state, usage accounting, objective and budget controls, and an independent coder-reviewer cycle:
 
 - A fresh reviewer context for each attempt.
 - Deterministic checks before reviewer judgment.
@@ -32,13 +32,23 @@ Set optional loop controls:
 /goal Ship the release --max=8 --review-model=openai/gpt-5 --review-fallback=anthropic/claude-opus-4-6 --runtime-probe
 ```
 
-Use the guided interview for unclear work:
+Use guided preparation for unclear work:
 
 ```text
 /guided-goal migrate the service
 ```
 
-The interview fixes five fields before goal creation:
+Guided preparation uses the request, conversation, and read-only repository evidence. It asks only for unresolved material choices.
+
+If all fields are known, it creates the goal without another permission request. It does not execute the goal during preparation.
+
+Use the conversation-only interview for one question per reply:
+
+```text
+/guided-goal --interview migrate the service
+```
+
+Both modes establish five fields before goal creation:
 
 1. Binary success criteria.
 2. Exact verification actions.
@@ -152,6 +162,11 @@ The queue accepts five messages per review and preserves up to 24 messages per g
 Image attachments are forwarded to the active reviewer and retained for immediate review restarts. Image data is not persisted; resend attachments after reopening a session.
 
 Slash commands remain available during review.
+
+## Goal panel
+
+The panel above the editor wraps the complete objective within the terminal width, without a trailing ellipsis.
+Resizing the terminal reflows the objective while preserving the title, usage totals, and footer actions.
 
 ## Persistence
 

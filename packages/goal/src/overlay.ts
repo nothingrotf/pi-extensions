@@ -1,6 +1,11 @@
 import type { ExtensionUIContext, Theme } from '@earendil-works/pi-coding-agent'
 import type { TUI } from '@earendil-works/pi-tui'
-import { stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
+import {
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from '@earendil-works/pi-tui'
 
 import type { GoalModeState, GoalStatus } from './state.ts'
 
@@ -101,7 +106,10 @@ function renderPanel(
   }
   const top = columns(theme.bold(theme.fg(tone, title)), theme.fg('dim', titleRight))
   const bottom = columns(theme.fg('dim', oneLine(footer)), theme.fg('dim', '/goal drop'))
-  return [top, line(theme.fg('muted', oneLine(body))), bottom, '']
+  const bodyLines = wrapTextWithAnsi(oneLine(body), innerWidth).map(
+    (text) => `${outer}${theme.fg('muted', truncateToWidth(text, innerWidth, ''))}`,
+  )
+  return [top, ...bodyLines, bottom, '']
 }
 
 export function renderGoalHudLines(
@@ -109,7 +117,7 @@ export function renderGoalHudLines(
   theme: GoalOverlayTheme,
   width: number,
 ): string[] {
-  if (state === undefined) return []
+  if (state === undefined || width < 1) return []
   const tone = panelTone(state.goal.status, state.enabled)
   const tokens = tokenLabel(state)
   const titleRight =

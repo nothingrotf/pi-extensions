@@ -1172,7 +1172,8 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
   })
 
   pi.registerCommand('guided-goal', {
-    description: 'Interview the user, then create a goal with verifiable success criteria.',
+    description:
+      'Prepare a verifiable goal from context. Use --interview for one question per reply.',
     async handler(args, ctx) {
       context = ctx
       if (isEnabled()) {
@@ -1190,7 +1191,12 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
       }
       syncToolExposure(true)
       const trimmed = args.trim()
-      const kickoff = renderGuidedGoalInterview(trimmed.length === 0 ? undefined : trimmed)
+      const interview = /^--interview(?:\s|$)/.test(trimmed)
+      const initial = interview ? trimmed.slice('--interview'.length).trim() : trimmed
+      const kickoff = renderGuidedGoalInterview(
+        initial.length === 0 ? undefined : initial,
+        interview ? 'interview' : 'contextual',
+      )
       pi.sendMessage(
         { customType: 'guided-goal-interview', content: kickoff, display: false },
         { triggerTurn: true, deliverAs: 'followUp' },

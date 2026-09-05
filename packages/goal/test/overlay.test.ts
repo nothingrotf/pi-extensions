@@ -1,4 +1,4 @@
-import { visibleWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import { renderGoalHudLines, type GoalOverlayTheme } from '../src/overlay.ts'
@@ -30,12 +30,12 @@ function state(overrides: Partial<GoalModeState['goal']> = {}): GoalModeState {
 }
 
 describe('goal editor panel', () => {
-  test('renders the Empryo goal strip geometry', () => {
+  test('renders the goal strip geometry', () => {
     const lines = renderGoalHudLines(state(), theme, 120)
     expect(lines).toHaveLength(4)
     expect(lines.at(-1)).toBe('')
     expect(lines[0]).toMatch(/^   ⟲ goal · coding 1\/5 ▾ +1\.2k\/5k tokens · 1m 05s$/)
-    expect(lines[1]).toContain('Ship the editor dock')
+    expect(lines[1]).toBe('   Ship the editor dock')
     expect(lines[2]).toContain('working toward reviewer PASS')
     expect(lines[2]).toContain('/goal drop')
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true)
@@ -54,16 +54,79 @@ describe('goal editor panel', () => {
     expect(renderGoalHudLines(stuck, theme, 80).join('\n')).toContain('Iteration cap reached.')
   })
 
-  test('sanitizes and truncates the objective', () => {
+  test('sanitizes and wraps the complete objective', () => {
     const lines = renderGoalHudLines(
       state({ objective: `Ship\u001B[31m the\u202E\u200B\n${'wide '.repeat(40)}` }),
       theme,
       56,
     )
+    expect(
+      lines
+        .slice(1, -2)
+        .map((line) => line.trim())
+        .join(' '),
+    ).toBe(`Ship the ${'wide '.repeat(40).trim()}`)
+    expect(lines.slice(1, -2).join('\n')).not.toContain('…')
     expect(lines.join('\n')).not.toContain('\u001B[31m')
     expect(lines.join('\n')).not.toContain('\u202E')
     expect(lines.join('\n')).not.toContain('\u200B')
     expect(lines.every((line) => visibleWidth(line) <= 56)).toBe(true)
+  })
+
+  test.each([40, 55, 56, 79, 80, 109, 110, 120])(
+    'wraps long objectives without moving the header or footer at width %i',
+    (width) => {
+      const objective = 'Keep the complete objective visible while working toward reviewer PASS. '
+        .repeat(5)
+        .trim()
+      const lines = renderGoalHudLines(state({ objective }), theme, width)
+      const shortLines = renderGoalHudLines(state(), theme, width)
+      const body = lines.slice(1, -2)
+      expect(body.length).toBeGreaterThan(1)
+      expect(body.map((line) => line.trim()).join(' ')).toBe(objective)
+      expect(body.every((line) => line.startsWith('   '))).toBe(true)
+      expect(body.join('\n')).not.toContain('…')
+      expect(lines[0]).toBe(shortLines[0])
+      expect(lines.slice(-2)).toEqual(shortLines.slice(-2))
+      expect(lines.every((line) => visibleWidth(line) <= width - 3)).toBe(true)
+    },
+  )
+
+  test('preserves wide Unicode and combining characters across responsive widths', () => {
+    const objective = '界語🚀e\u0301👍🏽'.repeat(30)
+    for (let width = 8; width <= 140; width += 1) {
+      const lines = renderGoalHudLines(state({ objective }), theme, width)
+      const body = lines.slice(1, -2)
+      expect(body.map((line) => line.slice(3)).join('')).toBe(objective)
+      expect(body.every((line) => line.startsWith('   '))).toBe(true)
+      expect(body.join('\n')).not.toContain('…')
+      expect(lines.every((line) => visibleWidth(line) <= width - 3)).toBe(true)
+    }
+  })
+
+  test('respects widths too narrow to display every Unicode glyph', () => {
+    for (let width = 0; width < 8; width += 1) {
+      const lines = renderGoalHudLines(state({ objective: '界🚀e\u0301'.repeat(10) }), theme, width)
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+      expect(lines.slice(1, -2).join('\n')).not.toContain('…')
+    }
+    expect(renderGoalHudLines(state(), theme, 0)).toEqual([])
+  })
+
+  test('keeps the muted color on every wrapped objective row', () => {
+    const coloredTheme: GoalOverlayTheme = {
+      ...theme,
+      fg: (color, text) => (color === 'muted' ? `\u001B[90m${text}\u001B[39m` : text),
+    }
+    const objective = 'Keep all of this objective visible in its original muted color. '
+      .repeat(4)
+      .trim()
+    const body = renderGoalHudLines(state({ objective }), coloredTheme, 56).slice(1, -2)
+    expect(body.length).toBeGreaterThan(1)
+    expect(body.every((line) => line.startsWith('   \u001B[90m'))).toBe(true)
+    expect(body.every((line) => line.endsWith('\u001B[39m'))).toBe(true)
+    expect(body.map((line) => stripTerminalSequences(line).trim()).join(' ')).toBe(objective)
+    expect(body.every((line) => visibleWidth(line) <= 53)).toBe(true)
   })
 
   test('renders nothing without a goal', () => {
