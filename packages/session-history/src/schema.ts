@@ -77,12 +77,34 @@ const ToolActivitySchema = Type.Object(
   { additionalProperties: false },
 )
 
+export const ContentReadSchema = Type.Object(
+  {
+    session_id: Type.String({ minLength: 1 }),
+    entry_id: Type.String({ minLength: 1 }),
+    block_index: Type.Optional(Type.Integer({ minimum: 0 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 16_000 })),
+    cursor: Cursor,
+    view: Type.Optional(Type.Union([Type.Literal('active'), Type.Literal('audit')])),
+    include_tool_payloads: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+)
+
+const ContentSchema = Type.Object(
+  { action: Type.Literal('content'), ...ContentReadSchema.properties },
+  { additionalProperties: false },
+)
+
+export type ContentReadInput = Static<typeof ContentReadSchema>
+
 export const SessionHistorySchema = Type.Union([
   ListSchema,
   SearchSchema,
   ReadSchema,
   TimelineSchema,
   ToolActivitySchema,
+  ContentSchema,
 ])
 
 export type SessionHistoryInput = Static<typeof SessionHistorySchema>

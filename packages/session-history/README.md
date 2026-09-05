@@ -15,6 +15,7 @@ The tool supports these actions:
 - `read` returns entries from an active branch or the full audit history.
 - `timeline` returns compact session events.
 - `tool_activity` pairs tool calls with recorded results.
+- `content` returns a character window within one normalized message or tool payload.
 
 Successful responses identify the action and include limits, pagination data, truncation status, redaction status, and skipped session counts.
 
@@ -96,6 +97,68 @@ A native assistant entry can contain several normalized blocks. Cursor paginatio
 
 History changes invalidate cursors. Current-session branch navigation also invalidates cursors, even without appended entries.
 
+## Content pagination
+
+Existing actions retain their limits and behavior. `read` also exposes a zero-based `blockIndex` for each normalized entry.
+
+Use `content` with `session_id`, `entry_id`, and the corresponding `block_index` to retrieve long content without the preview limit.
+The default block index is zero. Each content response reports `blockCount` for the native entry.
+
+```json
+{
+  "action": "content",
+  "session_id": "session-id",
+  "entry_id": "entry-id",
+  "block_index": 0,
+  "limit": 2000,
+  "include_tool_payloads": true
+}
+```
+
+`limit` defaults to 2,000 and supports 1 through 16,000 UTF-16 code units. Windows use exact string slices without ellipses.
+Offsets count UTF-16 code units, not bytes or Unicode code points. A boundary can split a surrogate pair.
+
+Use `pagination.cursor` for the next window or `pagination.previousCursor` for the previous window.
+Pass either value as `cursor`, with the original session, entry, block, limit, view, and payload options.
+Both cursor fields become `null` at their respective boundaries.
+
+Alternatively, pass a zero-based `offset` to select a window directly. Do not combine `offset` with `cursor`.
+`pagination.offset`, `end`, and `total` describe the returned half-open range and normalized content length.
+
+Each window retains the native `reference` and adds a stable `chunkReference`:
+
+```text
+pi-session://<session-id>/<entry-id>#block=<index>&version=<content-hash>&range=<start>:<end>
+```
+
+The hash identifies the normalized content revision. Identical ranges retain their references across cache eviction, store recreation, and unrelated session appends.
+Content changes invalidate content cursors and change chunk references. References do not retain historical revisions after source rewrites.
+
+The default `active` view still enforces native branch and compaction visibility. Use `view: "audit"` for entries outside active context.
+Tool payloads remain omitted unless `include_tool_payloads` is `true`. Structured redaction occurs before slicing.
+
+`sourceTruncated` reports preexisting normalization or source truncation. `payloadOmitted` distinguishes hidden payloads from paginated text.
+Pagination cannot recover source text that Pi never recorded or structured fields omitted by normalization limits.
+
+## Reusable API
+
+Import `SessionHistoryStore` independently of tool registration. `readContent()` returns a typed `ContentResponse` with the same scope, validation, redaction, and cancellation controls.
+
+```typescript
+import { SessionHistoryStore } from '@nothingrotf/session-history'
+
+const history = new SessionHistoryStore(ctx.sessionManager)
+const page = await history.readContent(
+  { session_id: sessionId, entry_id: entryId, limit: 2000 },
+  signal,
+)
+const chunk = page.data[0]
+```
+
+`execute({ action: "content", ...options })` uses the same implementation. The package exports `ContentReadInput`, `ContentResponse`, `ContentChunk`, and `ContentReadSchema`.
+
+The API reads session state without appending entries, changing branches, or rewriting session files.
+
 ## Data limits
 
 Each action limits its item count. Normalized content uses a 2,000-character item limit.
@@ -126,6 +189,9 @@ I/O uses 64 KiB batches with at most eight concurrent files. Normalization yield
 
 Cancellation stops work at these checkpoints. Parsing one JSON line and synchronous ranking remain non-preemptive.
 
+Tool-result pairing yields every 256 traversal operations and checks the request's cancellation signal and elapsed-time budget.
+Ancestor indexes keep pairing linear even when calls reuse identifiers. Same-message duplicate identities remain ambiguous.
+
 ## Work limits
 
 Successful responses publish work limits under `limits.work`.
@@ -140,6 +206,8 @@ Successful responses publish work limits under `limits.work`.
 | Cooperative elapsed-time budget                | 10 seconds |
 
 Search, timeline, and tool activity report capped session coverage through `omittedSessions` and `truncated`.
+
+Pairing uses a separate request-wide counter with the same 100,000-entry limit across all selected sessions.
 
 Other exhausted budgets throw `WORK_LIMIT_EXCEEDED` instead of returning apparently complete results. Oversized directories or files can therefore reject a request during discovery.
 
@@ -158,6 +226,9 @@ SESSION_HISTORY_HEAP=1 bun run --cwd packages/session-history test -- test/heap.
 ```
 
 The retrieval evaluation checks 30 labeled queries against 3,000 entries. The pairing evaluation compares 10,000 calls against the previous linear-scan strategy.
+
+Repeated-ID regressions cover 256, 512, and 1,024 sequential calls, sibling branches, and 1,024 same-message duplicates with 1,024 results.
+They also verify cancellation during indexing and ancestry traversal, plus cumulative pairing budgets.
 
 The quality corpus includes eight retrieval labels, 36 structured-secret cases, and 20 ordinary-field controls.
 

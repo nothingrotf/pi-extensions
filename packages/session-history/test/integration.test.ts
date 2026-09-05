@@ -898,6 +898,30 @@ describe('session history integration', () => {
     )
   })
 
+  it('addresses assistant blocks separately and redacts before content pagination', async () => {
+    const state = await fixture()
+    const store = new SessionHistoryStore(state.current)
+    const input = {
+      session_id: 'prior-session',
+      entry_id: 'assistant-entry',
+      include_tool_payloads: true,
+      limit: 10,
+    }
+    const thought = await store.readContent(input)
+    const text = await store.readContent({ ...input, block_index: 1 })
+    let call = await store.readContent({ ...input, block_index: 2 })
+    expect(thought.data[0].blockCount).toBe(5)
+    expect(thought.data[0].chunkReference).not.toBe(text.data[0].chunkReference)
+    expect(thought.data[0].reference).toBe(text.data[0].reference)
+    let content = call.data[0].content
+    while (call.pagination.cursor !== null) {
+      call = await store.readContent({ ...input, block_index: 2, cursor: call.pagination.cursor })
+      content += call.data[0].content
+      expect(call.redacted).toBe(true)
+    }
+    expect(content).toBe('{"command":"bun test","token":"[REDACTED]"}')
+  })
+
   it('advances after all blocks of the anchor entry', async () => {
     const state = await fixture()
     const result = await new SessionHistoryStore(state.current).execute({

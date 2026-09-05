@@ -38,7 +38,7 @@ export default function sessionHistory(pi: ExtensionAPI): void {
     name: 'session_history',
     label: 'Session history',
     description:
-      'List, search, read, and audit Pi sessions from the current project. Results use stable logical references and never expose physical session paths.',
+      'List, search, read, and audit Pi sessions from the current project. Use content to page through a long message or tool result by entry_id and block_index. Results use stable logical references and never expose physical session paths.',
     promptSnippet: 'Inspect project-scoped Pi session history',
     promptGuidelines: [
       'Use session_history to find evidence in prior or current Pi sessions.',
@@ -102,5 +102,8 @@ export default function sessionHistory(pi: ExtensionAPI): void {
   })
 }
 
-export { SessionHistorySchema } from './schema.ts'
-export { SessionHistoryStore } from './sessions.ts'
+export { ContentReadSchema, SessionHistorySchema } from './schema.ts'
+export type { ContentReadInput, SessionHistoryInput } from './schema.ts'
+export type { ContentChunk } from './content.ts'
+export { HistoryError, SessionHistoryStore } from './sessions.ts'
+export type { ContentResponse, HistoryResponse } from './sessions.ts'

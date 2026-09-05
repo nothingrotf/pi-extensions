@@ -46,6 +46,7 @@ export interface NormalizedEntry {
   source: EntrySource
   branchState: 'active' | 'abandoned'
   reference: string
+  blockIndex?: number
   truncated: boolean
   redacted: boolean
   toolCallId: string | null
@@ -165,6 +166,7 @@ function baseEntry(
     source,
     branchState: activeIds.has(entry.id) ? 'active' : 'abandoned',
     reference: entryReference(sessionId, entry.id),
+    blockIndex: 0,
     truncated: limited.truncated || options.truncated === true,
     redacted: options.redacted ?? false,
     toolCallId: options.toolCallId ?? null,
@@ -284,7 +286,7 @@ export function normalizeEntry(
           )
         }
       }
-      return normalized
+      return normalized.map((block, blockIndex) => ({ ...block, blockIndex }))
     }
     return [
       baseEntry(entry, sessionId, activeIds, '[unsupported message role]', 'session_event', role),

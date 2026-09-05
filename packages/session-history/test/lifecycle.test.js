@@ -88,6 +88,43 @@ describe('session history lifecycle', () => {
     }
   })
 
+  it('pages long content through the registered tool', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'history-content-tool-'))
+    try {
+      const manager = SessionManager.create(cwd, join(cwd, 'sessions'))
+      const entry_id = manager.appendMessage({
+        role: 'user',
+        content: 'x'.repeat(5_000),
+        timestamp: 1,
+      })
+      const tool = harness()
+      const input = { action: 'content', session_id: manager.getSessionId(), entry_id }
+      const first = await tool.execute('first', input, undefined, undefined, {
+        sessionManager: manager,
+      })
+      expect(JSON.parse(first.content[0].text)).toEqual(first.details)
+      expect(first.details.data[0].content).toHaveLength(2_000)
+      const second = await tool.execute(
+        'second',
+        { ...input, cursor: first.details.pagination.cursor },
+        undefined,
+        undefined,
+        { sessionManager: manager },
+      )
+      expect(second.details.pagination.offset).toBe(2_000)
+      const previous = await tool.execute(
+        'previous',
+        { ...input, cursor: second.details.pagination.previousCursor },
+        undefined,
+        undefined,
+        { sessionManager: manager },
+      )
+      expect(previous).toEqual(first)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('throws scoped errors so Pi records failed tool execution', async () => {
     const manager = SessionManager.inMemory('/missing-session-history-project')
     await expect(
@@ -135,13 +172,14 @@ describe('session history lifecycle', () => {
     const tool = harness()
 
     expect(tool.name).toBe('session_history')
-    expect(tool.parameters.anyOf).toHaveLength(5)
+    expect(tool.parameters.anyOf).toHaveLength(6)
     expect(tool.parameters.anyOf.map((schema) => schema.properties.action.const)).toEqual([
       'list',
       'search',
       'read',
       'timeline',
       'tool_activity',
+      'content',
     ])
   })
 })

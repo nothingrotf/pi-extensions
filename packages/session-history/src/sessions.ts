@@ -8,13 +8,15 @@ import {
   type SessionInfo,
   type SessionManager,
 } from '@earendil-works/pi-coding-agent'
+import { Value } from 'typebox/value'
 
+import { contentWindow, type ContentChunk, type ContentWindow } from './content.ts'
 import { SessionDiscovery } from './discovery.ts'
 import { limitNormalizedEntries, normalizeEntries, type NormalizedEntry } from './normalize.ts'
-import { decodeCursor, fingerprint, paginate } from './pagination.ts'
+import { decodeCursor, fingerprint, InvalidCursorError, paginate } from './pagination.ts'
 import { sessionReference } from './references.ts'
 import { invalidRelationships } from './relationships.ts'
-import type { SessionHistoryInput } from './schema.ts'
+import { ContentReadSchema, type ContentReadInput, type SessionHistoryInput } from './schema.ts'
 import { canonicalPath, filterProjectSessions } from './scope.ts'
 import { type SearchFilters, searchSessions } from './search.ts'
 import { fileVersion, SessionChangedError } from './session-file.ts'
@@ -96,6 +98,12 @@ export interface HistoryResponse {
   skippedSessions: number
   omittedSessions: number
   data: readonly object[]
+}
+
+export interface ContentResponse extends HistoryResponse {
+  action: 'content'
+  data: readonly [ContentChunk]
+  pagination: ContentWindow['pagination']
 }
 
 export class HistoryError extends Error {
@@ -482,6 +490,10 @@ export class SessionHistoryStore {
 
   async execute(input: SessionHistoryInput, signal?: AbortSignal): Promise<HistoryResponse> {
     signal?.throwIfAborted()
+    if (input.action === 'content') {
+      const { action: _action, ...options } = input
+      return this.readContent(options, signal)
+    }
     const work = new HistoryWork(signal)
     const records = await this.records(work)
     work.check()
@@ -490,6 +502,58 @@ export class SessionHistoryStore {
     if (input.action === 'read') return this.read(records, input, work)
     if (input.action === 'timeline') return this.timeline(records, input, work)
     return this.toolActivity(records, input, work)
+  }
+
+  async readContent(input: ContentReadInput, signal?: AbortSignal): Promise<ContentResponse> {
+    signal?.throwIfAborted()
+    if (
+      !Value.Check(ContentReadSchema, input) ||
+      (input.cursor !== undefined && input.offset !== undefined)
+    ) {
+      throw new HistoryError(
+        'INVALID_QUERY',
+        'Use valid content options and either cursor or offset, not both.',
+      )
+    }
+    const work = new HistoryWork(signal)
+    const records = await this.records(work)
+    const record = this.visibleRecord(records, input.session_id)
+    const loaded = await this.load(record, work)
+    const visible = input.view === 'audit' ? loaded.normalizedAudit : loaded.normalizedActive
+    if (!visible.some((entry) => entry.id === input.entry_id)) {
+      throw new HistoryError('ENTRY_NOT_FOUND', 'The entry was not found in the selected view.')
+    }
+    const blocks = loaded.searchEntries.filter((entry) => entry.id === input.entry_id)
+    const blockIndex = input.block_index ?? 0
+    const entry = blocks[blockIndex]
+    if (entry === undefined) {
+      throw new HistoryError('ENTRY_NOT_FOUND', 'The content block was not found.')
+    }
+    work.check()
+    let window
+    try {
+      window = contentWindow(entry, blockIndex, blocks.length, input)
+    } catch (error) {
+      if (error instanceof InvalidCursorError) {
+        throw new HistoryError('INVALID_CURSOR', error.message)
+      }
+      throw error
+    }
+    const result = response(
+      'content',
+      1,
+      {
+        nextCursor: window.pagination.cursor,
+        offset: window.pagination.offset,
+        total: window.pagination.total,
+      },
+      [window.chunk],
+      [window.chunk],
+      this.malformedSessionCount,
+    )
+    result.limits.itemCharacterLimit = input.limit ?? 2_000
+    work.check()
+    return { ...result, action: 'content', data: [window.chunk], pagination: window.pagination }
   }
 
   private list(
@@ -808,7 +872,7 @@ export class SessionHistoryStore {
       try {
         const loaded = await this.load(record, work)
         const calls = loaded.normalizedAudit.filter((entry) => entry.source === 'tool_call')
-        const paired = pairToolResults(loaded.normalizedAudit)
+        const paired = await pairToolResults(loaded.normalizedAudit, work)
         for (const call of calls) {
           if (input.tool_names !== undefined && !input.tool_names.includes(call.toolName ?? ''))
             continue

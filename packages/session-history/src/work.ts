@@ -20,12 +20,17 @@ export class WorkLimitError extends Error {
 export class HistoryWork {
   private bytes = 0
   private entries = 0
+  private pairingEntries = 0
   private readonly started = performance.now()
 
   constructor(readonly signal?: AbortSignal) {}
 
   usage() {
-    return { bytesRead: this.bytes, visitedEntries: this.entries }
+    return {
+      bytesRead: this.bytes,
+      visitedEntries: this.entries,
+      pairedEntries: this.pairingEntries,
+    }
   }
 
   check(): void {
@@ -43,6 +48,12 @@ export class HistoryWork {
     this.check()
     this.entries += entries
     if (this.entries > historyLimits.entries) throw new WorkLimitError()
+  }
+
+  pair(entries: number): void {
+    this.check()
+    this.pairingEntries += entries
+    if (this.pairingEntries > historyLimits.entries) throw new WorkLimitError()
   }
 
   async yield(): Promise<void> {
