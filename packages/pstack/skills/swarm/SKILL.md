@@ -27,9 +27,11 @@ Use `todo_write` to create one item per phase before you launch anything.
 
 ## Phase B: Fan out
 
+Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch. Set `Task.role` to `swarm workers`. Pass `capability_profile: "pstack-leaf"` for leaves or `pstack-nested` for owners whose workflow requires delegation.
+
 Spawn all N workers in one message with parallel `Task` calls. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
 
-Use `readonly: true` for static analysis. A worker that runs shell verification must be mutable and isolated. Keep its incidental patch unjoined unless the parent accepts it.
+Use `readonly: true` for static analysis. A worker that runs shell verification must be mutable with `isolation: { mode: "worktree", integration: "manual" }`. Never join its incidental patch. Keep repository writers separate from runtime verifiers.
 
 Every brief stands alone. Include the goal, scope, exact slice or race arm, verification method, and report contract. Require `outputSchema` with `schemaMode: "strict"`. The schema contains `status` with `PASS`, `ISSUES`, or `BLOCKED`, plus `summary`, `evidence`, and `gaps`. Require an output artifact and status, schema-valid, artifact-present, and `/status` membership gates.
 

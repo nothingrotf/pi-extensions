@@ -14,6 +14,7 @@ import { Value } from 'typebox/value'
 import { SubagentResolver, type SubagentDefinition } from './agents.ts'
 import {
   CapabilityRegistry,
+  isCapabilitySubset,
   type CapabilityProfile,
   type CapabilityRegistration,
   type ResolvedCapabilities,
@@ -75,6 +76,7 @@ import {
 } from './roles.ts'
 import type {
   ArtifactRef,
+  CapabilityContract,
   ContextState,
   CoordinationRunState,
   Effort,
@@ -89,7 +91,7 @@ import type {
   TaskInput,
   WorkspaceLifecycle,
 } from './schema.ts'
-import { decodeSingleTaskInput, SingleTaskInputSchema } from './schema.ts'
+import { decodeSingleTaskInput, SingleTaskInputSchema, TaskRoleSchema } from './schema.ts'
 import { StateStore } from './state.ts'
 import {
   createRootWorkspaceContext,
@@ -175,6 +177,7 @@ export interface SubagentSnapshot {
   background: boolean
   output: string | undefined
   readonly: boolean
+  role?: string | undefined
   retryFailure: RetryFailure | undefined
   retryState: RetryState | undefined
   running: boolean
@@ -192,6 +195,40 @@ export interface TaskReceipt {
   revision: number
   status: 'running'
   transcriptPath: string
+}
+
+export type ChildToolEvent =
+  | {
+      agentId: string
+      args: unknown
+      cwd: string
+      status: 'pending'
+      toolCallId: string
+      toolName: string
+    }
+  | {
+      agentId: string
+      cwd: string
+      output: string
+      status: 'error' | 'ok'
+      toolCallId: string
+      toolName: string
+    }
+
+const ToolResultContentSchema = Type.Object({
+  content: Type.Array(
+    Type.Union([
+      Type.Object({ text: Type.String(), type: Type.Literal('text') }),
+      Type.Object({ type: Type.String() }),
+    ]),
+  ),
+})
+
+function toolResultText<Result>(result: Result): string {
+  if (!Value.Check(ToolResultContentSchema, result)) return ''
+  return result.content
+    .flatMap((block) => ('text' in block && block.type === 'text' ? [block.text] : []))
+    .join('\n')
 }
 
 export interface SteerReceipt {
@@ -224,6 +261,7 @@ export interface JoinReceipt {
 }
 
 export interface SubagentResult {
+  role?: string | undefined
   agentId: string
   artifact: ArtifactRef | undefined
   error: string | undefined
@@ -277,6 +315,7 @@ export interface SubagentController {
 }
 
 interface NestedAttenuation {
+  capability: CapabilityContract
   logicalWorkspaceRoot: string
   physicalWorkspaceRoot: string
   readonly: boolean
@@ -296,6 +335,7 @@ interface ResolvedExecution {
 }
 
 export interface RuntimeCompletedDetails {
+  role?: string | undefined
   agentId: string
   artifact: ArtifactRef
   durationMs: number
@@ -317,6 +357,7 @@ export interface RuntimeCompletedDetails {
 
 export interface RuntimeBackgroundResult {
   details: {
+    role?: string | undefined
     agentId: string
     createdAt: number
     effort: Effort
@@ -336,6 +377,8 @@ export interface RuntimeCompletedResult {
 }
 
 export interface RuntimeFailedDetails {
+  role?: string | undefined
+  model?: string | undefined
   agentId?: string
   artifact?: ArtifactRef
   error: string
@@ -522,6 +565,7 @@ export class SubagentRuntime {
   private readonly capabilities = new CapabilityRegistry()
   private readonly leases = new Set<string>()
   private readonly listeners = new Set<() => void>()
+  private readonly toolListeners = new Set<(event: ChildToolEvent) => void>()
   private ownerGeneration = 0
   private revision = 0
   private runGeneration = 0
@@ -568,6 +612,10 @@ export class SubagentRuntime {
     this.capabilities.registerCapability(registration)
   }
 
+  registerCapabilities(registrations: readonly CapabilityRegistration[]): void {
+    this.capabilities.registerCapabilities(registrations)
+  }
+
   registerCapabilityProfile(profile: CapabilityProfile): void {
     this.capabilities.registerProfile(profile)
   }
@@ -583,6 +631,11 @@ export class SubagentRuntime {
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  subscribeChildTools(listener: (event: ChildToolEvent) => void): () => void {
+    this.toolListeners.add(listener)
+    return () => this.toolListeners.delete(listener)
   }
 
   hasActiveRun(): boolean {
@@ -689,6 +742,7 @@ export class SubagentRuntime {
       isolation: active?.isolationReceipt ?? record.isolation,
       lastActivity: active?.lastActivity,
       model: record.model,
+      role: record.role,
       background: record.background,
       output: record.output,
       readonly: record.readonly,
@@ -1007,7 +1061,7 @@ export class SubagentRuntime {
     parentEffectiveCwd: string
     parentReadonly: boolean
     parentTools: readonly string[]
-    profileId: string | undefined
+    parentCapability: CapabilityContract
     rootAgentId: string | undefined
     runId: string
   }): InlineExtension | undefined {
@@ -1022,12 +1076,12 @@ export class SubagentRuntime {
             }
             const input = decodeSingleTaskInput(rawInput)
             if (
-              input.capability_profile !== undefined &&
-              input.capability_profile !== options.profileId
+              input.capability_profile === undefined &&
+              input.resume === undefined &&
+              options.parentCapability.profileId !== undefined
             ) {
-              throw new Error('A nested Task cannot expand its parent capability profile.')
+              input.capability_profile = options.parentCapability.profileId
             }
-            if (options.profileId !== undefined) input.capability_profile = options.profileId
             if (options.parentReadonly && input.readonly === false) {
               throw new Error('A nested Task cannot remove its parent read-only policy.')
             }
@@ -1041,6 +1095,7 @@ export class SubagentRuntime {
             }
             const startOptions: StartOptions = {
               attenuation: {
+                capability: options.parentCapability,
                 logicalWorkspaceRoot: parentWorkspace.logicalCwd,
                 physicalWorkspaceRoot: parentWorkspace.physicalRoot,
                 readonly: options.parentReadonly,
@@ -1304,7 +1359,12 @@ export class SubagentRuntime {
     } catch (error) {
       if (error instanceof ChildSessionError) {
         return {
-          details: { agentId: error.agentId, error: error.message, status: 'error' },
+          details: {
+            agentId: error.agentId,
+            error: error.message,
+            role: options.input.role,
+            status: 'error',
+          },
           kind: 'failed',
           outcome: 'failed',
         }
@@ -1313,13 +1373,19 @@ export class SubagentRuntime {
       const record = resume === undefined ? undefined : this.state.get(resume)
       if (record !== undefined && record.ownerSessionId === this.state.owner) {
         return {
-          details: { agentId: record.agentId, error: errorMessage(error), status: 'error' },
+          details: {
+            agentId: record.agentId,
+            error: errorMessage(error),
+            model: record.model,
+            role: record.role,
+            status: 'error',
+          },
           kind: 'failed',
           outcome: 'failed',
         }
       }
       return {
-        details: { error: errorMessage(error), status: 'error' },
+        details: { error: errorMessage(error), role: options.input.role, status: 'error' },
         kind: 'failed',
         outcome: 'failed',
       }
@@ -1476,9 +1542,10 @@ export class SubagentRuntime {
           isolation.context.relativeCwd,
         )
       }
-      const nestedPolicy = contract.capability?.nested
+      const capability = contract.capability
+      const nestedPolicy = capability?.nested
       const nestedExtension =
-        nestedPolicy?.enabled === true
+        capability !== undefined && nestedPolicy?.enabled === true
           ? this.nestedExtension({
               currentDepth: depth,
               maxDepth: nestedPolicy.maxDepth,
@@ -1486,7 +1553,7 @@ export class SubagentRuntime {
               parentEffectiveCwd: effectiveCwd,
               parentReadonly: contract.readonly,
               parentTools: contract.tools,
-              profileId: contract.capability?.profileId,
+              parentCapability: capability,
               rootAgentId: prior?.rootAgentId ?? options.rootAgentId,
               runId,
             })
@@ -1498,6 +1565,7 @@ export class SubagentRuntime {
       session = await createChildSession({
         ctx: options.ctx,
         cwd: effectiveCwd,
+        sourceCwd: contract.logicalCwd,
         description,
         extensions,
         intercom: {
@@ -1592,6 +1660,7 @@ export class SubagentRuntime {
         subagentType: input.subagent_type,
         updatedAt: now,
       }
+      if (contract.role !== undefined) record.role = contract.role
       if (prior?.parentAgentId !== undefined) record.parentAgentId = prior.parentAgentId
       else if (options.parentAgentId !== undefined) record.parentAgentId = options.parentAgentId
       if (prior?.isolation !== undefined) record.isolation = prior.isolation
@@ -1694,6 +1763,7 @@ export class SubagentRuntime {
         fast: model.fast,
         handle: { ...active.handle },
         model: model.modelRef,
+        role: record.role,
         status: 'background',
         transcriptPath: record.sessionFile,
       },
@@ -1732,6 +1802,7 @@ export class SubagentRuntime {
     runtime: Awaited<ReturnType<typeof createChildModelRuntime>>,
     attenuation: NestedAttenuation | undefined,
   ): Promise<ResolvedExecution> {
+    if (input.role !== undefined) Value.Decode(TaskRoleSchema, input.role)
     if (prior?.execution !== undefined) {
       const priorExecution = prior.execution
       const contract: ExecutionContractV3 =
@@ -1756,6 +1827,10 @@ export class SubagentRuntime {
                 version: 3,
               }
             : { ...priorExecution }
+      if (prior.role !== undefined) contract.role = prior.role
+      if (input.role !== undefined && input.role !== contract.role) {
+        throw new Error('A resumed Task must preserve the original role.')
+      }
       validateOutputPolicy(contract)
       if (attenuation !== undefined) {
         const allowedTools = new Set(attenuation.tools)
@@ -1788,6 +1863,12 @@ export class SubagentRuntime {
         contract.capability === undefined
           ? this.capabilities.resolve(undefined, contract.readonly)
           : this.capabilities.resolveContract(contract.capability, contract.readonly)
+      if (
+        attenuation !== undefined &&
+        !isCapabilitySubset(capabilities.contract, attenuation.capability)
+      ) {
+        throw new Error('A nested resume cannot expand its parent capability profile.')
+      }
       if (
         input.capability_profile !== undefined &&
         input.capability_profile !== contract.capability?.profileId
@@ -1834,6 +1915,7 @@ export class SubagentRuntime {
           { name: contract.agentName, tools: contract.tools },
           input.tools,
           contract.readonly,
+          capabilities.tools,
         )
         if (
           tools.length !== contract.tools.length ||
@@ -1890,25 +1972,30 @@ export class SubagentRuntime {
       discovered === undefined ? await loadRolePrompt(role) : discovered.systemPrompt
     const selector = input.model ?? role.model
     const model = resolveModel(selector, role, ctx, runtime)
-    let baseTools = resolveTools(role, input.tools, readonly)
+    const capabilities = this.capabilities.resolve(
+      input.capability_profile ?? discovered?.capabilityProfile,
+      readonly,
+    )
+    if (
+      attenuation !== undefined &&
+      !isCapabilitySubset(capabilities.contract, attenuation.capability)
+    ) {
+      throw new Error('A nested Task cannot expand its parent capability profile.')
+    }
+    const toolPolicy =
+      discovered === undefined && role.tools !== undefined
+        ? { ...role, tools: [...role.tools, ...capabilities.tools] }
+        : role
+    let tools = resolveTools(toolPolicy, input.tools, readonly, capabilities.tools)
     if (attenuation !== undefined) {
       const allowedTools = new Set(attenuation.tools)
       if (input.tools?.some((tool) => !allowedTools.has(tool)) === true) {
         throw new Error('A nested Task cannot request a tool outside its parent contract.')
       }
-      baseTools = baseTools.filter((tool) => allowedTools.has(tool))
-    }
-    const capabilities = this.capabilities.resolve(input.capability_profile, readonly)
-    const names = new Set(baseTools)
-    for (const tool of capabilities.tools) {
-      if (names.has(tool))
-        throw new Error(`Capability tool "${tool}" conflicts with an existing tool.`)
-      names.add(tool)
-    }
-    const tools = [...baseTools, ...capabilities.tools]
-    const parentTools = attenuation === undefined ? undefined : new Set(attenuation.tools)
-    if (parentTools !== undefined && tools.some((tool) => !parentTools.has(tool))) {
-      throw new Error('A nested Task capability exceeds its parent tool contract.')
+      if (tools.some((tool) => capabilities.tools.includes(tool) && !allowedTools.has(tool))) {
+        throw new Error('A nested Task capability exceeds its parent tool contract.')
+      }
+      tools = tools.filter((tool) => allowedTools.has(tool))
     }
     const contract: ExecutionContractV3 = {
       agentDescription: discovered?.description ?? input.subagent_type,
@@ -1935,6 +2022,7 @@ export class SubagentRuntime {
         mode: 'worktree',
       }
     }
+    if (input.role !== undefined) contract.role = input.role
     if (input.outputSchema !== undefined) contract.outputSchema = input.outputSchema
     validateOutputPolicy(contract)
     return { capabilities, contract, model, role }
@@ -2367,6 +2455,24 @@ export class SubagentRuntime {
               active.cwd,
             )
           : event.toolName.charAt(0).toUpperCase() + event.toolName.slice(1)
+        this.emitChildTool({
+          agentId: record.agentId,
+          args: event.args,
+          cwd: active.cwd,
+          status: 'pending',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        })
+      }
+      if (event.type === 'tool_execution_end') {
+        this.emitChildTool({
+          agentId: record.agentId,
+          cwd: active.cwd,
+          output: toolResultText(event.result),
+          status: event.isError ? 'error' : 'ok',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        })
       }
       if (event.type === 'message_update' && event.message.role === 'assistant') {
         active.partialMessage = event.message
@@ -2413,7 +2519,7 @@ export class SubagentRuntime {
       if (active.abortReason !== undefined) throw new Error(active.abortReason)
 
       const text = finalText(active.messages)
-      const fullOutput = text.length === 0 ? 'The child completed without text output.' : text
+      const fullOutput = text.length === 0 ? 'The child produced no text output.' : text
       const output = truncateOutput(fullOutput)
       const failure = stopError(active.messages.at(-1))
       const terminalStatus =
@@ -2585,6 +2691,7 @@ export class SubagentRuntime {
           intercomUsage: active.intercomUsage,
           isolation: active.isolationReceipt,
           model: actualModel(active.messages, model.modelRef),
+          role: record.role,
           runId: record.runId ?? record.agentId,
           status: 'completed',
           toolCallCount: active.metrics.toolCalls,
@@ -2677,6 +2784,8 @@ export class SubagentRuntime {
         }
       }
     }
+    finalResult.details.role = record.role
+    if (finalResult.kind === 'failed') finalResult.details.model ??= record.model
     active.parentScopeCompletion?.resolve(finalResult)
     this.cleanupRun(record, active)
     return finalResult
@@ -2712,6 +2821,7 @@ export class SubagentRuntime {
       intercomUsage: { ...(record.intercomUsage ?? emptyUsage(0)) },
       isolation: record.isolation === undefined ? undefined : structuredClone(record.isolation),
       model: record.model,
+      role: record.role,
       output: record.output,
       status: record.status,
       structuredOutput:
@@ -2728,6 +2838,14 @@ export class SubagentRuntime {
     for (const listener of this.listeners) {
       try {
         listener()
+      } catch {}
+    }
+  }
+
+  private emitChildTool(event: ChildToolEvent): void {
+    for (const listener of this.toolListeners) {
+      try {
+        listener(event)
       } catch {}
     }
   }
@@ -2780,6 +2898,8 @@ export class SubagentRuntime {
       error,
       finalMessage: output,
       isolation: active.isolationReceipt,
+      model: record.model,
+      role: record.role,
       runId: record.runId ?? record.agentId,
       status: 'error',
       taskId: record.itemId ?? 'task',
@@ -2804,6 +2924,8 @@ export class SubagentRuntime {
       status,
       taskId: record.agentId,
       title: record.description,
+      role: record.role,
+      model: record.model,
     }
     if (record.ownerSessionId !== this.state.owner) return
     this.deliveries.enqueue({

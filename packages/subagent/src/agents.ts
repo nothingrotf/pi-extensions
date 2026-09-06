@@ -12,6 +12,7 @@ const MAX_AGENT_FILE_BYTES = 256 * 1024
 
 const AgentMetadataSchema = Type.Object(
   {
+    capabilityProfile: Type.Optional(Type.String({ minLength: 1 })),
     description: Type.String({ maxLength: 512, minLength: 1 }),
     effort: Type.Optional(EffortSchema),
     is_background: Type.Optional(Type.Boolean()),
@@ -29,6 +30,7 @@ const AgentMetadataSchema = Type.Object(
 
 const RegisteredAgentSchema = Type.Object(
   {
+    capabilityProfile: Type.Optional(Type.String({ minLength: 1 })),
     description: Type.String({ maxLength: 512, minLength: 1 }),
     effort: Type.Optional(EffortSchema),
     is_background: Type.Optional(Type.Boolean()),
@@ -58,6 +60,7 @@ export type AgentSource =
   | { kind: 'user'; path: string }
 
 export interface SubagentDefinition {
+  capabilityProfile?: string
   description: string
   effort?: Effort
   is_background?: boolean
@@ -120,6 +123,7 @@ function parseAgentFile(
   const systemPrompt = parsed.body.trim()
   if (systemPrompt.length === 0) throw new Error(`Agent file has no prompt body: ${path}`)
   const input: SubagentDefinition = { description: metadata.description, name, systemPrompt }
+  if (metadata.capabilityProfile !== undefined) input.capabilityProfile = metadata.capabilityProfile
   if (metadata.effort !== undefined) input.effort = metadata.effort
   if (metadata.is_background !== undefined) input.is_background = metadata.is_background
   if (metadata.model !== undefined) input.model = metadata.model

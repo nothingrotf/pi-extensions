@@ -11,13 +11,13 @@ import {
 import { Value } from 'typebox/value'
 
 import { contentWindow, type ContentChunk, type ContentWindow } from './content.ts'
-import { SessionDiscovery } from './discovery.ts'
+import { SessionDiscovery, type SessionIdentity } from './discovery.ts'
 import { limitNormalizedEntries, normalizeEntries, type NormalizedEntry } from './normalize.ts'
 import { decodeCursor, fingerprint, InvalidCursorError, paginate } from './pagination.ts'
 import { sessionReference } from './references.ts'
-import { invalidRelationships } from './relationships.ts'
+import { invalidRelationships, linkedProjectSessions } from './relationships.ts'
 import { ContentReadSchema, type ContentReadInput, type SessionHistoryInput } from './schema.ts'
-import { canonicalPath, filterProjectSessions } from './scope.ts'
+import { canonicalPath, filterManagedWorktreeSessions, filterProjectSessions } from './scope.ts'
 import { type SearchFilters, searchSessions } from './search.ts'
 import { fileVersion, SessionChangedError } from './session-file.ts'
 import { readSnapshot, SnapshotError } from './snapshot.ts'
@@ -28,17 +28,44 @@ const maximumCachedBytes = 16 * 1024 * 1024
 
 interface SessionRecord {
   id: string
-  name: string
   path: string
   cwd: string
   created: string
-  modified: string
   fileVersion: string
+  metadata?: SessionMetadata
+  withinExpansionLimit?: boolean
+  parentId: string | null
+  isChild: boolean
+}
+
+interface SessionMetadata {
+  name: string
+  modified: string
   messageCount: number
   firstMessage: string
   firstMessageTruncated: boolean
-  parentId: string | null
-  isChild: boolean
+}
+
+interface DiscoverySelection {
+  ids: readonly string[]
+  children?: boolean
+  metadata?: boolean
+}
+
+function sessionMetadata(info: SessionInfo): SessionMetadata {
+  return {
+    name: info.name ?? 'Untitled session',
+    modified: info.modified.toISOString(),
+    messageCount: info.messageCount,
+    firstMessage: info.firstMessage.slice(0, 240),
+    firstMessageTruncated: info.firstMessage.length > 240,
+  }
+}
+
+function metadata(record: SessionRecord): SessionMetadata {
+  if (record.metadata === undefined)
+    throw new HistoryError('MALFORMED_SESSION', 'Session metadata has not been loaded.')
+  return record.metadata
 }
 
 type CurrentSessionManager = Pick<
@@ -124,7 +151,7 @@ export class HistoryError extends Error {
 }
 
 async function parentIdFor(
-  info: SessionInfo,
+  info: SessionIdentity,
   idsByPath: ReadonlyMap<string, string>,
 ): Promise<string | null> {
   if (info.parentSessionPath === undefined) return null
@@ -202,7 +229,10 @@ export class SessionHistoryStore {
     return this.current === current
   }
 
-  private async records(work: HistoryWork): Promise<SessionRecord[]> {
+  private async records(
+    work: HistoryWork,
+    selection?: DiscoverySelection,
+  ): Promise<SessionRecord[]> {
     const cwd = this.current.getCwd()
     const directory =
       this.current.getSessionDir() ||
@@ -213,7 +243,8 @@ export class SessionHistoryStore {
           .replace(/^[/\\\\]/, '')
           .replace(/[/\\\\:]/g, '-')}--`,
       )
-    const candidates: SessionInfo[] = []
+    const candidates: SessionIdentity[] = []
+    const metadataByPath = new Map<string, SessionMetadata>()
     const malformed: { id: string; cwd: string }[] = []
     const versions = new Map<string, string>()
     this.malformedSessionCount = 0
@@ -223,9 +254,14 @@ export class SessionHistoryStore {
       const inspected = await Promise.allSettled(
         batch.map(async (path) => {
           const stats = await this.inspectFile(path)
-          const info = await this.discovery.info(path, stats, work, (session) => {
-            if (path !== this.current.getSessionFile()) malformed.push(session)
-          })
+          let info: SessionIdentity | null
+          if (selection === undefined) {
+            const full = await this.discovery.info(path, stats, work, (session) => {
+              if (path !== this.current.getSessionFile()) malformed.push(session)
+            })
+            if (full !== null) metadataByPath.set(path, sessionMetadata(full))
+            info = full
+          } else info = await this.discovery.identity(path, stats, work)
           return { info, version: fileVersion(stats) }
         }),
       )
@@ -245,7 +281,16 @@ export class SessionHistoryStore {
     this.malformedFileSessionIds = new Set(
       (await filterProjectSessions(malformed, cwd)).map((session) => session.id),
     )
-    const scoped = await filterProjectSessions(candidates, cwd)
+    const projectSessions = await filterProjectSessions(candidates, cwd)
+    const projectSet = new Set(projectSessions)
+    const projectIds = new Set(projectSessions.map((session) => session.id))
+    projectIds.add(this.current.getSessionId())
+    const worktreeSessions = await filterManagedWorktreeSessions(
+      candidates.filter((session) => !projectSet.has(session)),
+      cwd,
+      work.signal,
+    )
+    const scoped = [...projectSessions, ...worktreeSessions]
     const idsByPath = new Map<string, string>()
     for (const info of scoped) idsByPath.set(await canonicalPath(info.path), info.id)
     const currentFile = this.current.getSessionFile()
@@ -257,23 +302,21 @@ export class SessionHistoryStore {
         const version = versions.get(info.path)
         if (version === undefined) return null
         const parentId = await parentIdFor(info, idsByPath)
-        return {
+        const record: SessionRecord = {
           id: info.id,
-          name: info.name ?? 'Untitled session',
           path: info.path,
           cwd: info.cwd,
           created: info.created.toISOString(),
-          modified: info.modified.toISOString(),
           fileVersion: version,
-          messageCount: info.messageCount,
-          firstMessage: info.firstMessage.slice(0, 240),
-          firstMessageTruncated: info.firstMessage.length > 240,
           parentId,
           isChild: info.parentSessionPath !== undefined,
         }
+        const details = metadataByPath.get(info.path)
+        if (details !== undefined) record.metadata = details
+        return record
       }),
     )
-    const records = inspected.filter((record) => record !== null)
+    const records: SessionRecord[] = inspected.filter((record) => record !== null)
     const currentEntries = this.current.getEntries()
     const currentId = this.current.getSessionId()
     const currentHeader = this.current.getHeader()
@@ -287,19 +330,23 @@ export class SessionHistoryStore {
         ? undefined
         : normalizeEntries([firstUser], currentId, activeBranchIds)[0]?.content
     const currentVersion = `live:${currentEntries.length}:${currentEntries.at(-1)?.id ?? 'empty'}:${currentModified ?? 'unknown'}:${this.current.getBranch().at(-1)?.id ?? 'root'}`
-    const existingCurrent = records.find((record) => record.id === currentId)
+    const existingCurrent = records.find(
+      (record) => record.id === currentId && record.path === currentFile,
+    )
     if (existingCurrent === undefined) {
       records.push({
         id: currentId,
-        name: this.current.getSessionName() ?? 'Untitled session',
         path: currentFile ?? '',
         cwd: this.current.getCwd(),
         created: currentHeader?.timestamp ?? new Date(0).toISOString(),
-        modified: currentModified ?? new Date(0).toISOString(),
         fileVersion: currentVersion,
-        messageCount: currentEntries.filter((entry) => entry.type === 'message').length,
-        firstMessage: firstMessage?.slice(0, 240) ?? '',
-        firstMessageTruncated: (firstMessage?.length ?? 0) > 240,
+        metadata: {
+          name: this.current.getSessionName() ?? 'Untitled session',
+          modified: currentModified ?? new Date(0).toISOString(),
+          messageCount: currentEntries.filter((entry) => entry.type === 'message').length,
+          firstMessage: firstMessage?.slice(0, 240) ?? '',
+          firstMessageTruncated: (firstMessage?.length ?? 0) > 240,
+        },
         parentId:
           currentHeader?.parentSession === undefined
             ? null
@@ -307,22 +354,80 @@ export class SessionHistoryStore {
         isChild: currentHeader?.parentSession !== undefined,
       })
     } else {
-      existingCurrent.name = this.current.getSessionName() ?? 'Untitled session'
       existingCurrent.fileVersion = currentVersion
-      existingCurrent.messageCount = currentEntries.filter(
-        (entry) => entry.type === 'message',
-      ).length
-      existingCurrent.firstMessage = firstMessage?.slice(0, 240) ?? ''
-      existingCurrent.firstMessageTruncated = (firstMessage?.length ?? 0) > 240
-      existingCurrent.modified = currentModified ?? existingCurrent.modified
+      existingCurrent.metadata = {
+        name: this.current.getSessionName() ?? 'Untitled session',
+        messageCount: currentEntries.filter((entry) => entry.type === 'message').length,
+        firstMessage: firstMessage?.slice(0, 240) ?? '',
+        firstMessageTruncated: (firstMessage?.length ?? 0) > 240,
+        modified: currentModified ?? existingCurrent.created,
+      }
     }
     const availableIds = new Set(records.map((record) => record.id))
     for (const record of records) {
       if (record.parentId !== null && !availableIds.has(record.parentId)) record.parentId = null
     }
     this.invalidSessionIds = invalidRelationships(records)
-    const valid = records.filter((record) => !this.invalidSessionIds.has(record.id))
-    this.malformedSessionCount += records.length - valid.length
+    const healthy = records.filter((record) => !this.invalidSessionIds.has(record.id))
+    this.malformedSessionCount += records.length - healthy.length
+    let valid = linkedProjectSessions(healthy, projectIds, currentId)
+    if (selection !== undefined) {
+      const roots = valid.filter((record) => selection.ids.includes(record.id))
+      const selected =
+        selection.children === true
+          ? roots.flatMap((root) => {
+              const expanded = [root, ...this.descendants(valid, root.id)]
+              for (const [index, record] of expanded.entries())
+                record.withinExpansionLimit = index < historyLimits.sessions
+              return expanded.slice(0, historyLimits.sessions)
+            })
+          : roots
+      const byId = new Map(valid.map((record) => [record.id, record]))
+      const ancestors = new Set<SessionRecord>()
+      for (const record of selected) {
+        let parentId = record.parentId
+        while (parentId !== null) {
+          const parent = byId.get(parentId)
+          if (parent === undefined || ancestors.has(parent)) break
+          ancestors.add(parent)
+          parentId = parent.parentId
+        }
+      }
+      for (const ancestor of ancestors) {
+        if (ancestor.id === currentId) continue
+        try {
+          const snapshot = await readSnapshot(
+            ancestor.path,
+            ancestor.id,
+            work,
+            ancestor.fileVersion,
+          )
+          if (snapshot.cwd !== ancestor.cwd) throw new SessionChangedError()
+        } catch (error) {
+          work.check()
+          if (error instanceof WorkLimitError) throw error
+          if (selection.children === true && selection.ids.includes(ancestor.id)) {
+            if (error instanceof SessionChangedError) throw error
+            if (error instanceof SnapshotError) throw new HistoryError(error.code, error.message)
+          }
+          this.invalidSessionIds.add(ancestor.id)
+          for (const child of this.descendants(valid, ancestor.id))
+            this.invalidSessionIds.add(child.id)
+        }
+      }
+      const remaining = valid.filter((record) => !this.invalidSessionIds.has(record.id))
+      this.malformedSessionCount += valid.length - remaining.length
+      valid = remaining
+      if (selection.metadata === true) {
+        for (const record of valid) {
+          if (selection.ids.includes(record.id)) await this.hydrateMetadata(record, work)
+        }
+      }
+    }
+    const visibleIds = new Set(valid.map((record) => record.id))
+    for (const record of valid) {
+      if (record.parentId !== null && !visibleIds.has(record.parentId)) record.parentId = null
+    }
     const availablePaths = new Set(valid.map((record) => record.path))
     for (const [path, cached] of this.cache) {
       if (!availablePaths.has(path)) {
@@ -331,6 +436,16 @@ export class SessionHistoryStore {
       }
     }
     return valid
+  }
+
+  private async hydrateMetadata(record: SessionRecord, work: HistoryWork): Promise<void> {
+    if (record.metadata !== undefined) return
+    const stats = await this.inspectFile(record.path)
+    if (fileVersion(stats) !== record.fileVersion) throw new SessionChangedError()
+    const info = await this.discovery.info(record.path, stats, work)
+    if (info === null) throw new HistoryError('MALFORMED_SESSION', 'The session file is malformed.')
+    if (info.id !== record.id || info.cwd !== record.cwd) throw new SessionChangedError()
+    record.metadata = sessionMetadata(info)
   }
 
   private visibleRecord(records: readonly SessionRecord[], sessionId: string): SessionRecord {
@@ -495,7 +610,18 @@ export class SessionHistoryStore {
       return this.readContent(options, signal)
     }
     const work = new HistoryWork(signal)
-    const records = await this.records(work)
+    const selection: DiscoverySelection | undefined =
+      input.action === 'list'
+        ? undefined
+        : input.action === 'search'
+          ? input.session_ids === undefined
+            ? undefined
+            : { ids: input.session_ids, metadata: true }
+          : {
+              ids: [input.session_id],
+              children: input.action !== 'read' && input.include_children === true,
+            }
+    const records = await this.records(work, selection)
     work.check()
     if (input.action === 'list') return this.list(records, input)
     if (input.action === 'search') return this.search(records, input, work)
@@ -516,7 +642,7 @@ export class SessionHistoryStore {
       )
     }
     const work = new HistoryWork(signal)
-    const records = await this.records(work)
+    const records = await this.records(work, { ids: [input.session_id] })
     const record = this.visibleRecord(records, input.session_id)
     const loaded = await this.load(record, work)
     const visible = input.view === 'audit' ? loaded.normalizedAudit : loaded.normalizedActive
@@ -568,7 +694,8 @@ export class SessionHistoryStore {
       .filter((record) => dateAllowed(record, input.created_after, input.created_before))
       .sort(
         (left, right) =>
-          Date.parse(right.modified) - Date.parse(left.modified) || left.id.localeCompare(right.id),
+          Date.parse(metadata(right).modified) - Date.parse(metadata(left).modified) ||
+          left.id.localeCompare(right.id),
       )
     const currentFingerprint = this.historyFingerprint(selected, 'list')
     let offset: number
@@ -580,15 +707,15 @@ export class SessionHistoryStore {
     const page = paginate(selected, limit, offset, 'list', currentFingerprint)
     const items = page.items.map((record) => ({
       sessionId: record.id,
-      name: record.name.slice(0, 240),
-      nameTruncated: record.name.length > 240,
+      name: metadata(record).name.slice(0, 240),
+      nameTruncated: metadata(record).name.length > 240,
       logicalPath: `sessions/${record.id}`,
       cwd: record.cwd,
       created: record.created,
-      modified: record.modified,
-      messageCount: record.messageCount,
-      firstMessage: record.firstMessage,
-      firstMessageTruncated: record.firstMessageTruncated,
+      modified: metadata(record).modified,
+      messageCount: metadata(record).messageCount,
+      firstMessage: metadata(record).firstMessage,
+      firstMessageTruncated: metadata(record).firstMessageTruncated,
       isCurrent: record.id === currentId,
       isChild: record.isChild,
       parentSessionId: record.parentId,
@@ -628,7 +755,8 @@ export class SessionHistoryStore {
     }
     const candidates = [...selected].sort(
       (left, right) =>
-        Date.parse(right.modified) - Date.parse(left.modified) || left.id.localeCompare(right.id),
+        Date.parse(metadata(right).modified) - Date.parse(metadata(left).modified) ||
+        left.id.localeCompare(right.id),
     )
     const omittedSessions = Math.max(0, candidates.length - historyLimits.sessions)
     const searchable = []
@@ -640,8 +768,8 @@ export class SessionHistoryStore {
           .slice(start, start + historyLimits.concurrentFiles)
           .map(async (record) => ({
             id: record.id,
-            name: record.name,
-            modified: record.modified,
+            name: metadata(record).name,
+            modified: metadata(record).modified,
             entries: (await this.load(record, work)).searchEntries,
           })),
       )
@@ -764,6 +892,7 @@ export class SessionHistoryStore {
     const root = this.visibleRecord(records, input.session_id)
     const selectedRecords =
       input.include_children === true ? [root, ...this.descendants(records, root.id)] : [root]
+    const coveredRecords = selectedRecords.filter((record) => record.withinExpansionLimit !== false)
     const events: Array<
       NormalizedEntry & {
         sessionId: string
@@ -772,30 +901,31 @@ export class SessionHistoryStore {
       }
     > = []
     let skippedSessions = this.malformedSessionCount
-    const omittedSessions = Math.max(0, selectedRecords.length - historyLimits.sessions)
-    for (const record of selectedRecords.slice(0, historyLimits.sessions)) {
-      if (record.id !== root.id) {
-        events.push({
-          id: record.id,
-          parentId: null,
-          type: 'child_session',
-          role: null,
-          date: record.created,
-          content: record.name.slice(0, 500),
-          source: 'session_event',
-          branchState: 'active',
-          reference: sessionReference(record.id),
-          truncated: record.name.length > 500,
-          redacted: false,
-          toolCallId: null,
-          toolName: null,
-          isError: null,
-          sessionId: record.id,
-          parentSessionId: record.parentId,
-          mainSessionId: this.mainSessionId(records, record),
-        })
-      }
+    const omittedSessions = selectedRecords.length - coveredRecords.length
+    for (const record of coveredRecords) {
       try {
+        if (record.id !== root.id) {
+          await this.hydrateMetadata(record, work)
+          events.push({
+            id: record.id,
+            parentId: null,
+            type: 'child_session',
+            role: null,
+            date: record.created,
+            content: metadata(record).name.slice(0, 500),
+            source: 'session_event',
+            branchState: 'active',
+            reference: sessionReference(record.id),
+            truncated: metadata(record).name.length > 500,
+            redacted: false,
+            toolCallId: null,
+            toolName: null,
+            isError: null,
+            sessionId: record.id,
+            parentSessionId: record.parentId,
+            mainSessionId: this.mainSessionId(records, record),
+          })
+        }
         const loaded = await this.load(record, work)
         const source = input.view === 'audit' ? loaded.normalizedAudit : loaded.normalizedActive
         events.push(
@@ -864,11 +994,12 @@ export class SessionHistoryStore {
     const root = this.visibleRecord(records, input.session_id)
     const selectedRecords =
       input.include_children === true ? [root, ...this.descendants(records, root.id)] : [root]
+    const coveredRecords = selectedRecords.filter((record) => record.withinExpansionLimit !== false)
     const activities = []
     const activityEntries: NormalizedEntry[] = []
     let skippedSessions = this.malformedSessionCount
-    const omittedSessions = Math.max(0, selectedRecords.length - historyLimits.sessions)
-    for (const record of selectedRecords.slice(0, historyLimits.sessions)) {
+    const omittedSessions = selectedRecords.length - coveredRecords.length
+    for (const record of coveredRecords) {
       try {
         const loaded = await this.load(record, work)
         const calls = loaded.normalizedAudit.filter((entry) => entry.source === 'tool_call')

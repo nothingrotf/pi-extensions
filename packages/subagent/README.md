@@ -35,8 +35,15 @@ Task({
   prompt: 'Implement the requested fix and run focused tests.',
   subagent_type: 'generalPurpose',
   model: 'openai-codex/gpt-6-astra:high [fast]',
+  role: 'feature',
 })
 ```
+
+`role` is optional task-purpose display metadata, for example `feature`, `refactoring`, or `why synthesizer`. It accepts 1-64 ASCII letters, digits, underscores, or hyphens, with single spaces between words. Empty labels, leading or trailing spaces, control characters, and longer labels are rejected.
+
+Set `role` on a single Task or separately on each `tasks[]` item. Nested dispatch accepts its own explicit role; it does not inherit the parent's role. The value never selects an agent, changes tools or prompts, or derives from a model or prompt. `subagent_type` still selects the executable agent definition and its glyph.
+
+The role persists in the execution contract, run record, batch item/state, snapshots, results, and TaskControl status/list/jobs. Omit it on resume to retain the original value, or supply the same value. A different value is rejected, including adding a role to a legacy Task that had none. Legacy sessions remain unlabeled.
 
 The `[fast]` selector uses the shared policy from `@nothingrotf/fast-mode`.
 It accepts supported Codex models, including Astra, and respects explicit service tiers from the Codex catalog.
@@ -629,8 +636,24 @@ The result replaces the agent rows with live rows. A running row shows the tool 
 
 `TaskControl` results use the same rows for `status` and `list`, receipt lines for `steer`, `cancel`, and `join`, and the job tree for `wait` and `jobs`. Intercom messages between a child and the parent render as IRC cards with quoted bodies.
 
+Explicit task roles appear beside the model, such as `why synthesizer · 6-astra`, in the rail, task call/results, job rows, IRC cards, and inspect pane. Existing agent badges and glyphs remain separate. Rail summaries use resolved metadata when results arrive; initial dispatch uses the requested model when present.
+
 IRC cards wrap quoted text at the terminal width instead of clipping each line at 80 columns.
 Collapsed cards show three visual lines and an explicit hidden-line count. Expanded cards show the full quoted body.
+
+Each card header is one line: `✉ IRC ⟵ <task> · <meta>`. The meta uses `·` separators, keeps each item dim after a colored level, reports age as `12s ago`, and truncates with `…` at the terminal width.
+
+When the `@nothingrotf/hud` rail is active, the header starts at the transcript edge and the quoted body starts at the speaker body column, like `◆ You` and `● Agent` messages. Without the rail, the card keeps the native one-column padding.
+
+While a foreground Task or a `tasks[]` graph runs with the rail active, each child tool call nests under the Task row:
+
+```text
+├─ ✓ ▹ Dispatched  Inspect package metadata · 2 lines            25.5s
+│  ├─ ✓ □ Read        ×2 package.json · README.md ▸
+│  ╰─ ✓ ▸ Ran         bun run test · 2 lines                    2.0s
+```
+
+Child rows follow the rail rules for spinners, `×N` folding, durations, and expanded output. Each row keeps a bounded output preview of twelve lines. `update_progress` calls stay out of the rail. A background Task reports no child rows because the parent turn does not wait for it.
 
 The editor dock uses separate panels for foreground dispatches and background Tasks:
 
@@ -646,11 +669,11 @@ Panels use a three-column inset when space permits. Titles and footer actions re
 
 Each row can show these fields:
 
-- A role sigil and an agent face.
-- The full description and model.
+- An executable agent-type sigil and an agent face.
+- The full description and model, plus an explicit task-purpose role when provided.
 - The current tool, token count, and activity detail.
 
-Metadata visibility changes at widths of 56, 76, and 96 columns. Each panel shows at most five Tasks.
+Metadata visibility changes at widths of 56, 76, and 96 columns. Explicit role/model pairs remain visible on narrow panels through wrapping. Each panel shows at most five Tasks.
 Names use the available row width and wrap with aligned continuation rows instead of ending in an ellipsis.
 
 Completed rows remain for 1.4 seconds. The footer reports transcript transfer during this interval.

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, expect, it } from 'vite-plus/test'
 
-import { fileVersion, sessionLines } from '../src/session-file.ts'
+import { fileVersion, sessionHeaderLine, sessionLines } from '../src/session-file.ts'
 import { HistoryWork, historyLimits } from '../src/work.ts'
 
 const directories: string[] = []
@@ -68,6 +68,40 @@ it('cancels between streamed lines rather than returning partial success', async
     }
   }
   await expect(consume()).rejects.toThrow('cancelled stream')
+})
+
+it('reads only a bounded first nonblank header with Unicode and no final newline', async () => {
+  const path = await fixture()
+  const header = `${'x'.repeat(1019)}Ω日本語`
+  await writeFile(path, `\n \n${header}`)
+  expect(await sessionHeaderLine(path, new HistoryWork(), fileVersion(await stat(path)))).toBe(
+    header,
+  )
+  await writeFile(path, `${header}\n${'body'.repeat(100_000)}`)
+  const work = new HistoryWork()
+  expect(await sessionHeaderLine(path, work, fileVersion(await stat(path)))).toBe(header)
+  expect(work.usage().bytesRead).toBe(2048)
+})
+
+it('fails closed on oversized identity headers without charging the rest of the file', async () => {
+  const path = await fixture()
+  await writeFile(path, `${'x'.repeat(historyLimits.headerBytes)}\nbody`)
+  const work = new HistoryWork()
+  await expect(sessionHeaderLine(path, work, fileVersion(await stat(path)))).rejects.toMatchObject({
+    code: 'WORK_LIMIT_EXCEEDED',
+  })
+  expect(work.usage().bytesRead).toBe(historyLimits.headerBytes)
+})
+
+it('rejects identity drift before consuming a header', async () => {
+  const path = await fixture()
+  const version = fileVersion(await stat(path))
+  await appendFile(path, 'changed\n')
+  const work = new HistoryWork()
+  await expect(sessionHeaderLine(path, work, version)).rejects.toMatchObject({
+    code: 'SESSION_CHANGED',
+  })
+  expect(work.usage().bytesRead).toBe(0)
 })
 
 it('bounds aggregate bytes and normalized blocks independently', () => {

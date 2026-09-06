@@ -1,8 +1,11 @@
 import { readFile } from 'node:fs/promises'
 
 import { parseFrontmatter, type ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import { createSessionTodoTools } from '@nothingrotf/todo/headless'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
+
+import { loadPstackBootstrap } from './bootstrap.ts'
 
 const AgentMetadataSchema = Type.Object(
   {
@@ -15,53 +18,84 @@ const AgentMetadataSchema = Type.Object(
 
 const discoveryEvent = '@nothingrotf/subagent/discover-agents'
 const registrationEvent = '@nothingrotf/subagent/register-agents'
+const toolDiscoveryEvent = '@nothingrotf/subagent/discover-capabilities'
+const toolRegistrationEvent = '@nothingrotf/subagent/register-capabilities'
 const capabilityDiscoveryEvent = '@nothingrotf/subagent/discover-capability-profiles'
 const capabilityRegistrationEvent = '@nothingrotf/subagent/register-capability-profiles'
 const sourceId = '@nothingrotf/pstack'
 
 interface AgentDefinition {
+  capabilityProfile: string
   description: string
   is_background?: boolean
   name: string
   systemPrompt: string
 }
 
-async function loadAgent(path: string, label: string): Promise<AgentDefinition> {
+async function loadAgent(path: string, label: string, skillRoot: string): Promise<AgentDefinition> {
   const content = await readFile(new URL(path, import.meta.url), 'utf8')
   const parsed = parseFrontmatter(content)
   if (!Value.Check(AgentMetadataSchema, parsed.frontmatter)) {
     throw new Error(`${label} requires a name and description.`)
   }
   const { description, is_background, name } = Value.Decode(AgentMetadataSchema, parsed.frontmatter)
-  const systemPrompt = parsed.body.trim()
+  const systemPrompt = parsed.body.trim().replaceAll('{{PSTACK_SKILLS_ROOT}}', skillRoot)
   if (systemPrompt.length === 0) throw new Error(`${label} requires a prompt body.`)
-  const definition: AgentDefinition = { description, name, systemPrompt }
+  const definition: AgentDefinition = {
+    capabilityProfile: 'pstack-leaf',
+    description,
+    name,
+    systemPrompt,
+  }
   if (is_background !== undefined) definition.is_background = is_background
   return definition
 }
 
 export default async function pstack(pi: ExtensionAPI): Promise<void> {
+  const bootstrap = await loadPstackBootstrap()
   const definitions = await Promise.all([
-    loadAgent('../agents/comment-sicko.md', 'Comment Sicko'),
-    loadAgent('../agents/poteto-agent.md', 'poteto-agent'),
+    loadAgent('../agents/comment-sicko.md', 'Comment Sicko', bootstrap.root),
+    loadAgent('../agents/poteto-agent.md', 'poteto-agent', bootstrap.root),
   ])
+  const publishCapabilities = () => {
+    pi.events.emit(toolRegistrationEvent, {
+      registrations: [
+        {
+          createTools: createSessionTodoTools,
+          extensions: [],
+          id: 'pstack-planning',
+          readonlyTools: ['todo_write', 'todo_read'],
+          systemPrompt: bootstrap.systemPrompt,
+          tools: createSessionTodoTools(),
+          version: '1',
+        },
+      ],
+      sourceId,
+    })
+  }
   const publishAgents = () => {
     pi.events.emit(registrationEvent, { definitions, sourceId })
   }
   const publishCapabilityProfiles = () => {
     pi.events.emit(capabilityRegistrationEvent, {
-      profiles: [{ id: 'pstack-nested', nested: { maxDepth: 3 }, registrations: [] }],
+      profiles: [
+        { id: 'pstack-leaf', registrations: ['pstack-planning'] },
+        { id: 'pstack-nested', nested: { maxDepth: 3 }, registrations: ['pstack-planning'] },
+      ],
       sourceId,
     })
   }
+  const unsubscribeCapabilities = pi.events.on(toolDiscoveryEvent, publishCapabilities)
   const unsubscribeAgents = pi.events.on(discoveryEvent, publishAgents)
   const unsubscribeCapabilityProfiles = pi.events.on(
     capabilityDiscoveryEvent,
     publishCapabilityProfiles,
   )
+  publishCapabilities()
   publishAgents()
   publishCapabilityProfiles()
   pi.on('session_shutdown', () => {
+    unsubscribeCapabilities()
     unsubscribeAgents()
     unsubscribeCapabilityProfiles()
   })

@@ -1,5 +1,5 @@
 import type { Stats } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
+import { lstat, open, stat } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
 
 import { HistoryWork, historyLimits, WorkLimitError } from './work.ts'
@@ -12,6 +12,57 @@ export class SessionChangedError extends Error {
   readonly code = 'SESSION_CHANGED'
   constructor() {
     super('The session changed during the request. Retry to read a consistent snapshot.')
+  }
+}
+
+export async function sessionHeaderLine(
+  path: string,
+  work: HistoryWork,
+  expectedVersion: string,
+): Promise<string> {
+  work.check()
+  const handle = await open(path, 'r')
+  try {
+    const initial = await handle.stat()
+    if (!initial.isFile() || fileVersion(initial) !== expectedVersion)
+      throw new SessionChangedError()
+    const buffer = Buffer.alloc(historyLimits.headerBytes)
+    let length = 0
+    let start = 0
+    let end: number | undefined
+    while (length < buffer.length && end === undefined) {
+      work.check()
+      const { bytesRead } = await handle.read(
+        buffer,
+        length,
+        Math.min(1024, buffer.length - length),
+        null,
+      )
+      work.read(bytesRead)
+      if (bytesRead === 0) {
+        end = length
+        break
+      }
+      length += bytesRead
+      let newline = buffer.indexOf(10, start)
+      while (newline >= 0 && newline < length) {
+        if (buffer.toString('utf8', start, newline).trim().length > 0) {
+          end = newline
+          break
+        }
+        start = newline + 1
+        newline = buffer.indexOf(10, start)
+      }
+    }
+    if (end === undefined) throw new WorkLimitError()
+    const ending = await lstat(path).catch(() => {
+      throw new SessionChangedError()
+    })
+    if (!ending.isFile() || fileVersion(ending) !== expectedVersion) throw new SessionChangedError()
+    work.check()
+    return buffer.toString('utf8', start, end)
+  } finally {
+    await handle.close()
   }
 }
 

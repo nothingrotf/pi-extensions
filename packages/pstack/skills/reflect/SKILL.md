@@ -32,7 +32,9 @@ The parent owns `session_history` and all external source tools. A `Task` child 
 
 Make one `Task` call with a bounded graph. Create independent `judgment`, `tooling`, and `divergent` nodes. Create one `synthesizer` node whose `needs` list contains all three reviewer nodes. Use `subagent_type: "generalPurpose"` and `readonly: true` for every node. If `Task` is unavailable, return `BLOCKED`.
 
-Read model roles from `~/.agents/rules/pstack-models.md`:
+Pass `capability_profile: "pstack-leaf"` for every node. Set `Task.role` to `reflect judgment`, `reflect tooling`, `reflect divergent`, or `reflect synthesizer` for its lens. The three grouped roles share one configured model policy but retain distinct display labels.
+
+Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch. Read model roles from `~/.agents/rules/pstack-models.md`:
 
 | Lens | Role | Prompt template |
 |---|---|---|

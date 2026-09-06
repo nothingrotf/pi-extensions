@@ -13,6 +13,8 @@ Two modes:
 1. **Explain** (default). Explore the codebase and produce a clear explanation
 2. **Critique.** Explain first, then spawn multiple models to independently identify architectural issues
 
+Pass `capability_profile: "pstack-leaf"` for every worker below. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
+
 Concrete configured models use `provider/model-id:effort [fast]`. If a role is absent, `auto`, or `inherit-parent`, omit the `Task` `model` field.
 
 ## Explain Mode
@@ -48,6 +50,7 @@ The right decomposition depends on the question. Use your judgment. Narrow quest
 Spawn all explorers in a single message:
 
 - `subagent_type`: `generalPurpose`
+- `role`: `how explorer`
 - `model`: your configured how-explorer model. Omit it to inherit the parent model
 - `readonly`: `true`
 
@@ -66,6 +69,7 @@ Then proceed to Step 3.
 
 Spawn a single Task subagent that explores and explains in one pass:
 
+- `role`: `how explainer`
 - `subagent_type`: `generalPurpose`
 - `model`: your configured how-explainer model. Omit it to inherit the parent model
 - `readonly`: `true`
@@ -78,6 +82,7 @@ Proceed to Step 4.
 
 Once all explorers return, spawn a single Task subagent to synthesize their findings into one coherent explanation:
 
+- `role`: `how explainer`
 - `subagent_type`: `generalPurpose`
 - `model`: your configured how-explainer model. Omit it to inherit the parent model
 - `readonly`: `true`
@@ -115,6 +120,7 @@ Run the full explain flow above (Steps 1-4). You must understand the architectur
 After the explanation is complete, spawn one architectural critic per entry in your configured how-critics list, all in a single message. If the role is absent, use one critic that inherits the parent model.
 
 For each critic:
+- `role`: `how critics`
 - `subagent_type`: `generalPurpose`
 - `model`: one concrete model from the configured how-critics list. Omit it for an `auto` or `inherit-parent` entry
 - `readonly`: `true`

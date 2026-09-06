@@ -26,7 +26,7 @@ Edit only the verification skill directory, including its `SKILL.md`, `features/
 
 1. **Index hygiene.** Read the feature-map README and sibling files. Fix missing, extra, duplicate, and dead entries. Do not generate an inventory.
 
-2. **Source wave.** Launch one concurrent read-only `Task` node per feature file. Use `subagent_type: "generalPurpose"`, `readonly: true`, and a bounded graph. Each node explains the user-facing feature from source, cites entry points, flags likely drift, and returns one live recipe. Children never drive the app or edit files.
+2. **Source wave.** Launch one concurrent read-only `Task` node per feature file. Use `subagent_type: "generalPurpose"`, `readonly: true`, and a bounded graph. Pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. Resolve the configured model through [Task contracts](../poteto-mode/references/task-contracts.md). Each node explains the user-facing feature from source, cites entry points, flags likely drift, and returns one live recipe. Children never drive the app or edit files.
 
 3. **Reconcile.** Require one returned summary per feature file. Merge overlapping recipes into few app states. Verify cited drift. Search recent source changes for missing user-facing surfaces. Require a concrete source path before you add one.
 

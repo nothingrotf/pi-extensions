@@ -3,6 +3,7 @@ import { setImmediate } from 'node:timers/promises'
 export const historyLimits = {
   concurrentFiles: 8,
   fileBytes: 32 * 1024 * 1024,
+  headerBytes: 16 * 1024,
   requestBytes: 128 * 1024 * 1024,
   entries: 100000,
   sessions: 100,

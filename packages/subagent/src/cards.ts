@@ -3,7 +3,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import type { DeliveryRecord } from './delivery.ts'
-import { oneLineLabel, type SubagentTheme } from './format.ts'
+import { oneLineLabel, type SubagentTheme, taskRoleLabel } from './format.ts'
 import { formatMoreItems } from './jobs.ts'
 
 export const MAIL_ICON = '✉'
@@ -12,6 +12,22 @@ export const ARROW_IN = '⟵'
 const QUOTE = '▏'
 const BODY_LINE_WIDTH = 80
 const BODY_LINES_COLLAPSED = 3
+const META_SEPARATOR = ' · '
+
+export type IntercomCardLayout = {
+  bodyIndent: number
+  width: number
+}
+
+export const nativeIntercomLayout = (width: number): IntercomCardLayout => ({
+  bodyIndent: 2,
+  width: Math.max(1, width - 2),
+})
+
+export const transcriptIntercomLayout = (width: number): IntercomCardLayout => ({
+  bodyIndent: 3,
+  width: Math.max(1, width),
+})
 
 export function quotedBody(
   body: string,
@@ -125,51 +141,61 @@ export function renderIntercomCard(
   timestamp: number | undefined,
   options: {
     expanded: boolean
+    model?: string | undefined
+    role?: string | undefined
     now: number
     delivery?: DeliveryRecord | undefined
+    layout?: IntercomCardLayout
     width?: number
   },
   theme: SubagentTheme,
 ): string[] {
+  const layout = options.layout ?? {
+    bodyIndent: 2,
+    width: options.width ?? BODY_LINE_WIDTH,
+  }
+  const width = Math.max(1, Math.floor(layout.width))
+  const indent = ' '.repeat(Math.max(0, Math.floor(layout.bodyIndent)))
+  const dim = (text: string) => theme.fg('dim', text)
   const sentAt = options.delivery?.sentAt ?? details.sentAt
   const createdAt = sentAt ?? timestamp
-  const age = createdAt === undefined ? undefined : formatAge(options.now - createdAt)
   const peer = theme.fg('accent', theme.bold(oneLineLabel(label, Number.POSITIVE_INFINITY)))
   const meta: string[] = []
+  const identity = taskRoleLabel(options.role, options.model)
+  if (identity) meta.push(dim(identity))
   if (details.kind === 'notification' && details.level !== 'info') {
     meta.push(theme.fg(details.level, details.level))
   }
-  if (age !== undefined) meta.push(sentAt === undefined ? age : `sent ${age} ago`)
+  if (createdAt !== undefined) meta.push(dim(`${formatAge(options.now - createdAt)} ago`))
   const receipt = options.delivery
   if (receipt !== undefined) {
-    meta.push(receipt.state)
+    meta.push(dim(receipt.state))
     if (receipt.deliveredAt !== undefined)
-      meta.push(`queue ${formatAge(receipt.deliveredAt - receipt.queuedAt)}`)
+      meta.push(dim(`queue ${formatAge(receipt.deliveredAt - receipt.queuedAt)}`))
   }
-  if (details.kind === 'request') meta.push('coordinator decision')
-  if (details.kind === 'automatic-reply') meta.push('advisory only')
-  const header = `${theme.fg('accent', MAIL_ICON)} ${theme.fg('accent', `IRC ${ARROW_IN}`)} ${peer}${meta.length > 0 ? ` ${theme.fg('dim', meta.join(' · '))}` : ''}`
+  if (details.kind === 'request') meta.push(dim('coordinator decision'))
+  if (details.kind === 'automatic-reply') meta.push(dim('advisory only'))
+  const separator = dim(META_SEPARATOR)
+  const title = `${theme.fg('accent', MAIL_ICON)} ${theme.fg('accent', `IRC ${ARROW_IN}`)} ${peer}`
+  const header = truncateToWidth(
+    meta.length > 0 ? `${title}${separator}${meta.join(separator)}` : title,
+    width,
+    '…',
+  )
+  const body = (text: string, tone: 'dim' | 'toolOutput' = 'toolOutput') =>
+    quotedBody(unescapeXml(text), theme, { expanded: options.expanded, indent, tone, width })
   if (details.kind === 'notification' || details.kind === 'request') {
-    return [
-      header,
-      ...quotedBody(unescapeXml(details.message), theme, {
-        expanded: options.expanded,
-        width: options.width ?? BODY_LINE_WIDTH,
-      }),
-    ]
+    return [header, ...body(details.message)]
   }
   return [
     header,
-    ...quotedBody(unescapeXml(details.question), theme, {
-      expanded: options.expanded,
-      width: options.width ?? BODY_LINE_WIDTH,
-    }),
-    `  ${theme.fg('dim', ARROW_OUT)} ${theme.fg('accent', 'advisor')} ${theme.fg('dim', 'not authorization')}`,
-    ...quotedBody(unescapeXml(details.reply), theme, {
-      expanded: options.expanded,
-      tone: 'dim',
-      width: options.width ?? BODY_LINE_WIDTH,
-    }),
+    ...body(details.question),
+    truncateToWidth(
+      `${indent}${dim(ARROW_OUT)} ${theme.fg('accent', 'advisor')}${separator}${dim('not authorization')}`,
+      width,
+      '…',
+    ),
+    ...body(details.reply, 'dim'),
   ]
 }
 

@@ -30,7 +30,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt. Each candidate produces a design package shaped per `references/rationale-template.md`: the caller's usage written first, then the type sketch, function signatures, module map, and prose rationale derived from it.
 
-Use `architect runners` from `~/.agents/rules/pstack-models.md` for this arena invocation. Concrete entries use `provider/model-id:effort [fast]`. Omit `Task.model` for `auto` or `inherit-parent`. If the role is absent, use four inherited runners.
+Use `architect runners` from `~/.agents/rules/pstack-models.md` for this arena invocation. Pass `role: "architect runners"` to each runner. The architect owner needs `pstack-nested`; non-delegating runners use `pstack-leaf`. If delegation is unavailable, return a blocker instead of replacing Arena with a silent single-model sketch. Concrete entries use `provider/model-id:effort [fast]`. Omit `Task.model` for `auto` or `inherit-parent`. If the role is absent, use four inherited runners.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 

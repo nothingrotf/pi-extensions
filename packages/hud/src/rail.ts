@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui'
 
 import { animationTickMs } from './animation-clock.ts'
 import { type RailPalette, type RailTint, tint } from './colors.ts'
@@ -342,7 +342,7 @@ function row(
   caret: string,
   width: number,
   tick: number,
-): string {
+): string[] {
   const pseudo = isPseudo(parts.kind)
   const kind = pseudo ? 'pseudo' : tintFor(parts.iconKey)
   const labelKind: RailTint = parts.status === 'pending' ? 'agent' : pseudo ? 'arg' : kind
@@ -381,7 +381,22 @@ function row(
   const gutter =
     parts.padding.length > 0 && body.startsWith(' ') ? parts.padding.slice(1) : parts.padding
   const left = body.length > 0 ? `${head}${gutter}${body}${caret}` : `${head}${caret}`
-  return alignDuration(left, parts.duration, theme, width)
+  const budget = formatDuration(parts.duration).length > 0 ? width - durationWidth : width
+  const taskDispatch =
+    parts.iconKey === 'agent' && (parts.label === 'Dispatching' || parts.label === 'Dispatched')
+  if (taskDispatch && body.length > 0 && visibleWidth(left) > budget) {
+    const stem = truncateToWidth(
+      parts.branch === treeLast ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `,
+      Math.max(0, width - 1),
+      '',
+    )
+    const detailWidth = Math.max(1, width - visibleWidth(stem))
+    return [
+      truncateToWidth(alignDuration(`${head}${caret}`, parts.duration, theme, width), width, ''),
+      ...wrapTextWithAnsi(body, detailWidth).map((line) => `${stem}${line}`),
+    ]
+  }
+  return [alignDuration(left, parts.duration, theme, width)]
 }
 
 function trimBlankEdges(value: string): string[] {
@@ -475,7 +490,7 @@ export function railLines(
         : ''
     const parent = parentParts(group)
     lines.push(
-      row(
+      ...row(
         {
           arg: parent.arg,
           argGlyphs: groupArgumentGlyphs(group),
@@ -524,7 +539,7 @@ export function railLines(
       const childLast = childIndex === shown.length - 1
       const label = actionLabel(action)
       lines.push(
-        `${stem}${row(
+        ...row(
           {
             arg: action.detail,
             argGlyphs: action.argGlyphs,
@@ -542,7 +557,7 @@ export function railLines(
           '',
           Math.max(1, width - visibleWidth(stem) - copyChipWidth),
           tick,
-        )}`,
+        ).map((line) => `${stem}${line}`),
       )
       if (action.askRows !== undefined) {
         const childStem = `${stem}${childLast ? '   ' : `${tint(theme.palette, 'branch', treeSpine)}  `}`

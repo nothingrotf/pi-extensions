@@ -27,9 +27,11 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@nothingrotf/todo": "workspace:^",
     "commander": "catalog:"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
     "typebox": "catalog:"
   },
@@ -37,6 +39,9 @@
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
+  "bundledDependencies": [
+    "@nothingrotf/todo"
+  ],
   "pi": {
     "extensions": [
       "./src/index.ts"

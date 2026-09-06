@@ -69,15 +69,16 @@ export async function createChildModelRuntime(ctx: ExtensionContext): Promise<Mo
 }
 
 export function createChildSessionManager(
-  ctx: ExtensionContext,
+  ctx: Pick<ExtensionContext, 'sessionManager'>,
   cwd: string,
   resumeFile: string | undefined,
 ): SessionManager {
   if (resumeFile !== undefined) return SessionManager.open(resumeFile, undefined, cwd)
 
   const parentSession = ctx.sessionManager.getSessionFile()
-  if (parentSession === undefined) return SessionManager.create(cwd)
-  return SessionManager.create(cwd, undefined, { parentSession })
+  const directory = ctx.sessionManager.getSessionDir()
+  if (parentSession === undefined) return SessionManager.create(cwd, directory)
+  return SessionManager.create(cwd, directory, { parentSession })
 }
 
 export interface CreateChildOptions {
@@ -91,6 +92,7 @@ export interface CreateChildOptions {
   resumeFile: string | undefined
   runtime: ModelRuntime
   sessionManager?: SessionManager
+  sourceCwd?: string
   systemPrompt: string
   tools: readonly string[]
 }
@@ -106,13 +108,32 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
 
   const resourceLoader = new DefaultResourceLoader({
     agentDir: getAgentDir(),
-    appendSystemPrompt: [options.systemPrompt],
+    appendSystemPrompt: [
+      options.systemPrompt,
+      [
+        '# Task workspace',
+        `Effective working directory: ${options.cwd}`,
+        ...(options.sourceCwd === undefined || options.sourceCwd === options.cwd
+          ? []
+          : [
+              `Logical source directory: ${options.sourceCwd}`,
+              'The source is not your working copy. Translate source paths to the corresponding relative paths in the effective working directory. Never write through source absolute paths.',
+            ]),
+        'Perform assigned repository work only within the effective working directory and the granted file scope. This is an execution policy, not an operating-system sandbox.',
+      ].join('\n'),
+    ],
     cwd: options.cwd,
     extensionFactories: [...(options.model.fast ? [fastModeExtension] : []), ...options.extensions],
     noExtensions: true,
     noThemes: true,
   })
   await resourceLoader.reload()
+  const extensionErrors = resourceLoader.getExtensions().errors
+  if (extensionErrors.length > 0) {
+    throw new Error(
+      `Child capability bootstrap failed: ${extensionErrors.map((error) => error.error).join('; ')}`,
+    )
+  }
 
   const sessionManager =
     options.sessionManager ??

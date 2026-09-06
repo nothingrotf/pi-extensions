@@ -44,7 +44,10 @@ describe('pstack extension', () => {
     expect(instance.registrations).toHaveLength(1)
     expect(instance.capabilityRegistrations).toEqual([
       {
-        profiles: [{ id: 'pstack-nested', nested: { maxDepth: 3 }, registrations: [] }],
+        profiles: [
+          { id: 'pstack-leaf', registrations: ['pstack-planning'] },
+          { id: 'pstack-nested', nested: { maxDepth: 3 }, registrations: ['pstack-planning'] },
+        ],
         sourceId: '@nothingrotf/pstack',
       },
     ])
@@ -58,6 +61,7 @@ describe('pstack extension', () => {
         {
           description:
             "Routing target for `/poteto-mode` and any request for poteto's style. Resume an existing `poteto-agent` for the conversation rather than spawning a sibling. Reads the `poteto-mode` skill's `SKILL.md` in full before any work, including its inline Principles index. Substituting `generalPurpose` skips that read and drifts.",
+          capabilityProfile: 'pstack-leaf',
           is_background: true,
           name: 'poteto-agent',
         },

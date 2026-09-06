@@ -33,7 +33,7 @@ The parent uses project-scoped `session_history`. Never inspect guessed physical
 
 Set a recent window, usually two to four weeks. Use `list` and `search`, then bounded `read` calls with `view: "audit"`. Use `timeline` and `tool_activity` when they provide decision or execution evidence. Exclude the current session and child sessions. Preserve `pi-session://` references.
 
-For a large result set, split bounded evidence into three time slices. Launch parallel `Task` children with `subagent_type: "generalPurpose"` and `readonly: true`. Children analyze supplied evidence only. They do not access session files or ambient source tools.
+For a large result set, split bounded evidence into three time slices. Launch parallel `Task` children with `subagent_type: "generalPurpose"` and `readonly: true`. Pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. Resolve the configured model through [Task contracts](../poteto-mode/references/task-contracts.md). Children analyze supplied evidence only. They do not access session files or ambient source tools.
 
 Each child returns a short structured list with evidence references. Search for:
 

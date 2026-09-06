@@ -46,6 +46,8 @@ Principles:
 
 Read `references/epistemics.md` for the full confidence framework and phrasing guide. The synthesizer must follow it.
 
+Pass `capability_profile: "pstack-leaf"` for every investigator and synthesizer. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
+
 Concrete configured models use `provider/model-id:effort [fast]`. If a role is absent, `auto`, or `inherit-parent`, omit the `Task` `model` field.
 
 ## Step 1. Understand the Target and the Question
@@ -121,6 +123,7 @@ The parent reads the matching category playbook before it calls each source. Que
 The parent owns all source tools. A `Task` child does not inherit ambient extensions or generic MCP tools. After evidence collection, launch one read-only investigator per searched category in a single message.
 
 Subagent config (each):
+- `role`: `why investigators`
 - `subagent_type`: `generalPurpose`
 - `model`: your configured why-investigators model. Omit it for an absent, `auto`, or `inherit-parent` value
 - `readonly`: `true`
@@ -170,6 +173,7 @@ Before synthesis, the parent spot-checks investigator citations through the orig
 
 Spawn one synthesizer subagent:
 
+- `role`: `why synthesizer`
 - `subagent_type`: `generalPurpose`
 - `model`: your configured why-synthesizer model. Omit it for an absent, `auto`, or `inherit-parent` value
 - `readonly`: `true`. The parent spot-verifies citations through the original source tools before presentation.

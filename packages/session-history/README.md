@@ -2,7 +2,7 @@
 
 `@nothingrotf/session-history` adds the `session_history` tool to Pi.
 
-The tool streams session metadata and validates snapshots with native Pi parsing and context helpers. Every request stays within the current project.
+The tool discovers session identities and validates snapshots with native Pi parsing and context helpers. Every request stays within the current project.
 
 The tool hides physical session paths. Each session and entry receives a stable `pi-session://` reference.
 
@@ -25,9 +25,17 @@ Failures throw JSON error messages that preserve the action and error code. Pi r
 
 The default scope is the current project directory. The tool resolves symbolic links before the scope comparison.
 
+Discovery reads regular session files only in the current session store. It does not follow session-file symlinks or scan other stores. New subagent tasks share their parent's store. Resuming a task preserves its original transcript location. Older children in other stores are not discovered automatically.
+
+Cross-directory children must reside within `<git-common-dir>/pi-subagent/worktrees/<workspace>/root` or its subdirectories. Their complete, unambiguous `parentSession` chain must reach a same-project root session or the current live session in this store. A bounded, read-only `git rev-parse` resolves the actual common Git directory. This supports linked worktrees whose `.git` is a file. Cross-directory discovery fails closed if Git cannot resolve that directory.
+
+The live session anchors its own descendants even when it is itself a child. Sharing the Git common directory does not expose unrelated sibling tasks. Unlinked worktree sessions, unrelated projects claiming a parent, traversal paths, and symlink escapes remain hidden. Existing ancestors are canonicalized even after a worktree is removed, so retained transcripts remain auditable from a surviving repository after cleanup.
+
+This boundary trusts local session-store headers, just as same-project discovery trusts their recorded `cwd`. Header linkage is not cryptographic proof of task execution or authorization. Discovery does not use a private subagent state format.
+
 The tool excludes the current session and child sessions by default. Set the applicable include fields to `true` when required.
 
-Child results identify the direct parent and the root session. A missing parent remains `null` and does not stop the request.
+Child results identify the direct parent and the root session. For same-directory sessions, a missing parent remains `null` and does not stop the request. Such orphans cannot establish visibility for a cross-directory child.
 
 Discovery quarantines circular ancestry, duplicate session IDs, and their descendants. Healthy sessions remain available, and `skippedSessions` reports omitted records.
 
@@ -185,7 +193,11 @@ Mutation detected during a directly requested snapshot load returns `SESSION_CHA
 
 Retry the request to obtain a fresh snapshot.
 
-I/O uses 64 KiB batches with at most eight concurrent files. Normalization yields between batches of 128 native entries.
+Explicit `read`, `timeline`, `tool_activity`, and `content` requests, plus `search` with `session_ids`, discover identities from bounded headers before selecting bodies. Header IDs, not filenames, determine identity and duplicate quarantine. Discovery validates required ancestors before their linkage admits a selected session. Only selected sessions supply full metadata.
+
+Header-only discovery does not validate unrelated bodies or report their unknown metadata. `skippedSessions` counts failures encountered by the request, not undiscovered corruption in unrelated bodies. Unscoped listing and search retain their full-metadata discovery behavior and limits.
+
+Header reads use 1 KiB batches, capped at 16 KiB per file including leading blank lines and bounded read-ahead. An overlong header fails the request rather than silently weakening duplicate detection. Body I/O uses 64 KiB batches with at most eight concurrent files. Normalization yields between batches of 128 native entries.
 
 Cancellation stops work at these checkpoints. Parsing one JSON line and synchronous ranking remain non-preemptive.
 
@@ -200,16 +212,17 @@ Successful responses publish work limits under `limits.work`.
 | ---------------------------------------------- | ---------: |
 | Files discovered in one directory              |      1,000 |
 | Sessions searched or expanded through children |        100 |
-| Bytes per file                                 |     32 MiB |
+| Bytes per identity header                      |     16 KiB |
+| Bytes per loaded file                          |     32 MiB |
 | Bytes read per request                         |    128 MiB |
 | Charged entry visits per request               |    100,000 |
 | Cooperative elapsed-time budget                | 10 seconds |
 
-Search, timeline, and tool activity report capped session coverage through `omittedSessions` and `truncated`.
+Search, timeline, and tool activity report capped session coverage through `omittedSessions` and `truncated`. Timeline and tool activity cap child expansion before validating ancestors or loading bodies. Quarantine does not refill that selection from omitted sessions. Ancestors genuinely required by the capped selection remain subject to validation and work limits.
 
 Pairing uses a separate request-wide counter with the same 100,000-entry limit across all selected sessions.
 
-Other exhausted budgets throw `WORK_LIMIT_EXCEEDED` instead of returning apparently complete results. Oversized directories or files can therefore reject a request during discovery.
+Other exhausted budgets throw `WORK_LIMIT_EXCEEDED` instead of returning apparently complete results. Oversized directories or identity headers can reject targeted discovery. Selected bodies and required ancestors still obey the existing file, request, entry, and time limits. Oversized unrelated bodies only affect unscoped discovery, not exact-target requests.
 
 These budgets do not guarantee a process-memory ceiling. A large JSON line can still allocate substantially more memory than its serialized size.
 

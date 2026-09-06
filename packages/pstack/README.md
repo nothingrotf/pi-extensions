@@ -86,6 +86,25 @@ Inspect a completed writer with `TaskControl`. Use `action: "join"` only when th
 
 Background results arrive as follow-up messages. The skills do not poll. When the parent is blocked with no other work, it calls `TaskControl` with `action: "wait"`, which streams the job tree until the first Task settles.
 
+## Task roles and workspace contracts
+
+Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `why synthesizer`.
+The runner preserves this label beside the model without inferring it from the model name.
+The role does not select a model or grant capabilities.
+
+Runtime verifiers use `isolation: { mode: "worktree", integration: "manual" }`.
+Their artifacts remain inspectable, but the runtime rejects `join`.
+Repository writers use relative paths in the effective child workspace.
+An isolated worktree separates Git state but is not an OS sandbox.
+Never bypass it through an absolute source-checkout path or push its synthetic history as a product branch.
+
+Read [Task contracts](skills/poteto-mode/references/task-contracts.md) for executable dispatch examples and coordinator decisions.
+
+After updating, reload Pi before new dispatches.
+Existing child contracts do not gain tools automatically.
+If a retained capability contract changed, start a fresh child from its saved brief and evidence instead of weakening resume validation.
+Older records without a role remain unlabeled rather than receiving a guessed role.
+
 ## Stack backends
 
 Poteto supports Graphite `gt` and GitHub `github/gh-stack`.

@@ -8,13 +8,20 @@ import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { decodeSubagentRegistration } from './agents.ts'
-import { decodeCapabilityProfileRegistration } from './capabilities.ts'
-import { decodeIntercomDetails, renderIntercomCard } from './cards.ts'
+import { decodeCapabilityProfileRegistration, decodeCapabilityPublication } from './capabilities.ts'
+import {
+  decodeIntercomDetails,
+  nativeIntercomLayout,
+  renderIntercomCard,
+  transcriptIntercomLayout,
+} from './cards.ts'
 import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
+import { taskRoleLabel } from './format.ts'
 import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs.ts'
 import { JobProgress } from './progress.ts'
+import { RailChildReporter } from './rail-children.ts'
 import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
 import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
 import { decodeBatchTaskInput, decodeSingleTaskInput, TaskInputSchema } from './schema.ts'
@@ -33,6 +40,8 @@ import { SubagentTui } from './ui.ts'
 
 export const SUBAGENT_DISCOVERY_EVENT = '@nothingrotf/subagent/discover-agents'
 export const SUBAGENT_REGISTRATION_EVENT = '@nothingrotf/subagent/register-agents'
+export const SUBAGENT_CAPABILITY_DISCOVERY_EVENT = '@nothingrotf/subagent/discover-capabilities'
+export const SUBAGENT_CAPABILITY_REGISTRATION_EVENT = '@nothingrotf/subagent/register-capabilities'
 export const SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT =
   '@nothingrotf/subagent/discover-capability-profiles'
 export const SUBAGENT_CAPABILITY_PROFILE_REGISTRATION_EVENT =
@@ -50,6 +59,8 @@ type TaskToolDetails = RuntimeDetails | BatchToolDetails | JobProgressDetails
 const TaskDetailSchema = Type.Object({
   description: Type.Optional(Type.String()),
   subagent_type: Type.Optional(Type.String()),
+  role: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
 })
 
 function failedContent(result: RuntimeFailedResult): string {
@@ -57,9 +68,14 @@ function failedContent(result: RuntimeFailedResult): string {
   return `Task failed: ${result.details.error}${agent}`
 }
 
-export function railTaskDetail(args: Static<typeof TaskInputSchema>): string {
+export function railTaskDetail(
+  args: Static<typeof TaskInputSchema>,
+  metadata?: { model?: string | undefined; role?: string | undefined },
+): string {
+  if ('tasks' in args) return args.tasks.map((task) => railTaskDetail(task)).join('; ')
   if (!Value.Check(TaskDetailSchema, args)) return ''
-  return args.description ?? args.subagent_type ?? ''
+  const identity = taskRoleLabel(metadata?.role ?? args.role, metadata?.model ?? args.model)
+  return [identity, args.description ?? args.subagent_type ?? ''].filter(Boolean).join(' · ')
 }
 
 export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): SubagentRuntime {
@@ -71,6 +87,16 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   const tui = new SubagentTui(runtime)
   const agentRegistrations = new Map<string, () => void>()
   const capabilityProfileSources = new Set<string>()
+  const capabilitySources = new Set<string>()
+  const unregisterCapabilityEvents = pi.events.on(
+    SUBAGENT_CAPABILITY_REGISTRATION_EVENT,
+    (value) => {
+      const publication = decodeCapabilityPublication(value)
+      if (publication === undefined || capabilitySources.has(publication.sourceId)) return
+      runtime.registerCapabilities(publication.registrations)
+      capabilitySources.add(publication.sourceId)
+    },
+  )
   const unregisterAgentEvents = pi.events.on(SUBAGENT_REGISTRATION_EVENT, (value) => {
     const registration = decodeSubagentRegistration(value)
     if (registration === undefined) return
@@ -89,6 +115,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       capabilityProfileSources.add(registration.sourceId)
     },
   )
+  pi.events.emit(SUBAGENT_CAPABILITY_DISCOVERY_EVENT, { version: 1 })
   pi.events.emit(SUBAGENT_DISCOVERY_EVENT, { version: 1 })
   pi.events.emit(SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT, { version: 1 })
 
@@ -128,6 +155,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   pi.on('session_shutdown', async (_event, ctx) => {
     runtime.deliveries.pause()
     unregisterAgentEvents()
+    unregisterCapabilityEvents()
     unregisterCapabilityProfileEvents()
     for (const unregister of agentRegistrations.values()) unregister()
     agentRegistrations.clear()
@@ -137,12 +165,13 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   pi.registerMessageRenderer('subagent-intercom', (message, options, theme) => {
     const details = decodeIntercomDetails(message.details)
     if (details === undefined) return undefined
-    const label =
-      runtime.listSnapshots().find((snapshot) => snapshot.agentId === details.agentId)
-        ?.description ?? details.agentId
+    const snapshot = runtime.listSnapshots().find((entry) => entry.agentId === details.agentId)
+    const label = snapshot?.description ?? details.agentId
     return {
       invalidate() {},
       render(width) {
+        const framed = rail.active
+        const layout = framed ? transcriptIntercomLayout(width) : nativeIntercomLayout(width)
         return new Text(
           renderIntercomCard(
             details,
@@ -151,7 +180,9 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
             {
               expanded: options.expanded,
               now: Date.now(),
-              width: Math.max(1, width - 2),
+              model: snapshot?.model,
+              role: snapshot?.role,
+              layout,
               delivery:
                 details.deliveryId === undefined
                   ? undefined
@@ -159,7 +190,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
             },
             theme,
           ).join('\n'),
-          1,
+          framed ? 0 : 1,
           0,
         ).render(width)
       },
@@ -193,16 +224,22 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   pi.registerTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>({
     description:
-      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Foreground is the default unless the selected agent defines background mode.',
-    execute: async (_callId, input, signal, onUpdate, ctx) => {
+      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label, independent of agent type and model, preserved on resume. Foreground is the default unless the selected agent defines background mode.',
+    execute: async (callId, input, signal, onUpdate, ctx) => {
       const progress = new JobProgress(
         runtime,
         { events: pi.events, hasUI: ctx.hasUI, ui: ctx.ui },
         onUpdate,
       )
+      const children = new RailChildReporter(rail, runtime, callId)
+      const onStarted = (agentId: string) => {
+        progress.started(agentId)
+        children.started(agentId)
+      }
       try {
-        return await executeTask(runtime, input, signal, ctx, progress)
+        return await executeTask(runtime, input, signal, ctx, onStarted)
       } finally {
+        children.stop()
         progress.stop()
       }
     },
@@ -214,7 +251,10 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     renderCall(args, theme, context) {
       if (rail.active) {
         rail.report({
-          detail: railTaskDetail(args),
+          detail: railTaskDetail(
+            args,
+            'resume' in args ? runtime.getRecord(args.resume) : undefined,
+          ),
           doneLabel: 'Dispatched',
           runningLabel: 'Dispatching',
           status: 'pending',
@@ -231,7 +271,24 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       if (rail.active) {
         const status: RailStatus = context.isError ? 'error' : isPartial ? 'pending' : 'ok'
         rail.report({
-          detail: railTaskDetail(context.args),
+          detail:
+            details?.status === 'progress'
+              ? details.jobs
+                  .map((job) =>
+                    [taskRoleLabel(job.role, job.model), job.description]
+                      .filter(Boolean)
+                      .join(' · '),
+                  )
+                  .join('; ')
+              : details?.status === 'batch'
+                ? details.items
+                    .map((item) =>
+                      [taskRoleLabel(item.role, item.model), item.taskId]
+                        .filter(Boolean)
+                        .join(' · '),
+                    )
+                    .join('; ')
+                : railTaskDetail(context.args, details),
           doneLabel: 'Dispatched',
           output: railOutputText(result.content),
           runningLabel: 'Dispatching',
@@ -287,6 +344,8 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
                 durationMs: undefined,
                 error: undefined,
                 label,
+                model: details.model,
+                role: details.role,
                 output: undefined,
                 status: 'pending' as const,
                 task: undefined,
@@ -313,14 +372,14 @@ async function executeTask(
   input: Static<typeof TaskInputSchema>,
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
-  progress: JobProgress,
+  onStarted: (agentId: string) => void,
 ): Promise<AgentToolResult<TaskToolDetails>> {
   if ('tasks' in input) {
     const decoded = decodeBatchTaskInput(input)
     const batch = await runBatch({
       ctx,
       input: decoded,
-      onStarted: progress.started,
+      onStarted,
       runtime,
       signal,
     })
@@ -335,7 +394,7 @@ async function executeTask(
     }
   }
   const decoded = decodeSingleTaskInput(input)
-  const result = await runtime.run({ ctx, input: decoded, onStarted: progress.started, signal })
+  const result = await runtime.run({ ctx, input: decoded, onStarted, signal })
 
   if (result.kind === 'background') {
     return {
@@ -368,6 +427,7 @@ export type { TaskControlDetails, TaskControlInput } from './control.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
 export type {
   CapabilityProfile,
+  CapabilityPublication,
   CapabilityRegistration,
   CapabilityToolDefinition,
 } from './capabilities.ts'

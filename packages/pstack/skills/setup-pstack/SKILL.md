@@ -58,6 +58,12 @@ interrogate reviewers: inherit-parent, inherit-parent, inherit-parent, inherit-p
 
 Tell the user the rule was written and that it applies to new sessions. Re-running this skill updates it.
 
+Every dispatch must pass the selected role as `Task.role`, including inherited models. Use `feature` or `refactoring` for the active grouped role. Use `why synthesizer`, `how explorer`, or another exact role label for routed workers.
+
+The runner preserves this explicit label through execution, resume, and display beside the model. `role` does not select a model or grant capabilities. Continue resolving `Task.model` from the rule. Never infer a role from a model shared by several roles.
+
+Read [Task contracts](../poteto-mode/references/task-contracts.md) for capability and isolation requirements.
+
 ### 7. Offer a verification skill (optional)
 
 Check whether the project has a way to drive the real app for proof (a `verify-*` skill, or an existing harness). If not, offer once: "want a project-local verification skill, so agents can drive the app the way a user does and prove changes work? I can generate one with /create-verification-skill." On yes, invoke `/create-verification-skill` (resolves wherever pstack is installed — workspace, user, or plugin). On no, move on without pushing.

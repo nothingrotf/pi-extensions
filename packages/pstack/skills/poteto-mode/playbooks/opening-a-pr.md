@@ -2,7 +2,7 @@
 
 Invoked at the end of every other playbook.
 
-**Worktree.** Work from a git worktree off main; subagents inherit it. Multiple `Task` calls on the same branch each get their own worktree, or `git fetch && git reset --hard origin/<branch>` between them. Dirty branch with unrelated work: patch out, fresh worktree, apply. Snarled worktree: reset from main, redo minimally.
+**Worktree.** Follow [Task contracts](../references/task-contracts.md). Repository writers use managed isolation and return patches for acceptance. Publication uses a separately scoped foreground Task in the destination worktree after acceptance and verification. Never publish synthetic snapshot history or reset unrelated work. If the destination contains unrelated changes, create a clean destination worktree without deleting the original.
 
 **Commits.** Commit liberally; rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit; new commit when separable.
 
@@ -32,4 +32,4 @@ Do not use `## Summary` or `## Test plan` boilerplate. A commit body does not re
 
 **Babysit.** Opening a PR does not start a babysit. Post the URL and keep building. Finish the phase or stack first. Run a separate babysit pass only when the user asks for one after the whole stack exists. A babysit for each new PR stalls the build and spends checks on commits that later waves restart. Push back when feedback drifts from intent.
 
-A subagent that opens a PR runs `interrogate`, `/deslop`, and `/no-comments`. It returns the URL and does not babysit. Return to the parent.
+A preparation owner needs `pstack-nested` to run `interrogate`, `/deslop`, and `/no-comments`. Publication itself receives only the accepted artifact and destination scope. Its foreground Task returns the URL immediately. A wider Autopilot owner continues its explicitly assigned lifecycle through the root coordinator, not inside the publication Task.

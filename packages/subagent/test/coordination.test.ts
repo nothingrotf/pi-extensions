@@ -547,7 +547,7 @@ describe('coordination primitives', () => {
     const combinedBytes = Buffer.byteLength(JSON.stringify(TaskInputSchema), 'utf8')
     expect(singleBytes).toBeLessThanOrEqual(2_500)
     expect(combinedBytes).toBeLessThanOrEqual(5_000)
-    expect(combinedBytes - singleBytes).toBeLessThanOrEqual(2_500)
+    expect(combinedBytes - singleBytes).toBeLessThanOrEqual(2_650)
   })
 
   it('validates structured output and deterministic gates', () => {

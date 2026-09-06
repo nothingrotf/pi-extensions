@@ -27,12 +27,13 @@ import {
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
-import { Type } from 'typebox'
+import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 import { describe, expect, it } from 'vite-plus/test'
 
 import { acquireSubagentHost } from '../src/controller.ts'
 import { runBatch as runCoordinatedBatch } from '../src/coordinator.ts'
+import { renderSubagentHudLines } from '../src/format.ts'
 import {
   acquireSubagentController,
   registerSubagent,
@@ -45,7 +46,12 @@ import {
 } from '../src/index.ts'
 import { redactSensitiveText } from '../src/intercom.ts'
 import { SubagentRuntime } from '../src/runtime.ts'
-import { TaskInputSchema, type TaskInput } from '../src/schema.ts'
+import {
+  SingleTaskInputSchema,
+  TaskInputSchema,
+  type TaskInput,
+  type TaskToolInput,
+} from '../src/schema.ts'
 import { latestState as readLatestState } from '../src/state.ts'
 import { ManifestSchema } from '../src/workspace.ts'
 
@@ -62,7 +68,7 @@ interface ProviderState {
   blocked: Array<() => void>
   blockedReady: Deferred
   controls: TaskControlInput[]
-  inputs: TaskInput[]
+  inputs: TaskToolInput[]
   notification: Deferred
   parentNotices: string[]
   parentRequests: number
@@ -368,7 +374,7 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
       'toolUse',
     )
   }
-  if (prompt === 'NESTED_SELF_RESUME') {
+  if (prompt === 'NESTED_SELF_RESUME' || prompt.startsWith('NESTED_SELF_RESUME:')) {
     const results = context.messages.filter(
       (message) => message.role === 'toolResult' && message.toolName === 'Task',
     )
@@ -403,16 +409,20 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
         'toolUse',
       )
     }
+    const input: TaskInput = {
+      description: 'Start the nested child',
+      prompt: 'RETURN_TOOLS',
+      readonly: true,
+      subagent_type: 'explore',
+    }
+    if (prompt.startsWith('NESTED_SELF_RESUME:')) {
+      input.capability_profile = prompt.slice('NESTED_SELF_RESUME:'.length)
+    }
     return assistant(
       model,
       [
         {
-          arguments: {
-            description: 'Start the nested child',
-            prompt: 'RETURN_TOOLS',
-            readonly: true,
-            subagent_type: 'explore',
-          },
+          arguments: { ...input },
           id: `nested-self-start-${Date.now()}`,
           name: 'Task',
           type: 'toolCall',
@@ -608,20 +618,28 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
       'toolUse',
     )
   }
-  if (prompt === 'NESTED_TOOLS') {
+  if (
+    prompt === 'NESTED_TOOLS' ||
+    prompt === 'NESTED_ROLE' ||
+    prompt.startsWith('NESTED_CAPABILITY:')
+  ) {
     const nested = toolResultText(context, 'Task')
     if (nested !== undefined) {
       return assistant(model, [{ text: `nested-result:${nested}`, type: 'text' }], 'stop')
     }
+    const input: TaskInput = prompt.startsWith('NESTED_CAPABILITY:')
+      ? Value.Decode(SingleTaskInputSchema, JSON.parse(prompt.slice('NESTED_CAPABILITY:'.length)))
+      : {
+          description: 'Inspect nested tools',
+          prompt: 'RETURN_TOOLS',
+          subagent_type: 'generalPurpose',
+        }
+    if (prompt === 'NESTED_ROLE') input.role = 'why synthesizer'
     return assistant(
       model,
       [
         {
-          arguments: {
-            description: 'Inspect nested tools',
-            prompt: 'RETURN_TOOLS',
-            subagent_type: 'generalPurpose',
-          },
+          arguments: { ...input },
           id: `nested-task-${Date.now()}`,
           name: 'Task',
           type: 'toolCall',
@@ -975,7 +993,7 @@ function taskResultTexts(harness: Harness, start: number): string[] {
   return toolResultTexts(harness, start, 'Task')
 }
 
-async function runTask(harness: Harness, input: TaskInput): Promise<string> {
+async function runTask(harness: Harness, input: TaskToolInput): Promise<string> {
   const start = harness.session.messages.length
   harness.state.inputs.push(input)
   await harness.session.prompt('Invoke the queued Task input.', { expandPromptTemplates: false })
@@ -1031,6 +1049,53 @@ async function runBatch(harness: Harness, inputs: TaskInput[]): Promise<string[]
   return taskResultTexts(harness, start)
 }
 
+function registerNestedCapabilities(runtime: SubagentRuntime): void {
+  for (const id of ['approved', 'other-provider']) {
+    runtime.registerCapability({
+      extensions: [],
+      id,
+      readonlyTools: ['approved_read'],
+      tools: [
+        {
+          description: 'Read approved data.',
+          async execute() {
+            return { content: [{ text: 'approved', type: 'text' }], details: {} }
+          },
+          label: 'Approved Read',
+          name: 'approved_read',
+          parameters: Type.Object({}),
+        },
+      ],
+      version: '1',
+    })
+  }
+  for (const id of ['owner-only', 'unapproved']) {
+    runtime.registerCapability({ extensions: [], id, tools: [], version: '1' })
+  }
+  runtime.registerCapabilityProfiles([
+    { id: 'owner', nested: { maxDepth: 3 }, registrations: ['approved', 'owner-only'] },
+    { id: 'leaf', registrations: ['approved'] },
+    { id: 'branch', nested: { maxDepth: 2 }, registrations: ['approved'] },
+    { id: 'deeper', nested: { maxDepth: 4 }, registrations: ['approved'] },
+    { id: 'unapproved', registrations: ['approved', 'unapproved'] },
+    { id: 'other-provider', registrations: ['other-provider'] },
+  ])
+}
+
+const RailActionReportLikeSchema = Type.Object({
+  detail: Type.Optional(Type.String()),
+  doneLabel: Type.Optional(Type.String()),
+  durationMs: Type.Optional(Type.Number()),
+  iconKey: Type.Optional(Type.String()),
+  parentToolCallId: Type.Optional(Type.String()),
+  runningLabel: Type.Optional(Type.String()),
+  status: Type.String(),
+  summary: Type.Optional(Type.String()),
+  toolCallId: Type.String(),
+  toolName: Type.Optional(Type.String()),
+})
+type RailActionReportLike = Static<typeof RailActionReportLikeSchema>
+
 const baseInput: TaskInput = {
   description: 'Inspect the child',
   model: 'openai-codex/gpt-5.6-sol:high',
@@ -1039,6 +1104,236 @@ const baseInput: TaskInput = {
 }
 
 describe('subagent Task integration', () => {
+  it('carries an explicit task role from the real tool to its worker widget', async () => {
+    const harness = await createHarness()
+    try {
+      const input = { ...baseInput, role: 'why synthesizer' }
+      const result = await runTask(harness, input)
+      expect(result).toContain('Agent ID:')
+      const theme = {
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+        getFgAnsi: () => '',
+      }
+      const lines = renderSubagentHudLines(harness.runtime.listSnapshots(), theme, 120)
+      expect(lines.join('\n')).toContain('why synthesizer')
+      const id = agentId(result)
+      expect(latestState(harness).records.at(-1)).toMatchObject({
+        role: 'why synthesizer',
+        execution: { role: 'why synthesizer' },
+      })
+      expect(harness.runtime.latestResult(id)?.role).toBe('why synthesizer')
+      expect(await runTaskControl(harness, { action: 'status', agent_id: id })).toContain(
+        '"role": "why synthesizer"',
+      )
+      expect(await runTaskControl(harness, { action: 'jobs' })).toContain('why synthesizer')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('preserves explicit role through disk restore, real reload, and resume without inference', async () => {
+    const harness = await createHarness()
+    try {
+      await harness.session.bindExtensions({ shutdownHandler: () => undefined })
+      const id = agentId(await runTask(harness, { ...baseInput, role: 'feature' }))
+      const sessionFile = harness.session.sessionManager.getSessionFile()
+      if (sessionFile === undefined) throw new Error('The parent transcript is unavailable.')
+      const restored = new SubagentRuntime(harness.pi)
+      restored.restore({ sessionManager: SessionManager.open(sessionFile) })
+      expect(restored.listSnapshots().find((snapshot) => snapshot.agentId === id)?.role).toBe(
+        'feature',
+      )
+      await harness.session.reload()
+      expect(await runTaskControl(harness, { action: 'status', agent_id: id })).toContain(
+        '"role": "feature"',
+      )
+      expect(await runTask(harness, { ...baseInput, resume: id, prompt: 'second' })).toContain(
+        'child:first|second',
+      )
+      expect(latestState(harness).records.find((record) => record.agentId === id)).toMatchObject({
+        role: 'feature',
+        execution: { role: 'feature' },
+      })
+      expect(await runTask(harness, { ...baseInput, resume: id, role: 'refactoring' })).toContain(
+        'preserve the original role',
+      )
+      const legacy = agentId(
+        await runTask(harness, { ...baseInput, prompt: 'feature refactoring why synthesizer' }),
+      )
+      expect(await runTask(harness, { ...baseInput, resume: legacy })).toContain('Agent ID:')
+      const record = latestState(harness).records.find((entry) => entry.agentId === legacy)
+      expect(record).not.toHaveProperty('role')
+      expect(record?.execution).not.toHaveProperty('role')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('preserves per-item role in coordinated batches, blocked results, and reloaded state', async () => {
+    const harness = await createHarness()
+    try {
+      await harness.session.bindExtensions({ shutdownHandler: () => undefined })
+      const result = await runTask(harness, {
+        tasks: [
+          { ...baseInput, id: 'feature', role: 'feature' },
+          { ...baseInput, id: 'failure', prompt: 'FAIL', role: 'refactoring' },
+          { ...baseInput, id: 'blocked', needs: ['failure'], role: 'why synthesizer' },
+          { ...baseInput, id: 'legacy' },
+        ],
+      })
+      expect(result).toContain('blocked: blocked')
+      const roles = latestState(harness)
+        .runs.at(-1)
+        ?.tasks.map((task) => task.role)
+      expect(roles).toEqual(['feature', 'refactoring', 'why synthesizer', undefined])
+      const message = harness.session.messages.findLast(
+        (entry) => entry.role === 'toolResult' && entry.toolName === 'Task',
+      )
+      expect(message).toMatchObject({
+        details: {
+          items: [
+            { role: 'feature' },
+            { role: 'refactoring' },
+            { role: 'why synthesizer' },
+            { taskId: 'legacy' },
+          ],
+        },
+      })
+      await harness.session.reload()
+      expect(
+        latestState(harness)
+          .runs.at(-1)
+          ?.tasks.map((task) => task.role),
+      ).toEqual(roles)
+      expect(latestState(harness).records.map((record) => record.role)).toEqual(
+        expect.arrayContaining(['feature', 'refactoring', undefined]),
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('renders active role widgets at wide and narrow widths without replacing agent glyphs', async () => {
+    const harness = await createHarness()
+    try {
+      await runBatch(
+        harness,
+        ['feature', 'refactoring', 'why synthesizer'].map((role) => ({
+          ...baseInput,
+          description: 'Inspect behavior',
+          model: 'openai-codex/gpt-6-astra',
+          prompt: 'BLOCK',
+          role,
+          run_in_background: true,
+        })),
+      )
+      await harness.state.blockedReady.promise
+      const snapshots = harness.runtime.listSnapshots()
+      expect(snapshots).toHaveLength(3)
+      expect(snapshots.every((snapshot) => snapshot.running)).toBe(true)
+      const theme = {
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+        getFgAnsi: () => '',
+      }
+      const now = Math.max(...snapshots.map((snapshot) => snapshot.startedAt))
+      for (const width of [1, 8, 20, 40, 80, 120]) {
+        const lines = renderSubagentHudLines(snapshots, theme, width, now)
+        expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+        if (width >= 40) {
+          const text = lines.join('\n')
+          expect(text).toContain('feature')
+          expect(text).toContain('refactoring')
+          expect(text).toContain('why synthesizer')
+          expect(text).toContain('6-astra')
+        }
+      }
+      expect(renderSubagentHudLines(snapshots, theme, 120, now).join('\n')).toContain('✧')
+      const legacy = snapshots.map(({ role, ...snapshot }) => {
+        expect(role).toBeDefined()
+        return snapshot
+      })
+      for (const width of [120, 40]) {
+        const before = renderSubagentHudLines(legacy, theme, width, now).join('\n')
+        const after = renderSubagentHudLines(snapshots, theme, width, now).join('\n')
+        expect(before).not.toContain('why synthesizer')
+        expect(after).toContain('why synthesizer')
+        const evidencePath = process.env.PI_SUBAGENT_ROLE_EVIDENCE
+        if (evidencePath !== undefined) {
+          await writeFile(
+            evidencePath,
+            `ROLE WIDGET ${width} COLUMNS\nLEGACY (NO ROLE)\n${before}\nEXPLICIT ROLE\n${after}\n`,
+            { flag: 'a' },
+          )
+        }
+      }
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('keeps role on live background jobs and aborted results', async () => {
+    const harness = await createHarness()
+    try {
+      const id = agentId(
+        await runTask(harness, {
+          ...baseInput,
+          role: 'refactoring',
+          prompt: 'BLOCK',
+          run_in_background: true,
+        }),
+      )
+      await harness.state.blockedReady.promise
+      expect(
+        harness.runtime.listSnapshots().find((snapshot) => snapshot.agentId === id),
+      ).toMatchObject({
+        role: 'refactoring',
+        running: true,
+      })
+      expect(await runTaskControl(harness, { action: 'jobs' })).toContain('refactoring')
+      await harness.runtime.cancel(id)
+      expect(harness.runtime.latestResult(id)).toMatchObject({
+        role: 'refactoring',
+        status: 'aborted',
+      })
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('keeps explicit nested role separate from its parent role and executable agent type', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, baseInput)
+      harness.runtime.registerCapabilityProfile({
+        id: 'role-nested',
+        nested: { maxDepth: 2 },
+        registrations: [],
+      })
+      const result = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'role-nested',
+        role: 'feature',
+        prompt: 'NESTED_ROLE',
+      })
+      expect(result).toContain('nested-result:')
+      const records = latestState(harness).records
+      expect(records.find((record) => record.parentAgentId !== undefined)).toMatchObject({
+        role: 'why synthesizer',
+        subagentType: 'generalPurpose',
+        execution: { role: 'why synthesizer' },
+      })
+      expect(records.find((record) => record.agentId === agentId(result))?.role).toBe('feature')
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('reflows IRC cards at the actual terminal width without losing expanded text', async () => {
     const harness = await createHarness()
     try {
@@ -1641,6 +1936,37 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  it('retains runtime verifier artifacts without allowing a join', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        ...baseInput,
+        isolation: { integration: 'manual', mode: 'worktree' },
+        prompt: 'WRITE_ISOLATED',
+        readonly: false,
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.notification.promise
+      const record = latestState(harness).records.find((entry) => entry.agentId === id)
+      expect(record?.status).toBe('completed')
+      expect(record?.isolation?.integration).toBe('manual')
+      expect(record?.isolation?.repositories[0]?.changedFiles).toContainEqual({
+        path: 'isolated.txt',
+        status: 'A',
+      })
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+      const joined = await runTaskControl(harness, { action: 'join', agent_id: id })
+      expect(joined).toContain('"outcome": "rejected"')
+      expect(joined).toContain('"reason": "not-staged"')
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
   it('discovers project agent files from the effective cwd', async () => {
     const harness = await createHarness()
     const nested = join(harness.dir, 'nested')
@@ -2047,6 +2373,53 @@ describe('subagent Task integration', () => {
       expect(notice).toBeDefined()
       expect(harness.state.parentNotices).toHaveLength(1)
     } finally {
+      await harness.close()
+    }
+  })
+
+  it('nests foreground child tool calls under the Task rail row', async () => {
+    const harness = await createHarness()
+    const reports: RailActionReportLike[] = []
+    const unsubscribe = harness.pi.events.on('hud:rail-action', (data) => {
+      if (Value.Check(RailActionReportLikeSchema, data)) reports.push(data)
+    })
+    try {
+      harness.pi.events.emit('hud:rail-enabled', { enabled: true })
+      const result = await runTask(harness, {
+        ...baseInput,
+        description: 'Report to the parent model',
+        prompt: 'REPORT_PARENT',
+      })
+      expect(result).toContain('reported')
+      const parent = harness.session.messages
+        .flatMap((message) => (message.role === 'assistant' ? message.content : []))
+        .find((block) => block.type === 'toolCall' && block.name === 'Task')
+      expect(parent?.type).toBe('toolCall')
+      const parentId = parent?.type === 'toolCall' ? parent.id : ''
+      const children = reports.filter((report) => report.parentToolCallId !== undefined)
+      expect(children.length).toBeGreaterThan(0)
+      expect(children.every((report) => report.parentToolCallId === parentId)).toBe(true)
+      expect(children.map((report) => report.toolName)).not.toContain('update_progress')
+      const notified = children.filter((report) => report.toolName === 'notify_parent')
+      expect(notified.map((report) => report.status)).toEqual(['pending', 'ok'])
+      expect(notified[0]).toMatchObject({
+        detail: 'The workspace name needs review.',
+        doneLabel: 'Notified parent',
+        iconKey: 'agent',
+        runningLabel: 'Notifying parent',
+      })
+      expect(notified[1]?.durationMs).toBeGreaterThanOrEqual(0)
+      expect(notified[1]?.summary?.length ?? 0).toBeGreaterThan(0)
+      const agentId = harness.runtime.listSnapshots()[0]?.agentId ?? ''
+      expect(notified[0]?.toolCallId.startsWith(`${agentId}:`)).toBe(true)
+      harness.pi.events.emit('hud:rail-enabled', { enabled: false })
+      const before = reports.length
+      await runTask(harness, { ...baseInput, prompt: 'REPORT_PARENT' })
+      expect(reports.slice(before).some((report) => report.parentToolCallId !== undefined)).toBe(
+        false,
+      )
+    } finally {
+      unsubscribe()
       await harness.close()
     }
   })
@@ -3486,6 +3859,142 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it.each(['leaf', 'branch'])(
+    'allows a nested Task to select a narrower capability profile %s',
+    async (profile) => {
+      const harness = await createHarness()
+      try {
+        await runTask(harness, { ...baseInput, prompt: 'context seed' })
+        registerNestedCapabilities(harness.runtime)
+        const result = await harness.runtime.run({
+          ctx: harness.context(),
+          input: {
+            ...baseInput,
+            capability_profile: 'owner',
+            prompt: `NESTED_CAPABILITY:${JSON.stringify({
+              ...baseInput,
+              capability_profile: profile,
+              prompt: 'RETURN_TOOLS',
+              readonly: true,
+            })}`,
+            readonly: true,
+          },
+          signal: undefined,
+        })
+        expect(result.kind).toBe('completed')
+        if (result.kind !== 'completed') throw new Error('The capability owner did not complete.')
+        expect(result.content).toContain('nested-result:Agent ID:')
+        expect(result.content).toContain('approved_read')
+        expect(result.content).not.toMatch(/tools:[^\n]*(Task|TaskControl|bash|edit|write)/)
+        const child = latestState(harness).records.find(
+          (record) => record.runId === result.details.runId && record.depth === 2,
+        )
+        expect(child?.execution).toMatchObject({
+          capability: {
+            extensions: [{ id: 'approved', version: '1' }],
+            nested: profile === 'leaf' ? { enabled: false } : { enabled: true, maxDepth: 2 },
+            profileId: profile,
+            registrations: [{ id: 'approved', version: '1' }],
+          },
+          readonly: true,
+        })
+      } finally {
+        await harness.close()
+      }
+    },
+  )
+
+  it.each([
+    {
+      profile: 'unapproved',
+      readonly: true,
+      tools: ['approved_read'],
+      error: 'parent capability profile',
+    },
+    {
+      profile: 'other-provider',
+      readonly: true,
+      tools: ['approved_read'],
+      error: 'parent capability profile',
+    },
+    {
+      profile: 'deeper',
+      readonly: true,
+      tools: ['approved_read'],
+      error: 'parent capability profile',
+    },
+    {
+      profile: 'leaf',
+      readonly: false,
+      tools: ['approved_read'],
+      error: 'parent read-only policy',
+    },
+    { profile: 'leaf', readonly: true, tools: ['read'], error: 'parent tool contract' },
+  ])(
+    'rejects nested capability expansion $profile readonly=$readonly tools=$tools',
+    async ({ profile, readonly, tools, error }) => {
+      const harness = await createHarness()
+      try {
+        await runTask(harness, { ...baseInput, prompt: 'context seed' })
+        registerNestedCapabilities(harness.runtime)
+        const result = await harness.runtime.run({
+          ctx: harness.context(),
+          input: {
+            ...baseInput,
+            capability_profile: 'owner',
+            prompt: `NESTED_CAPABILITY:${JSON.stringify({
+              ...baseInput,
+              capability_profile: profile,
+              prompt: 'RETURN_TOOLS',
+              readonly,
+            })}`,
+            readonly: true,
+            tools,
+          },
+          signal: undefined,
+        })
+        expect(result.kind).toBe('completed')
+        if (result.kind !== 'completed') throw new Error('The capability owner did not complete.')
+        expect(result.content).toContain(error)
+        expect(
+          latestState(harness).records.filter((record) => record.runId === result.details.runId),
+        ).toHaveLength(1)
+      } finally {
+        await harness.close()
+      }
+    },
+  )
+
+  it('preserves a narrower nested capability profile when resuming without a profile', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      registerNestedCapabilities(harness.runtime)
+      const result = await harness.runtime.run({
+        ctx: harness.context(),
+        input: {
+          ...baseInput,
+          capability_profile: 'owner',
+          prompt: 'NESTED_SELF_RESUME:leaf',
+          readonly: true,
+        },
+        signal: undefined,
+      })
+      expect(result.kind).toBe('completed')
+      if (result.kind !== 'completed') throw new Error('The capability owner did not complete.')
+      expect(result.content).toBe('nested resume complete')
+      const child = latestState(harness).records.find(
+        (record) => record.runId === result.details.runId && record.depth === 2,
+      )
+      expect(child?.execution).toMatchObject({
+        capability: { profileId: 'leaf', nested: { enabled: false } },
+        readonly: true,
+      })
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('exposes nested Task below the limit and removes it at the limit', async () => {
     const harness = await createHarness()
     try {
@@ -3518,6 +4027,10 @@ describe('subagent Task integration', () => {
         records.map((record) => record.depth).sort((left, right) => (left ?? 0) - (right ?? 0)),
       ).toEqual([1, 2])
       const nested = records.find((record) => record.depth === 2)
+      expect(nested?.execution).toMatchObject({
+        capability: { profileId: 'nested-profile', nested: { enabled: true, maxDepth: 2 } },
+        readonly: true,
+      })
       expect(nested?.parentAgentId).toBe(records.find((record) => record.depth === 1)?.agentId)
       expect(nested?.rootAgentId).toBe(records.find((record) => record.depth === 1)?.agentId)
     } finally {

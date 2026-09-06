@@ -7,7 +7,7 @@ Ceremony must scale with the program. Every gate below prices in coordinator min
 Three rules carry the rest.
 
 - Completions are queue events, not interrupts.
-- Every spawn and every resume carries the standing orders verbatim.
+- Local spawns reference the standing-orders file. Every resume carries the standing orders verbatim.
 - The brief is the product. A vague brief fails quietly, because a worker cannot ask you a question.
 
 Use `todo_write` with the steps below copied verbatim. A step you skip stays listed with `skip: <reason>`.
@@ -16,7 +16,7 @@ Use `todo_write` with the steps below copied verbatim. A step you skip stays lis
 
 - **Coordinator (this chat).** Local. Frames, authors briefs, drains the inbox, owns the human report, makes judgment calls. It never authors or edits code: conflicted merges, restacks, and code changes are always tasks. Mechanically landing a verified unit (fast-forward or clean cherry-pick of a worker's commit, then push) is bookkeeping the coordinator may do itself on repos where local git is cheap; queueing finished work behind an idle stacker is how a deadline harvests nothing. The loop is agentic end to end. Agents are spawned, resumed, and drained only through `Task`. State reads and writes go through `scripts/orch/orch` at drain points, one command in and one line out, to conserve context. The CLI never spawns, waits, or wakes anything.
 - **Sub-coordinator.** Always local, durable, one per track, and only when the program exceeds what one coordinator's drains can manage. A track the coordinator can drain itself needs no middle layer: each nested layer re-pays a full orientation preamble, and a blocking sub-coordinator hides its children while the parent idles. Owns its track's units and boards, authors its workers' briefs, spawns its own workers and verifiers. Nested agents use the available `Task` schema and managed worktree isolation. Rolls up aggregates at wave boundaries; never forwards raw child reports. Cap in-flight children at what one drain can process, roughly ten, as a rolling window; never as blocking batches, which cost the slowest child of every batch.
-- **Worker / verifier.** Use `subagent_type: "poteto-agent"` for code workers and ad-hoc helpers. Give `capability_profile: "pstack-nested"` only to owners that must delegate. Leaf workers omit the profile. Use `Task` with a managed worktree for each repository writer. Use read-only mode for static verifiers. A runtime verifier that needs `control-ui` or `control-cli` runs as mutable background work with managed isolation. Never join its incidental patch. Use `session_history` only with known session references. Briefs inline bounded facts or point at repository paths. Prefer fewer, broader workers. Keep one writer per worktree or branch (principle-separate-before-serializing-shared-state). Use a different configured model family for the verifier when available.
+- **Worker / verifier.** Use `subagent_type: "poteto-agent"` for code workers and ad-hoc helpers. Give `capability_profile: "pstack-nested"` only to owners that must delegate. Leaf `poteto-agent` workers use the default `pstack-leaf` profile. Set `Task.role` to the selected model-policy role on every spawn. Use `Task` with a managed worktree for each repository writer. Use read-only mode for static verifiers. A runtime verifier that needs `control-ui` or `control-cli` runs as mutable background work with `isolation: { mode: "worktree", integration: "manual" }`. Never join its incidental patch. Use `session_history` only with known session references. Briefs inline bounded facts or point at repository paths. Prefer fewer, broader workers. Keep one writer per worktree or branch (principle-separate-before-serializing-shared-state). Use a different configured model family for the verifier when available.
 
 Depth stays at coordinator, track, worker. Author the track decomposition per project (build, landing, and verification are common cuts, not a required shape); hard-coded swarm trees were tried and parked as too rigid.
 
@@ -24,7 +24,7 @@ Depth stays at coordinator, track, worker. Author the track decomposition per pr
 
 Create `~/.pi/agent/poteto/orchestrate/<project-slug>/`. Every file has exactly one writer; owners publish facts, readers aggregate at read time. Run `scripts/orch/orch --store <store-dir>`, written below as `orch`, for bookkeeping. Its canonical TSV and JSON remain readable without the CLI.
 
-- `preferences.md` is the standing-orders register. Use numbered lines with one constraint each. Include model policy, Task routing, stack shape, verification, forbidden paths, and escalation. Record `poteto-agent` and `pstack-nested` rules exactly. Paste the file verbatim into every spawn and resume. Directives decay across resumes, and each dropped directive costs a human turn. If you restate an instruction, append the instruction before you act (principle-encode-lessons-in-structure).
+- `preferences.md` is the standing-orders register. Use numbered lines with one constraint each. Include model policy, Task routing, stack shape, verification, forbidden paths, and escalation. Record `poteto-agent` and `pstack-nested` rules exactly. Reference its absolute path on local spawns. Paste the file verbatim into every resume. Directives decay across resumes, and each dropped directive costs a human turn. If you restate an instruction, append the instruction before you act (principle-encode-lessons-in-structure).
 - `overview.md` is the durable PR and issue DB. Append; never rewrite wholesale per event.
 - `units.tsv` has one row per unit: id, track, state, branch, PR, head SHA, brief path. Update rows in place.
 - `frontier.json` is the computed merge frontier, per Stack safety.
@@ -39,7 +39,9 @@ Your prompts to agents are your only product, and a sloppy brief compounds into 
 
 ```
 GOAL         one sentence, the outcome, executable by a stranger with no chat access
-SCOPE        paths this unit may write; paths it may not; its exclusive worktree or branch
+SCOPE        relative product paths in the effective child workspace; forbidden paths;
+             destination branch; isolation integration mode; explicit external report paths
+ROLE         exact model-policy role passed as Task.role, independent of Task.model
 CONTEXT      pointers to files and PRs; upstream reports pasted in full when this unit
              depends on them, because workers cannot see siblings
 ACCEPTANCE   checkable criteria, one per line
@@ -51,7 +53,7 @@ REPORT       status, branch, head SHA, PRs, verdict, what you actually ran, devi
 STANDING     <preferences.md pasted verbatim>
 ```
 
-Size the brief to the unit. A one-command unit gets the template collapsed to a paragraph that still names goal, scope, the verify command, and the report shape; a 4KB scaffold around a two-line edit costs more to write and obey than the edit. Local spawns may reference the standing-orders file by store path; paste the standing orders verbatim for every resume.
+Size the brief to the unit. A one-command unit gets the template collapsed to a paragraph that still names goal, scope, the verify command, and the report shape; a 4KB scaffold around a two-line edit costs more to write and obey than the edit. Local spawns may reference the standing-orders file by store path; paste the standing orders verbatim for every resume. Read `references/task-contracts.md` before dispatch. Never instruct an isolated worker to edit, commit, or push from the source checkout. Accept its captured patch first. Then delegate the destination commit and push as a separately scoped foreground operation. Do not push synthetic snapshot history as the product branch.
 
 A sub-coordinator brief adds its track boundary and unit list, its spawn budget and isolation policy, the drain protocol, and the rollup format (per child: name, status, PR, head SHA, verdict, one line; plus track status and frontier delta).
 
@@ -90,7 +92,7 @@ Scale verification to the unit. When VERIFY is a single cheap command, the worke
 
 Write ledger rows with `orch ledger record`. Check the current PR and head SHA with `orch ledger check`. `ledger.tsv`, one row per verdict, keyed by PR number plus head SHA: `live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed`. CI green is an input to a verdict, not a verdict. Behavioral work needs better than `type-check-only`. `verifier-blocked` is not a pass; respawn when the environment heals. `verifier-failed` gets a fix unit, not a re-verify. A worker may self-report; a verifier overrides it on the same key. A new head SHA voids the row, so re-verify after restack. The ledger answers "was this verified", not memory and not the transcript.
 
-A unit is not done until its output is externalized the moment it lands, never batched to the end of the run: a worker pushes its branch, a verifier writes its ledger row, receipts land in the store. Work that exists only on one VM when that VM dies was never done.
+A unit is not done until its output is externalized the moment it lands, never batched to the end of the run: the accepted patch reaches its destination branch through a scoped publication task, the coordinator records the verifier's verdict, and receipts land in the store. Work that exists only on one VM when that VM dies was never done.
 
 #### Liveness and failure
 

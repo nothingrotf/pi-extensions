@@ -1,4 +1,5 @@
 import { SessionManager } from '@earendil-works/pi-coding-agent'
+import { Container, stripTerminalSequences } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
@@ -96,16 +97,16 @@ function harness(sessionManager = SessionManager.inMemory()) {
     }
     for (const handler of listeners) await handler(event, ctx)
   }
-  const mount = () => {
+  const mount = (root = new Container()) => {
     if (footerFactory === undefined) {
       throw new Error('Footer factory was not installed')
     }
     footerComponent = footerFactory(
-      {
+      Object.assign(root, {
         requestRender: () => {
           renders += 1
         },
-      },
+      }),
       { fg: (_color, text) => text },
       {
         getExtensionStatuses: () => new Map(),
@@ -149,6 +150,112 @@ function harness(sessionManager = SessionManager.inMemory()) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
 
 describe('HUD lifecycle', () => {
+  test.each(['mcp', 'mcpScript', 'mcp__linear'])(
+    '%s stays in actions while arguments stream',
+    async (toolName) => {
+      const base = import.meta.resolve('@earendil-works/pi-coding-agent')
+      const { ToolExecutionComponent } = await import(
+        new URL('./modes/interactive/components/tool-execution.js', base).href
+      )
+      const { initTheme } = await import(new URL('./modes/interactive/theme/theme.js', base).href)
+      initTheme('dark')
+      const instance = harness()
+      await instance.emit('session_start')
+      const root = new Container()
+      instance.mount(root)
+      try {
+        await instance.emit('agent_start')
+        const message = { role: 'assistant', timestamp: 1234, content: [] }
+        await instance.emit('message_start', { message })
+        const call = { type: 'toolCall', id: 'streamed-tool', name: toolName, arguments: {} }
+        message.content.push(call)
+        await instance.emit('message_update', {
+          message,
+          assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0, partial: message },
+        })
+        const native = new ToolExecutionComponent(
+          toolName,
+          call.id,
+          call.arguments,
+          {},
+          undefined,
+          root,
+          process.cwd(),
+        )
+        root.addChild(native)
+        root.requestRender()
+        expect(native.render(100)).toEqual([])
+        expect(instance.transcript()).toContain('1 action')
+        call.arguments = { tool: 'linear.save_issue', code: 'emit(1)' }
+        await instance.emit('message_update', {
+          message,
+          assistantMessageEvent: {
+            type: 'toolcall_delta',
+            contentIndex: 0,
+            delta: '{}',
+            partial: message,
+          },
+        })
+        native.updateArgs(call.arguments)
+        root.requestRender()
+        expect(native.render(100)).toEqual([])
+        await instance.emit('message_end', { message })
+        await instance.emit('tool_execution_start', {
+          toolName,
+          toolCallId: call.id,
+          args: call.arguments,
+        })
+        await instance.emit('tool_execution_end', {
+          toolName,
+          toolCallId: call.id,
+          result: { content: [{ type: 'text', text: 'Completed output' }] },
+          isError: false,
+        })
+        expect(native.render(100)).toEqual([])
+        expect(instance.transcript()).toContain('1 action')
+        expect(
+          instance.appended().filter((entry) => entry.customType === 'hud-rail-replacement'),
+        ).toHaveLength(1)
+        await instance.runCommand('hud', 'rail off')
+        expect(native.render(100).join('\n')).toContain(toolName)
+        await instance.runCommand('hud', 'rail on')
+        expect(native.render(100)).toEqual([])
+      } finally {
+        await instance.emit('session_shutdown')
+      }
+    },
+  )
+
+  test.each(['message_start', 'message_end'])(
+    'groups tools first received through %s',
+    async (eventName) => {
+      const instance = harness()
+      await instance.emit('agent_start')
+      try {
+        await instance.emit(eventName, {
+          message: {
+            role: 'assistant',
+            timestamp: 1234,
+            content: [
+              {
+                type: 'toolCall',
+                id: 'complete-call',
+                name: 'mcp',
+                arguments: { tool: 'linear.save_issue' },
+              },
+            ],
+          },
+        })
+        expect(instance.transcript()).toContain('1 action')
+        expect(
+          instance.appended().filter((entry) => entry.customType === 'hud-rail-replacement'),
+        ).toHaveLength(1)
+      } finally {
+        await instance.emit('session_shutdown')
+      }
+    },
+  )
+
   test('restores cache share and updates it after responses and tree navigation', async () => {
     const session = SessionManager.inMemory()
     const appendUsage = (input, cacheRead, cacheWrite) =>
@@ -348,6 +455,63 @@ describe('HUD lifecycle', () => {
       'hud-rail-replacement',
       'hud-rail-state',
     ])
+  })
+
+  test('nests child reports without native tool replacement entries', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', {
+      detail: 'Inspect package metadata',
+      doneLabel: 'Dispatched',
+      iconKey: 'agent',
+      runningLabel: 'Dispatching',
+      status: 'pending',
+      toolCallId: 'task',
+      toolName: 'Task',
+    })
+    instance.emitEvent('hud:rail-action', {
+      category: 'read',
+      detail: 'package.json',
+      doneLabel: 'Read',
+      iconKey: 'read',
+      parentToolCallId: 'task',
+      runningLabel: 'Reading',
+      status: 'pending',
+      toolCallId: 'child:read-1',
+      toolName: 'read',
+    })
+    instance.emitEvent('hud:rail-action', {
+      category: 'read',
+      doneLabel: 'Read',
+      durationMs: 300,
+      iconKey: 'read',
+      output: 'line one\nline two',
+      parentToolCallId: 'task',
+      runningLabel: 'Reading',
+      status: 'ok',
+      summary: '2 lines',
+      toolCallId: 'child:read-1',
+      toolName: 'read',
+    })
+    const transcript = stripTerminalSequences(instance.transcript())
+    expect(transcript).toContain('Dispatching')
+    expect(transcript).toMatch(/\n {6}╰─ ✓ . Read\s+package\.json · 2 lines\s+0\.3s/u)
+    const replacements = instance
+      .appended()
+      .filter((entry) => entry.customType === 'hud-rail-replacement')
+      .map((entry) => entry.data.toolCallId)
+    expect(replacements).toEqual(['task'])
+    const states = instance
+      .appended()
+      .filter((entry) => entry.customType === 'hud-rail-state')
+      .map((entry) => entry.data.report)
+    expect(states.filter((report) => report.parentToolCallId === 'task')).toHaveLength(2)
+    expect(states.at(-1)).toMatchObject({
+      durationMs: 300,
+      parentToolCallId: 'task',
+      status: 'ok',
+      toolCallId: 'child:read-1',
+    })
   })
 
   test('persists state changes instead of alternating call and result render reports', async () => {

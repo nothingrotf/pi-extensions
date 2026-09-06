@@ -1,6 +1,6 @@
 import type { ToolCall } from '@earendil-works/pi-ai'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import { visibleWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { beforeAll, describe, expect, test, vi } from 'vite-plus/test'
 
 import {
@@ -765,6 +765,94 @@ describe('railLines', () => {
     expect(railLines(groups, theme, { expanded: false, width: 60 })[1]).toBe(
       '╰─ ✓ □ Read        a.ts · line',
     )
+  })
+
+  test('preserves the completed Task role and model at a 50-column terminal width', () => {
+    const groups = groupActions([
+      read({
+        category: 'other',
+        detail: 'why synthesizer · 6-astra · Scripted role verification',
+        doneLabel: 'Dispatched',
+        durationMs: 55_400,
+        iconKey: 'agent',
+        runningLabel: 'Dispatching',
+        summary: '3 lines',
+      }),
+    ])
+    const lines = railLines(groups, theme, { expanded: false, width: 44 })
+    expect(lines.join('\n')).toContain('why synthesizer · 6-astra')
+    expect(lines[1]).toMatch(/55\.4s$/u)
+    expect(lines.every((line) => visibleWidth(line) <= 44)).toBe(true)
+    expect(lines.some((line) => /·\s+55\.4s$/u.test(line))).toBe(false)
+  })
+
+  test.each([false, true])('wraps narrow Task details with ANSI and nerd icons=%s', (nerd) => {
+    setIconMode(nerd ? 'nerd' : 'ascii')
+    try {
+      for (const running of [false, true]) {
+        const groups = groupActions([
+          read({
+            category: 'other',
+            detail: '\x1b[36mwhy synthesizer · 6-astra · 检查 🔎 implementation\x1b[0m',
+            doneLabel: 'Dispatched',
+            durationMs: running ? undefined : 55_400,
+            iconKey: 'agent',
+            runningLabel: 'Dispatching',
+            status: running ? 'pending' : 'ok',
+          }),
+        ])
+        for (const width of [12, 20, 32, 44]) {
+          const lines = railLines(groups, theme, { expanded: false, width })
+          expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+          if (width >= 32) {
+            const text = lines.map(stripTerminalSequences).join('\n').replace(/\s+/gu, ' ')
+            expect(text).toContain('why synthesizer · 6-astra')
+            expect(text).toContain('检查 🔎 implementation')
+          }
+          if (!running) expect(stripTerminalSequences(lines[1] ?? '')).toMatch(/55\.4s$/u)
+        }
+      }
+    } finally {
+      setIconMode('ascii')
+    }
+  })
+
+  test('keeps fitting Task identities on one row', () => {
+    const groups = groupActions([
+      read({
+        detail: 'why synthesizer · 6-astra',
+        doneLabel: 'Dispatched',
+        durationMs: 55_400,
+        iconKey: 'agent',
+      }),
+    ])
+    const lines = railLines(groups, theme, { expanded: false, width: 80 })
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toBe(`${'╰─ ✓ ▹ Dispatched  why synthesizer · 6-astra'.padEnd(75)}55.4s`)
+  })
+
+  test('preserves tree trunks for wrapped Task groups and expanded children', () => {
+    const task = read({
+      category: 'other',
+      detail: 'why synthesizer · 6-astra · Scripted role verification',
+      doneLabel: 'Dispatched',
+      durationMs: 55_400,
+      iconKey: 'agent',
+    })
+    const groups = groupActions([task, { ...task, toolCallId: 'second' }, bash()])
+    const lines = railLines(groups, theme, { expanded: true, width: 44 })
+    expect(lines.every((line) => visibleWidth(line) <= 44)).toBe(true)
+    expect(lines).toContain('│     why synthesizer · 6-astra · Scripted')
+    expect(lines).toContain('│  │  why synthesizer · 6-astra · Scripted')
+    expect(lines.filter((line) => line.includes('55.4s'))).toHaveLength(2)
+  })
+
+  test('does not wrap unrelated agent tool details', () => {
+    const groups = groupActions([
+      read({ iconKey: 'agent', doneLabel: 'Inspected', detail: 'x'.repeat(100) }),
+    ])
+    const lines = railLines(groups, theme, { expanded: false, width: 44 })
+    expect(lines).toHaveLength(2)
   })
 
   test('keeps the duration visible and hard-cuts a long row', () => {

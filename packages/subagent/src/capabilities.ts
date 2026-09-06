@@ -7,9 +7,11 @@ import type { CapabilityContract } from './schema.ts'
 export type CapabilityToolDefinition = ToolDefinition<TSchema, unknown, unknown>
 
 export interface CapabilityRegistration {
+  createTools?: () => readonly CapabilityToolDefinition[]
   extensions: readonly InlineExtension[]
   id: string
   readonlyTools?: readonly string[]
+  systemPrompt?: string
   tools: readonly CapabilityToolDefinition[]
   version: string
 }
@@ -24,6 +26,28 @@ export interface ResolvedCapabilities {
   contract: CapabilityContract
   extensions: readonly InlineExtension[]
   tools: readonly string[]
+}
+
+export function isCapabilitySubset(
+  requested: CapabilityContract,
+  approved: CapabilityContract,
+): boolean {
+  const identitiesMatch = (
+    registrations: CapabilityContract['registrations'],
+    allowed: CapabilityContract['registrations'],
+  ): boolean =>
+    registrations.every((registration) =>
+      allowed.some(
+        (entry) => entry.id === registration.id && entry.version === registration.version,
+      ),
+    )
+  return (
+    identitiesMatch(requested.registrations, approved.registrations) &&
+    identitiesMatch(requested.extensions, approved.extensions) &&
+    requested.tools.every((tool) => approved.tools.includes(tool)) &&
+    (!requested.nested.enabled ||
+      (approved.nested.enabled && requested.nested.maxDepth <= approved.nested.maxDepth))
+  )
 }
 
 const MAX_NESTED_DEPTH = 16
@@ -69,7 +93,99 @@ export function decodeCapabilityProfileRegistration<Input>(
   return { profiles: decoded.profiles, sourceId: decoded.sourceId }
 }
 
+const CapabilityToolSchema = Type.Object({
+  description: Type.String(),
+  execute: Type.Function([], Type.Unknown()),
+  label: Type.String(),
+  name: Type.String({ minLength: 1 }),
+  parameters: Type.Object({ type: Type.Optional(Type.String()) }),
+})
+
+const InlineExtensionSchema = Type.Object({
+  factory: Type.Function([], Type.Unknown()),
+  hidden: Type.Optional(Type.Boolean()),
+  name: Type.String(),
+})
+
+const CapabilityRegistrationSchema = Type.Object(
+  {
+    createTools: Type.Optional(Type.Function([], Type.Unknown())),
+    extensions: Type.Array(InlineExtensionSchema, { maxItems: 64 }),
+    id: Type.String({ maxLength: 128, minLength: 1 }),
+    readonlyTools: Type.Optional(Type.Array(Type.String(), { maxItems: 64, uniqueItems: true })),
+    systemPrompt: Type.Optional(Type.String({ maxLength: 256 * 1024 })),
+    tools: Type.Array(CapabilityToolSchema, { maxItems: 64 }),
+    version: Type.String({ maxLength: 128, minLength: 1 }),
+  },
+  { additionalProperties: false },
+)
+
+export interface CapabilityPublication {
+  registrations: readonly CapabilityRegistration[]
+  sourceId: string
+}
+
+const CapabilityPublicationSchema = Type.Object(
+  {
+    registrations: Type.Array(CapabilityRegistrationSchema, { maxItems: 64, minItems: 1 }),
+    sourceId: Type.String({ maxLength: 128, minLength: 1 }),
+  },
+  { additionalProperties: false },
+)
+
+function isCapabilityPublication<Input>(value: Input): value is Input & CapabilityPublication {
+  return Value.Check(CapabilityPublicationSchema, value)
+}
+
+export function decodeCapabilityPublication<Input>(
+  value: Input,
+): CapabilityPublication | undefined {
+  return isCapabilityPublication(value) ? value : undefined
+}
+
+function instantiateTools(
+  registration: CapabilityRegistration,
+): readonly CapabilityToolDefinition[] {
+  const tools = registration.createTools?.() ?? registration.tools
+  const valid = Value.Check(Type.Array(CapabilityToolSchema, { maxItems: 64 }), tools)
+  if (!valid) {
+    throw new Error(`Capability registration "${registration.id}" has invalid tools.`)
+  }
+  return tools
+}
+
+function validateToolContract(
+  registration: CapabilityRegistration,
+  tools: readonly CapabilityToolDefinition[],
+): void {
+  if (
+    tools.length !== registration.tools.length ||
+    tools.some((tool, index) => {
+      const declared = registration.tools[index]
+      return (
+        declared === undefined ||
+        tool.name !== declared.name ||
+        JSON.stringify(tool.parameters) !== JSON.stringify(declared.parameters)
+      )
+    })
+  ) {
+    throw new Error(
+      `Capability registration "${registration.id}" changed its tool names or schemas.`,
+    )
+  }
+}
+
 const KNOWN_MUTABLE_TOOLS = new Set(['bash', 'powershell', 'edit', 'write'])
+const PRIVATE_TOOLS = new Set([
+  'Task',
+  'TaskControl',
+  'ask_parent',
+  'request_parent',
+  'notify_parent',
+  'update_progress',
+  'send_peer',
+  'receive_peers',
+])
 
 function validateIdentifier(value: string, label: string): void {
   if (!/^[A-Za-z0-9_.-]+$/.test(value)) throw new Error(`${label} "${value}" is invalid.`)
@@ -80,6 +196,21 @@ export class CapabilityRegistry {
   private readonly registrations = new Map<string, CapabilityRegistration>()
 
   registerCapability(registration: CapabilityRegistration): void {
+    this.registerCapabilities([registration])
+  }
+
+  registerCapabilities(registrations: readonly CapabilityRegistration[]): void {
+    const staged = new CapabilityRegistry()
+    for (const [id, registration] of this.registrations) staged.registrations.set(id, registration)
+    for (const registration of registrations) staged.stageCapability(registration)
+    for (const [id, registration] of staged.registrations) this.registrations.set(id, registration)
+  }
+
+  private stageCapability(registration: CapabilityRegistration): void {
+    const valid = Value.Check(CapabilityRegistrationSchema, registration)
+    if (!valid) {
+      throw new Error(`Capability registration "${registration.id}" is invalid.`)
+    }
     validateIdentifier(registration.id, 'Capability registration ID')
     if (registration.version.length === 0) throw new Error('A capability version cannot be empty.')
     if (this.registrations.has(registration.id)) {
@@ -87,7 +218,7 @@ export class CapabilityRegistry {
     }
     const names = new Set<string>()
     for (const tool of registration.tools) {
-      if (tool.name === 'Task' || tool.name.startsWith('subagent_')) {
+      if (PRIVATE_TOOLS.has(tool.name) || tool.name.startsWith('subagent_')) {
         throw new Error(`Capability tool "${tool.name}" uses a reserved name.`)
       }
       if (names.has(tool.name)) {
@@ -108,13 +239,20 @@ export class CapabilityRegistry {
       }
       readonlyTools.add(name)
     }
-    this.registrations.set(registration.id, {
+    const stored: CapabilityRegistration = {
       extensions: [...registration.extensions],
       id: registration.id,
       readonlyTools: [...readonlyTools],
-      tools: [...registration.tools],
+      tools: registration.tools.map((tool) => ({
+        ...tool,
+        parameters: structuredClone(tool.parameters),
+      })),
       version: registration.version,
-    })
+    }
+    if (registration.createTools !== undefined) stored.createTools = registration.createTools
+    if (registration.systemPrompt !== undefined) stored.systemPrompt = registration.systemPrompt
+    validateToolContract(stored, instantiateTools(stored))
+    this.registrations.set(registration.id, stored)
   }
 
   registerProfile(profile: CapabilityProfile): void {
@@ -178,16 +316,24 @@ export class CapabilityRegistry {
       }
       registrations.push({ id: registration.id, version: registration.version })
       if (!readonly) extensions.push(...registration.extensions)
-      if (registration.tools.length > 0) {
+      const definitions = registration.tools
+      if (definitions.length > 0 || registration.systemPrompt !== undefined) {
         extensions.push({
           factory: (pi) => {
-            for (const tool of registration.tools) pi.registerTool(tool)
+            const childTools = instantiateTools(registration)
+            validateToolContract(registration, childTools)
+            for (const tool of childTools) pi.registerTool(tool)
+            if (registration.systemPrompt !== undefined) {
+              pi.on('before_agent_start', (event) => ({
+                systemPrompt: `${event.systemPrompt}\n\n${registration.systemPrompt}`,
+              }))
+            }
           },
           hidden: true,
           name: `subagent-capability-${registration.id}-${registration.version}`,
         })
       }
-      for (const tool of registration.tools) {
+      for (const tool of definitions) {
         if (names.has(tool.name)) {
           throw new Error(`Capability tool "${tool.name}" has more than one provider.`)
         }

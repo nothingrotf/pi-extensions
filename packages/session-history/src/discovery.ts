@@ -6,7 +6,7 @@ import { parseSessionEntries, type SessionInfo } from '@earendil-works/pi-coding
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { fileVersion, sessionBatches } from './session-file.ts'
+import { fileVersion, sessionBatches, sessionHeaderLine } from './session-file.ts'
 import { HistoryWork, historyLimits, WorkLimitError } from './work.ts'
 
 const HeaderSchema = Type.Object({
@@ -21,6 +21,14 @@ const NumberSchema = Type.Number()
 
 function detached(value: string): string {
   return Buffer.from(value, 'utf16le').toString('utf16le')
+}
+
+export interface SessionIdentity {
+  path: string
+  id: string
+  cwd: string
+  created: Date
+  parentSessionPath?: string
 }
 
 interface CachedInfo {
@@ -53,7 +61,7 @@ export class SessionDiscovery {
     }
     for await (const entry of directoryHandle) {
       work.check()
-      if (!entry.name.endsWith('.jsonl')) continue
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
       if (files.length >= historyLimits.discoverySessions) throw new WorkLimitError()
       files.push(join(directory, entry.name))
     }
@@ -65,6 +73,21 @@ export class SessionDiscovery {
       }
     }
     return files.sort()
+  }
+
+  async identity(path: string, stats: Stats, work: HistoryWork): Promise<SessionIdentity | null> {
+    const line = await sessionHeaderLine(path, work, fileVersion(stats))
+    const header = parseSessionEntries(line)[0]
+    if (!Value.Check(HeaderSchema, header) || !Number.isFinite(Date.parse(header.timestamp)))
+      return null
+    const identity: SessionIdentity = {
+      path,
+      id: header.id,
+      cwd: header.cwd,
+      created: new Date(header.timestamp),
+    }
+    if (header.parentSession !== undefined) identity.parentSessionPath = header.parentSession
+    return identity
   }
 
   async info(

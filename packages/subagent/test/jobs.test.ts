@@ -138,6 +138,7 @@ describe('job tree', () => {
       description: 'a lane',
       durationMs: 4_000,
       lastActivity: 'Read file',
+      model: 'model',
       status: 'running',
       subagentType: 'explore',
       toolCalls: 0,

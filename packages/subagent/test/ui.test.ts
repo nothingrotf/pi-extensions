@@ -5,7 +5,12 @@ import { join } from 'node:path'
 import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, it } from 'vite-plus/test'
 
-import { quotedBody, renderIntercomCard } from '../src/cards.ts'
+import {
+  nativeIntercomLayout,
+  quotedBody,
+  renderIntercomCard,
+  transcriptIntercomLayout,
+} from '../src/cards.ts'
 import {
   activitySnippet,
   describeCall,
@@ -50,10 +55,102 @@ it('renders send age separately from delivery latency and acknowledgment', () =>
     },
     theme,
   ).join('\n')
-  expect(lines).toContain('sent 2m ago')
+  expect(lines).toContain('· 2m ago ·')
   expect(lines).toContain('queue 1m')
   expect(lines).toContain('delivered')
   expect(lines).not.toContain('acknowledged')
+})
+
+describe('IRC card header', () => {
+  const codes = new Map<string, number>([
+    ['accent', 14],
+    ['dim', 8],
+    ['toolOutput', 7],
+    ['warning', 11],
+  ])
+  const open = (color: string) => `\u001b[38;5;${codes.get(color) ?? 15}m`
+  const ansiTheme: SubagentTheme = {
+    bg: (_color, text) => text,
+    bold: (text) => `\u001b[1m${text}\u001b[22m`,
+    fg: (color, text) => `${open(color)}${text}\u001b[39m`,
+    getFgAnsi: () => '',
+  }
+  const details = {
+    agentId: 'child',
+    kind: 'notification' as const,
+    level: 'warning' as const,
+    message: 'Check dependency',
+  }
+
+  it('keeps every meta item dim after a colored level', () => {
+    const [header] = renderIntercomCard(
+      details,
+      'Child',
+      0,
+      { expanded: false, now: 12_000 },
+      ansiTheme,
+    )
+    expect(header).toContain(`${open('warning')}warning\u001b[39m`)
+    expect(header).toContain(`${open('dim')}12s ago\u001b[39m`)
+    expect(header).toContain(`${open('dim')} · \u001b[39m`)
+    const escape = String.fromCharCode(27)
+    expect(header).not.toMatch(new RegExp(`${escape}\\[39m[^${escape} ]+`, 'u'))
+  })
+
+  it('truncates a long header to one line and keeps the body width', () => {
+    const label = 'Validate the complete subagent lifecycle against the real TUI at every width'
+    for (const width of [24, 40, 60]) {
+      const lines = renderIntercomCard(
+        details,
+        label,
+        0,
+        { expanded: false, now: 12_000, layout: { bodyIndent: 3, width } },
+        theme,
+      )
+      expect(lines).toHaveLength(2)
+      expect(stripTerminalSequences(lines[0] ?? '').endsWith('…')).toBe(true)
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true)
+      expect(lines[1]).toBe('   ▏ Check dependency')
+    }
+  })
+
+  it('renders the transcript layout at column zero and the native layout with padding', () => {
+    const framed = renderIntercomCard(
+      details,
+      'Child',
+      0,
+      { expanded: false, now: 12_000, layout: transcriptIntercomLayout(80) },
+      theme,
+    )
+    expect(framed[0]?.startsWith('✉ IRC ⟵ Child · warning · 12s ago')).toBe(true)
+    expect(framed[1]).toBe('   ▏ Check dependency')
+    const native = renderIntercomCard(
+      details,
+      'Child',
+      0,
+      { expanded: false, now: 12_000, layout: nativeIntercomLayout(80) },
+      theme,
+    )
+    expect(native[1]).toBe('  ▏ Check dependency')
+    expect(nativeIntercomLayout(80).width).toBe(78)
+    expect(transcriptIntercomLayout(80).width).toBe(80)
+  })
+
+  it('separates the advisory reply with the same dim separator', () => {
+    const lines = renderIntercomCard(
+      { agentId: 'child', kind: 'automatic-reply', question: 'Which branch?', reply: 'Use main.' },
+      'Child',
+      0,
+      { expanded: false, now: 5_000, layout: transcriptIntercomLayout(60) },
+      theme,
+    )
+    expect(lines).toEqual([
+      '✉ IRC ⟵ Child · 5s ago · advisory only',
+      '   ▏ Which branch?',
+      '   ➤ advisor · not authorization',
+      '   ▏ Use main.',
+    ])
+  })
 })
 
 function snapshot(

@@ -9,11 +9,15 @@ export const railEnabledChannel = 'hud:rail-enabled'
 
 export type RailStatus = 'error' | 'ok' | 'pending'
 
+export type RailCategory = 'edit' | 'meta' | 'other' | 'read' | 'search'
+
 export type RailIconKey =
   | 'agent'
   | 'ask'
   | 'edit'
   | 'find'
+  | 'grep'
+  | 'list'
   | 'read'
   | 'search'
   | 'shell'
@@ -22,12 +26,16 @@ export type RailIconKey =
   | 'web'
 
 export type RailActionReport = {
+  category?: RailCategory
   detail?: string
   doneLabel?: string
+  durationMs?: number
   iconKey?: RailIconKey
   output?: string
+  parentToolCallId?: string
   runningLabel?: string
   status: RailStatus
+  summary?: string
   toolCallId: string
   toolName: string
 }

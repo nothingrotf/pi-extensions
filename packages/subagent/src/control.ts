@@ -11,7 +11,7 @@ import { ARROW_OUT, MAIL_ICON, quotedBody } from './cards.ts'
 import type { SubagentControllerHost } from './controller.ts'
 import type { DecisionReceipt } from './decisions.ts'
 import type { DeliveryRecord } from './delivery.ts'
-import { oneLineLabel, type SubagentTheme } from './format.ts'
+import { oneLineLabel, type SubagentTheme, taskRoleLabel } from './format.ts'
 import type { IsolationDestination } from './isolation.ts'
 import {
   formatJobDuration,
@@ -154,7 +154,9 @@ interface TaskStatusSummary {
   description: string
   ended_at: number | null
   isolation: SubagentSnapshot['isolation'] | null
+  model?: string | undefined
   running: boolean
+  role?: string | undefined
   started_at: number
   state: SubagentSnapshot['status']
   subagent_type: SubagentSnapshot['subagentType']
@@ -272,7 +274,9 @@ function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
     description: snapshot.description,
     ended_at: snapshot.endedAt ?? null,
     isolation: snapshot.isolation ?? null,
+    model: snapshot.role === undefined ? undefined : snapshot.model,
     running: snapshot.running,
+    role: snapshot.role,
     started_at: snapshot.startedAt,
     state: snapshot.status,
     subagent_type: snapshot.subagentType,
@@ -314,7 +318,8 @@ function inactiveCancelReceipt(runtime: TaskControlRuntime, agentId: string): Ca
 }
 
 function jobLine(job: JobSnapshot): string {
-  return `- ${job.agentId} ${job.status} "${oneLineLabel(job.description, 80)}" ${formatJobDuration(job.durationMs)}`
+  const identity = taskRoleLabel(job.role, job.model)
+  return `- ${job.agentId} ${job.status}${identity ? ` ${identity}` : ''} "${oneLineLabel(job.description, 80)}" ${formatJobDuration(job.durationMs)}`
 }
 
 function jobsText(jobs: readonly JobSnapshot[]): string {
@@ -663,6 +668,8 @@ function statusRow(
     durationMs: Math.max(0, (task.ended_at ?? now) - task.started_at),
     error: terminal?.error,
     label: task.description,
+    model: task.model,
+    role: task.role,
     output: terminal?.output,
     status: task.state,
     task: undefined,

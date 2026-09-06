@@ -117,7 +117,8 @@ function taskStats(snapshot: SubagentSnapshot): string {
 }
 
 export function taskLine(snapshot: SubagentSnapshot): string {
-  return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)} · ${taskStats(snapshot)} · ${taskDuration(snapshot)}`
+  const identity = taskRoleLabel(snapshot.role, snapshot.model)
+  return `${statusIcon(snapshot.status)} ${oneLineLabel(snapshot.description)}${identity ? ` · ${identity}` : ''} · ${taskStats(snapshot)} · ${taskDuration(snapshot)}`
 }
 
 const widgetVisibleLimit = 5
@@ -137,6 +138,13 @@ function modelName(model: string): string {
   if (value.includes('sonnet')) return 'sonnet'
   if (value.includes('haiku')) return 'haiku'
   return value.replace(/^gpt-/, '')
+}
+
+export function taskRoleLabel(role: string | undefined, model?: string): string {
+  if (role === undefined) return ''
+  return [oneLineLabel(role), model === undefined ? '' : oneLineLabel(modelName(model))]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function roleSigil(type: string): string {
@@ -203,11 +211,12 @@ function agentRow(
   const sigil = width >= 96 ? `${theme.fg(tone, roleSigil(snapshot.subagentType))} ` : ''
   const nameText = snapshot.running ? theme.bold(theme.fg('text', name)) : theme.fg('muted', name)
   const prefix = `${theme.fg('dim', `${connector} `)}${sigil}${theme.fg(tone, face(snapshot, now))} `
-  const body = [
-    nameText,
-    width >= 76
-      ? theme.fg('dim', oneLineLabel(modelName(snapshot.model), Number.POSITIVE_INFINITY))
-      : '',
+  const metadata = [
+    snapshot.role !== undefined
+      ? theme.fg('dim', taskRoleLabel(snapshot.role, snapshot.model))
+      : width >= 76
+        ? theme.fg('dim', oneLineLabel(modelName(snapshot.model), Number.POSITIVE_INFINITY))
+        : '',
     theme.fg(tone, current.tool),
     width >= 56 && tokens > 0 ? theme.fg('dim', formatTokens(tokens)) : '',
     width >= 96 && current.detail ? theme.fg('dim', current.detail) : '',
@@ -215,6 +224,13 @@ function agentRow(
     .filter(Boolean)
     .join('  ')
   const prefixWidth = visibleWidth(prefix)
+  const separator =
+    snapshot.role !== undefined &&
+    visibleWidth(nameText) + 2 + visibleWidth(taskRoleLabel(snapshot.role, snapshot.model)) >
+      width - prefixWidth
+      ? '\n'
+      : '  '
+  const body = [nameText, metadata].filter(Boolean).join(separator)
   if (width <= prefixWidth) {
     return wrapTextWithAnsi(`${prefix}${body}`, Math.max(1, width)).map((line) =>
       truncateToWidth(line, width, ''),

@@ -44,7 +44,11 @@ Concrete configured models use `provider/model-id:effort [fast]`.
 | Reviewer C | `inherit-parent` |
 | Reviewer D | `inherit-parent` |
 
+Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
+
 For each reviewer:
+- `role`: `interrogate reviewers`
+- `capability_profile`: `pstack-leaf`
 - `subagent_type`: `generalPurpose`
 - `model`: the configured `interrogate reviewers` entry. Omit it for an absent, `auto`, or `inherit-parent` value
 - `readonly`: `true`

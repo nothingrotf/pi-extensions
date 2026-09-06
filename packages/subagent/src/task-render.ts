@@ -2,7 +2,7 @@ import { getMarkdownTheme } from '@earendil-works/pi-coding-agent'
 import { type Component, Markdown, Text, truncateToWidth } from '@earendil-works/pi-tui'
 
 import type { BatchItemResult } from './coordinator.ts'
-import { oneLineLabel, type SubagentTheme, TREE_TAIL } from './format.ts'
+import { oneLineLabel, type SubagentTheme, taskRoleLabel, TREE_TAIL } from './format.ts'
 import {
   type BadgeColor,
   formatBadge,
@@ -27,6 +27,8 @@ const LINE_WIDTH = 70
 export type AgentRowStatus = 'aborted' | 'blocked' | 'completed' | 'failed' | 'pending' | 'running'
 
 export interface AgentRow {
+  model?: string | undefined
+  role?: string | undefined
   activity: string | undefined
   agentType: string
   background: boolean
@@ -46,6 +48,8 @@ export interface TaskRenderState {
 }
 
 export interface TaskCallArgs {
+  model?: string | undefined
+  role?: string | undefined
   context?: string | undefined
   description?: string | undefined
   isolation?: unknown
@@ -57,6 +61,8 @@ export interface TaskCallArgs {
 }
 
 export interface TaskCallItem {
+  model?: string | undefined
+  role?: string | undefined
   description?: string | undefined
   id?: string | undefined
   isolation?: unknown
@@ -202,7 +208,12 @@ export function renderAgentRow(
   if (row.durationMs !== undefined && row.status !== 'pending' && row.status !== 'running') {
     line += `${DOT}${theme.fg('dim', formatJobDuration(row.durationMs))}`
   }
-  const lines = [line, ...taskLines(row.task, options.expanded, theme)]
+  const identity = taskRoleLabel(row.role, row.model)
+  const lines = [
+    line,
+    ...(identity ? [`  ${theme.fg('dim', identity)}`] : []),
+    ...taskLines(row.task, options.expanded, theme),
+  ]
   if (row.status === 'running' && row.activity !== undefined) {
     lines.push(
       `  ${theme.fg('dim', TREE_TAIL)} ${theme.fg('muted', oneLineLabel(row.activity, LINE_WIDTH))}`,
@@ -219,6 +230,8 @@ export function renderAgentRow(
 export function rowFromJob(job: JobSnapshot, background: boolean): AgentRow {
   return {
     activity: job.lastActivity,
+    model: job.model,
+    role: job.role,
     agentType: job.subagentType,
     background,
     context: job.context,
@@ -244,6 +257,8 @@ export function rowFromCompleted(
     background: false,
     context: undefined,
     cost: details.usage.cost,
+    model: details.model,
+    role: details.role,
     durationMs: details.durationMs,
     error: undefined,
     label,
@@ -268,6 +283,8 @@ export function rowFromFailed(
     cost: 0,
     durationMs: undefined,
     error: details.error,
+    model: details.model,
+    role: details.role,
     label,
     output: details.finalMessage,
     status: aborted ? 'aborted' : 'failed',
@@ -292,6 +309,8 @@ export function rowFromBatchItem(
           durationMs: undefined,
           error: undefined,
           label: item.taskId,
+          model: item.model,
+          role: item.role,
           output: undefined,
           status: item.status,
           task: undefined,
@@ -323,6 +342,8 @@ function callRows(args: TaskCallArgs, theme: SubagentTheme): string[] {
     line += agentTypeBadge(item.subagent_type ?? args.subagent_type, theme)
     if (item.isolation !== undefined) line += theme.fg('dim', ' [isolated]')
     lines.push(line)
+    const identity = taskRoleLabel(item.role, item.model)
+    if (identity) lines.push(`  ${theme.fg('dim', identity)}`)
   })
   if (cap < items.length) {
     lines.push(`${bullet} ${theme.fg('dim', formatMoreItems(items.length - cap, 'agent'))}`)
@@ -332,6 +353,8 @@ function callRows(args: TaskCallArgs, theme: SubagentTheme): string[] {
 
 export function taskCallHeader(args: TaskCallArgs, theme: SubagentTheme): string {
   const meta: string[] = []
+  const identity = taskRoleLabel(args.role, args.model)
+  if (identity) meta.push(identity)
   if (args.run_in_background === true) meta.push('background')
   if (args.readonly === true) meta.push('read-only')
   return renderStatusHeader(

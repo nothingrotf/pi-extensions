@@ -1,6 +1,12 @@
 import { type Component, truncateToWidth } from '@earendil-works/pi-tui'
 
-import { oneLineLabel, type SubagentTheme, TREE_BRANCH, TREE_LAST } from './format.ts'
+import {
+  oneLineLabel,
+  type SubagentTheme,
+  taskRoleLabel,
+  TREE_BRANCH,
+  TREE_LAST,
+} from './format.ts'
 import type { SubagentSnapshot } from './runtime.ts'
 import type { RunStatus } from './schema.ts'
 import { shimmerText } from './shimmer.ts'
@@ -13,6 +19,8 @@ export interface JobContext {
 }
 
 export interface JobSnapshot {
+  model?: string | undefined
+  role?: string | undefined
   agentId: string
   context: JobContext | undefined
   cost: number
@@ -49,6 +57,8 @@ export function toJobSnapshot(snapshot: SubagentSnapshot, now: number): JobSnaps
     description: snapshot.description,
     durationMs: Math.max(0, end - snapshot.startedAt),
     lastActivity: snapshot.lastActivity,
+    model: snapshot.model,
+    role: snapshot.role,
     status: snapshot.status,
     subagentType: snapshot.subagentType,
     toolCalls: snapshot.usage.toolCalls,
@@ -155,7 +165,8 @@ function jobLine(job: JobSnapshot, frame: number | undefined, theme: SubagentThe
   const live = job.status === 'running' && frame !== undefined
   const label = truncateToWidth(oneLineLabel(job.description) || '(no label)', LABEL_MAX_WIDTH, '…')
   const head = live ? shimmerText(label, theme) : theme.fg('toolOutput', label)
-  return `${jobIcon(job, frame, theme)} ${formatBadge('task', jobColor(job.status), theme)} ${head} ${theme.fg('dim', formatJobDuration(job.durationMs))}`
+  const identity = taskRoleLabel(job.role, job.model)
+  return `${jobIcon(job, frame, theme)} ${formatBadge('task', jobColor(job.status), theme)}${identity ? ` ${theme.fg('dim', identity)}` : ''} ${head} ${theme.fg('dim', formatJobDuration(job.durationMs))}`
 }
 
 export function renderJobTree(

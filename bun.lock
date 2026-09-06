@@ -106,9 +106,11 @@
       "name": "@nothingrotf/pstack",
       "version": "0.1.0",
       "dependencies": {
+        "@nothingrotf/todo": "workspace:^",
         "commander": "catalog:",
       },
       "devDependencies": {
+        "@earendil-works/pi-ai": "catalog:",
         "@earendil-works/pi-coding-agent": "catalog:",
         "typebox": "catalog:",
       },

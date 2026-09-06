@@ -36,6 +36,8 @@ import { createRootWorkspaceContext, type WorkspaceContext } from './workspace.t
 export type BatchItemStatus = 'completed' | 'failed' | 'aborted' | 'blocked'
 
 export interface BatchItemResult {
+  model?: string | undefined
+  role?: string | undefined
   agentId: string | undefined
   artifact: ArtifactRef | undefined
   error: string | undefined
@@ -66,6 +68,7 @@ function taskInput(node: TaskNodeInput, prompt: string): TaskInput {
   if (node.gates !== undefined) input.gates = node.gates
   if (node.isolation !== undefined) input.isolation = node.isolation
   if (node.model !== undefined) input.model = node.model
+  if (node.role !== undefined) input.role = node.role
   if (node.outputSchema !== undefined) input.outputSchema = node.outputSchema
   if (node.readonly !== undefined) input.readonly = node.readonly
   if (node.schemaMode !== undefined) input.schemaMode = node.schemaMode
@@ -103,6 +106,8 @@ function blockedResult(
     isolation: undefined,
     output: undefined,
     status: 'blocked',
+    role: node.role,
+    model: node.model,
     structuredOutput: undefined,
     taskId: node.id,
   }
@@ -114,6 +119,7 @@ function taskState(result: BatchItemResult, needs: readonly string[]): Coordinat
     status: result.status,
     taskId: result.taskId,
   }
+  if (result.role !== undefined) state.role = result.role
   if (result.agentId !== undefined) state.agentId = result.agentId
   if (result.artifact !== undefined) state.artifact = result.artifact
   if (result.error !== undefined) state.error = result.error
@@ -131,6 +137,8 @@ function failedResult(node: TaskNodeInput, result: RuntimeResult): BatchItemResu
     gateResults: result.details.gateResults ?? [],
     isolation: result.details.isolation,
     output: result.details.finalMessage,
+    role: node.role,
+    model: result.details.model ?? node.model,
     status: result.outcome,
     structuredOutput: result.details.structuredOutput,
     taskId: node.id,
@@ -168,6 +176,8 @@ export async function runBatch(options: BatchOptions): Promise<BatchResult> {
         gateResults: [],
         isolation: undefined,
         output: undefined,
+        role: node.role,
+        model: node.model,
         status: node.needs?.length ? 'blocked' : 'aborted',
         structuredOutput: undefined,
         taskId: node.id,
@@ -248,11 +258,15 @@ async function executeBatch(
     ownerSessionId: options.ctx.sessionManager.getSessionId(),
     runId,
     status: 'running',
-    tasks: graph.nodes.map((node) => ({
-      needs: [...(node.needs ?? [])],
-      status: 'pending',
-      taskId: node.id,
-    })),
+    tasks: graph.nodes.map((node) => {
+      const task: CoordinationTaskState = {
+        needs: [...(node.needs ?? [])],
+        status: 'pending',
+        taskId: node.id,
+      }
+      if (node.role !== undefined) task.role = node.role
+      return task
+    }),
     updatedAt: Date.now(),
   }
   options.runtime.addCoordinationRun(runState)
@@ -317,6 +331,8 @@ async function executeBatch(
             gateResults: result.details.gateResults,
             isolation: result.details.isolation,
             output: result.content,
+            role: node.role,
+            model: result.details.model,
             status: 'completed',
             structuredOutput: result.details.structuredOutput,
             taskId: node.id,
@@ -329,6 +345,8 @@ async function executeBatch(
             gateResults: [],
             isolation: undefined,
             output: undefined,
+            role: node.role,
+            model: node.model,
             status: options.signal?.aborted === true ? 'aborted' : 'failed',
             structuredOutput: undefined,
             taskId: node.id,

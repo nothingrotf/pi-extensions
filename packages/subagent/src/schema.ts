@@ -5,6 +5,13 @@ export const SUBAGENT_NAME_PATTERN = '^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$'
 
 export const SubagentTypeSchema = Type.String({ minLength: 1, pattern: SUBAGENT_NAME_PATTERN })
 
+export const TaskRoleSchema = Type.String({
+  description: 'Explicit purpose label.',
+  minLength: 1,
+  maxLength: 64,
+  pattern: SUBAGENT_NAME_PATTERN,
+})
+
 export const EffortSchema = Type.Union([
   Type.Literal('off'),
   Type.Literal('minimal'),
@@ -176,6 +183,7 @@ const SingleTaskFields = {
   outputSchema: Type.Optional(JsonValueSchema),
   prompt: Type.String({ minLength: 1 }),
   readonly: Type.Optional(Type.Boolean()),
+  role: Type.Optional(TaskRoleSchema),
   schemaMode: Type.Optional(SchemaModeSchema),
   subagent_type: SubagentTypeSchema,
   tools: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 64 })),
@@ -470,6 +478,7 @@ export const ExecutionContractSchema = Type.Object({
   modelSelector: Type.String({ minLength: 1 }),
   outputSchema: Type.Optional(JsonValueSchema),
   readonly: Type.Boolean(),
+  role: Type.Optional(TaskRoleSchema),
   schemaMode: SchemaModeSchema,
   systemPrompt: Type.String({ minLength: 1 }),
   tools: Type.Array(Type.String({ minLength: 1 })),
@@ -516,6 +525,7 @@ const RunRecordFields = {
   parentSessionId: Type.Optional(Type.String({ minLength: 1 })),
   readonly: Type.Boolean(),
   retryFailure: Type.Optional(RetryFailureSchema),
+  role: Type.Optional(TaskRoleSchema),
   rootAgentId: Type.Optional(Type.String({ minLength: 1 })),
   runGeneration: Type.Optional(Type.Number({ minimum: 1 })),
   runId: Type.Optional(Type.String({ minLength: 1 })),
@@ -556,6 +566,7 @@ export const RuntimeStateV2Schema = Type.Object({
 })
 
 export const CoordinationTaskStateSchema = Type.Object({
+  role: Type.Optional(TaskRoleSchema),
   agentId: Type.Optional(Type.String({ minLength: 1 })),
   artifact: Type.Optional(ArtifactRefSchema),
   error: Type.Optional(Type.String()),

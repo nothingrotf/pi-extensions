@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 Fan out N parallel attempts at the same task. Read every candidate end to end. Pick the strongest as the base. Graft the best ideas from the others into it. Verify the synthesized result.
 
+Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch. Pass `capability_profile: "pstack-leaf"` for non-delegating candidates and judges. Use `pstack-nested` only for owners whose assigned workflow requires delegation.
+
 ## Start
 
 Use `todo_write` to create one item per phase before you launch anything. The arena runs autonomously, and the list keeps each phase visible.
@@ -30,7 +32,7 @@ The N candidates will receive the same prompt, so the prompt is the contract. Ge
 
 ## Phase B: Fan out
 
-Spawn all N candidates in one message with `Task`. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Give each candidate the task, shared grounding path, isolated output contract, and instructions to produce an artifact and short rationale. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
+Set each candidate's `Task.role` to `arena runners`, or `architect runners` when Architect selects the runner policy. Spawn all N candidates in one message with `Task`. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Give each candidate the task, shared grounding path, isolated output contract, and instructions to produce an artifact and short rationale. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
 
 The rationale is mandatory. Without it, the parent cannot tell whether a candidate's structure is principled or accidental, which makes Phase E grafting unreliable. Each rationale names the alternatives the candidate considered and what it rejected.
 
@@ -38,7 +40,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose one entry from the `arena cross-judge pool` in `~/.agents/rules/pstack-models.md`. If the role is absent, inherit the parent model. Prefer a verified concrete selector from a different model family. Omit `Task.model` for `auto` or `inherit-parent`. Spawn one read-only judge with `Task`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with the parent's Phase D review, not with the candidates. If Pi rejects a concrete selector, mark the judge `BLOCKED` and continue the parent's review. Do not substitute a model.
+After all Phase B candidates complete, choose one entry from the `arena cross-judge pool` in `~/.agents/rules/pstack-models.md`. If the role is absent, inherit the parent model. Prefer a verified concrete selector from a different model family. Omit `Task.model` for `auto` or `inherit-parent`. Spawn one read-only judge with `Task` and `role: "arena cross-judge pool"`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with the parent's Phase D review, not with the candidates. If Pi rejects a concrete selector, mark the judge `BLOCKED` and continue the parent's review. Do not substitute a model.
 
 ## Phase D: Pick a base
 

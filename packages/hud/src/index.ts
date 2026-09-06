@@ -1,3 +1,4 @@
+import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
 import { AnimationClock } from './animation-clock.ts'
@@ -562,14 +563,17 @@ export default function hud(pi: ExtensionAPI): void {
     const resolved = { ...base, ...normalizeAskPatch(base) }
     const actionPatch = { ...resolved, measureDuration: false }
     openRailEntry()
-    if (parentToolCallId === undefined) target.report(toolCallId, actionPatch)
-    else target.reportChild(parentToolCallId, toolCallId, actionPatch)
-    markToolReplacement(toolCallId)
+    if (parentToolCallId === undefined) {
+      target.report(toolCallId, actionPatch)
+      markToolReplacement(toolCallId)
+      if (toolName !== undefined) railTools.add(toolName)
+    } else {
+      target.reportChild(parentToolCallId, toolCallId, actionPatch)
+    }
     const action = target
       .values()
       .find((item) => item.toolCallId === targetId || item.toolCallId === toolCallId)
     if (action !== undefined) persistRailAction(action)
-    if (toolName !== undefined) railTools.add(toolName)
     reconcileRailVoice()
   })
 
@@ -626,12 +630,28 @@ export default function hud(pi: ExtensionAPI): void {
     refreshPendingNarration(projection.hasTrailingText, projection.reasoningActive)
   }
 
+  const registerStreamingTools = (message: AssistantMessage, cwd: string) => {
+    if (!railEnabled) return
+    for (const block of message.content) {
+      if (block.type !== 'toolCall' || block.id.length === 0 || block.name.length === 0) continue
+      const target = railFor(block.id)
+      if (!target.has(block.id)) {
+        target.report(
+          block.id,
+          railPatchForCall({ arguments: block.arguments, toolName: block.name }, cwd),
+        )
+      }
+      openRailEntry()
+      markToolReplacement(block.id)
+    }
+  }
+
   pi.on('tool_execution_start', (event, ctx) => {
     railPendingNarration = false
     if (railEnabled) {
       if (!railTools.has(event.toolName)) fallbackToolCallIds.add(event.toolCallId)
       const target = railFor(event.toolCallId)
-      if (!target.has(event.toolCallId)) {
+      if (!target.has(event.toolCallId) || fallbackToolCallIds.has(event.toolCallId)) {
         target.report(
           event.toolCallId,
           railPatchForCall({ arguments: event.args, toolName: event.toolName }, ctx.cwd),
@@ -666,9 +686,10 @@ export default function hud(pi: ExtensionAPI): void {
     }
   })
 
-  pi.on('message_start', (event) => {
+  pi.on('message_start', (event, ctx) => {
     if (event.message.role === 'assistant') {
       railVoice.start(event.message)
+      registerStreamingTools(event.message, ctx.cwd)
       spacerFix?.markDirty()
       reconcileRailVoice()
     }
@@ -677,9 +698,10 @@ export default function hud(pi: ExtensionAPI): void {
     }
   })
 
-  pi.on('message_update', (event) => {
+  pi.on('message_update', (event, ctx) => {
     if (event.message.role !== 'assistant') return
     railVoice.update(event.message, event.assistantMessageEvent)
+    registerStreamingTools(event.message, ctx.cwd)
     reconcileRailVoice()
   })
 
@@ -688,6 +710,7 @@ export default function hud(pi: ExtensionAPI): void {
     if (event.message.role === 'assistant') {
       state.cacheLabel = buildCacheLabel(ctx, event.message)
       railVoice.finish(event.message)
+      registerStreamingTools(event.message, ctx.cwd)
       reconcileRailVoice()
     }
     if (active) {

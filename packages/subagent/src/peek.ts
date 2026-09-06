@@ -12,7 +12,13 @@ import {
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { formatUsage, oneLineLabel, statusIcon, type SubagentTheme } from './format.ts'
+import {
+  formatUsage,
+  oneLineLabel,
+  statusIcon,
+  type SubagentTheme,
+  taskRoleLabel,
+} from './format.ts'
 import type { SubagentSnapshot } from './runtime.ts'
 
 const TAIL_BYTES = 64 * 1024
@@ -257,7 +263,7 @@ export function createPeekPane(
     return getSnapshots().filter(
       (item) =>
         (!activeOnly || item.running) &&
-        `${item.description} ${item.agentId} ${item.model} ${item.status}`
+        `${item.description} ${item.agentId} ${item.model} ${item.role ?? ''} ${item.status}`
           .toLocaleLowerCase()
           .includes(query),
     )
@@ -286,7 +292,7 @@ export function createPeekPane(
   const physicalContent = (snapshot: SubagentSnapshot, width: number): string[] => {
     const details = [
       theme.fg('text', theme.bold(oneLineLabel(snapshot.description, Infinity))),
-      `${statusTag(snapshot.status, theme)} · ${theme.fg('muted', oneLineLabel(snapshot.model, Infinity))}`,
+      `${statusTag(snapshot.status, theme)} · ${theme.fg('muted', snapshot.role === undefined ? oneLineLabel(snapshot.model, Infinity) : taskRoleLabel(snapshot.role, snapshot.model))}`,
       theme.fg('muted', `${snapshot.usage.toolCalls} tools · ${formatUsage(snapshot.usage)}`),
       '',
     ].flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width - 4)))

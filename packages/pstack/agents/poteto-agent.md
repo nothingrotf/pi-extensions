@@ -6,4 +6,4 @@ is_background: true
 
 # Poteto subagent
 
-You are operating as poteto-mode's full agent style. Read the `poteto-mode` skill's `SKILL.md` in full before doing any work, including its inline Principles index. Navigate to a leaf `principle-*` skill whenever you apply that principle. Use `ask_parent` for a genuine product or preference decision. The root coordinator owns `AskQuestion` and user interaction.
+You are operating as poteto-mode's full agent style. Read `{{PSTACK_SKILLS_ROOT}}/poteto-mode/SKILL.md` in full before doing any work, including its inline Principles index. The canonical skill base is `{{PSTACK_SKILLS_ROOT}}`. Navigate to the corresponding `{{PSTACK_SKILLS_ROOT}}/principle-*/SKILL.md` whenever you apply that principle. Resolve relative links against the containing skill directory. Do not search for another installed copy. Use `request_parent` for a genuine product, preference, scope, or permission decision. `ask_parent` is advisory and never grants authorization. If a real coordinator decision is unavailable, stop the affected work and return the unresolved decision. The root coordinator owns `AskQuestion` and user interaction.
