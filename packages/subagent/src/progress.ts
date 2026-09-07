@@ -30,6 +30,7 @@ export class JobProgress {
   private readonly unsubscribe: () => void
   private timer: ReturnType<typeof setInterval> | undefined
   private stopped = false
+  private previousJobs: string | undefined
 
   constructor(
     private readonly runtime: JobProgressSource,
@@ -43,7 +44,7 @@ export class JobProgress {
     if (this.stopped) return
     this.agentIds.add(agentId)
     if (this.timer === undefined) {
-      this.timer = setInterval(() => this.publish(), TICK_MS)
+      this.timer = setInterval(() => this.publish(true), TICK_MS)
     }
     this.publish()
   }
@@ -77,9 +78,17 @@ export class JobProgress {
     this.ctx.events?.emit(WORKING_MESSAGE_EVENT, message ?? null)
   }
 
-  private publish(): void {
+  private publish(tick = false): void {
     if (this.stopped || this.agentIds.size === 0) return
     const jobs = this.jobs()
+    const signature = JSON.stringify(
+      jobs.map((job) => ({
+        ...job,
+        durationMs: job.status === 'running' ? undefined : job.durationMs,
+      })),
+    )
+    if (!tick && signature === this.previousJobs) return
+    this.previousJobs = signature
     const title = jobTitle(jobs)
     const running = jobs.some((job) => job.status === 'running')
     this.setWorkingMessage(

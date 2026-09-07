@@ -6,15 +6,23 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vite-plus/test'
 
-import { commonDirectory, git, repositoryRoot } from '../src/git-isolation.ts'
+import {
+  commitTree,
+  commonDirectory,
+  git,
+  promoteCommit,
+  repositoryRoot,
+} from '../src/git-isolation.ts'
 import {
   captureIsolation,
   cleanupWorkspaceArtifacts,
   createIsolation,
   integrateStagedReceipt,
+  needsRecoveryCapture,
   recoverIsolations,
   type IsolationDestination,
 } from '../src/isolation.ts'
+import type { WorkspaceLifecycle } from '../src/schema.ts'
 import {
   acquireLock,
   createRootWorkspaceContext,
@@ -553,6 +561,178 @@ describe('writer isolation', () => {
       expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('base\n')
     } finally {
       await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('leaves captured dead workspaces untouched during startup recovery', async () => {
+    const directory = await repository()
+    try {
+      const isolation = await writer(directory, 'writer-staged')
+      await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'staged work\n', 'utf8')
+      const receipt = await captureIsolation(isolation)
+      expect(receipt.captureStatus).toBe('captured')
+      const durableRef = receipt.repositories[0]?.durableRef
+      if (durableRef === undefined) throw new Error('The durable ref is missing.')
+      const durableCommonDir = await commonDirectory(directory)
+      const before = (await git(durableCommonDir, ['rev-parse', durableRef])).trim()
+      await writeFile(
+        join(isolation.baseDir, 'manifest.json'),
+        JSON.stringify({
+          ...isolation.manifest,
+          owner: { ...isolation.manifest.owner, pid: 999_999, startedAt: 1, token: 'dead' },
+          state: 'staged',
+        }),
+        'utf8',
+      )
+      const recoveries = await recoverIsolations(directory)
+      const recovery = recoveries.find((item) => item.attemptId === isolation.attemptId)
+      expect(recovery?.ownerStatus).toBe('dead')
+      expect(recovery?.receipt).toBeUndefined()
+      expect((await git(durableCommonDir, ['rev-parse', durableRef])).trim()).toBe(before)
+      expect(await readFile(join(isolation.rootWorktree, 'tracked.txt'), 'utf8')).toBe(
+        'staged work\n',
+      )
+      await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('classifies only uncaptured workspaces as recovery capture candidates', () => {
+    const repositories = [{ relativePath: '' }]
+    const manifest = (state: WorkspaceLifecycle) => ({ repositories, state })
+    const capture: WorkspaceLifecycle[] = ['active', 'closing']
+    const settled: WorkspaceLifecycle[] = [
+      'allocating',
+      'captured',
+      'staged',
+      'integrating',
+      'integrated',
+      'cleanup-pending',
+      'cleaned',
+      'aborted',
+      'capture-conflict',
+      'conflict',
+      'recovery-required',
+      'cleanup-debt',
+    ]
+    for (const state of capture) expect(needsRecoveryCapture(manifest(state))).toBe(true)
+    for (const state of settled) expect(needsRecoveryCapture(manifest(state))).toBe(false)
+    expect(needsRecoveryCapture({ repositories: [], state: 'active' })).toBe(false)
+  })
+
+  it('captures the same workspace again after an interrupted capture', async () => {
+    const directory = await repository()
+    try {
+      const isolation = await writer(directory, 'writer-recapture')
+      await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'first\n', 'utf8')
+      const first = await captureIsolation(isolation)
+      expect(first.captureStatus).toBe('captured')
+      await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'second\n', 'utf8')
+      const second = await captureIsolation(isolation)
+      expect(second.captureStatus).toBe('captured')
+      expect(second.error).toBeUndefined()
+      const durableRef = second.repositories[0]?.durableRef
+      const resultCommit = second.repositories[0]?.resultCommit
+      if (durableRef === undefined || resultCommit === undefined) {
+        throw new Error('The second capture is incomplete.')
+      }
+      const durableCommonDir = await commonDirectory(directory)
+      expect((await git(durableCommonDir, ['rev-parse', durableRef])).trim()).toBe(resultCommit)
+      await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('promotes shallow nested repositories without corrupting the durable store', async () => {
+    const directory = await repository()
+    const upstream = await repository()
+    try {
+      await writeFile(join(upstream, 'tracked.txt'), 'upstream two\n', 'utf8')
+      await command(upstream, ['git', 'commit', '-q', '-am', 'two'])
+      await command(directory, [
+        'git',
+        'clone',
+        '-q',
+        '--depth',
+        '1',
+        `file://${upstream}`,
+        'vendor',
+      ])
+      const vendor = join(directory, 'vendor')
+      expect((await git(vendor, ['rev-parse', '--is-shallow-repository'])).trim()).toBe('true')
+      const isolation = await writer(directory, 'writer-shallow')
+      const nested = isolation.repositories.find((entry) => entry.relativePath === 'vendor')
+      if (nested === undefined) throw new Error('The shallow nested repository is missing.')
+      const durableCommonDir = await commonDirectory(directory)
+      const parents = (
+        await git(durableCommonDir, ['rev-list', '--parents', '-n', '1', nested.baselineCommit])
+      )
+        .trim()
+        .split(/\s+/)
+      expect(parents).toEqual([nested.baselineCommit])
+      await writeFile(join(isolation.rootWorktree, 'vendor', 'tracked.txt'), 'vendored\n', 'utf8')
+      const receipt = await captureIsolation(isolation)
+      expect(receipt.captureStatus).toBe('captured')
+      expect(receipt.error).toBeUndefined()
+      const fsck = await command(durableCommonDir, ['git', 'fsck', '--connectivity-only'])
+      expect(fsck).not.toContain('broken link')
+      const environment = await harness(directory)
+      const integrated = await integrateStagedReceipt(
+        receipt,
+        environment.destination,
+        'writer-shallow',
+      )
+      expect(integrated.status).toBe('integrated')
+      expect(await readFile(join(vendor, 'tracked.txt'), 'utf8')).toBe('vendored\n')
+      await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+      await rm(upstream, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('reports promotions that git rejects instead of leaving dangling objects unnoticed', async () => {
+    const upstream = await repository()
+    const directory = await mkdtemp(join(tmpdir(), 'subagent-shallow-promote-'))
+    try {
+      await writeFile(join(upstream, 'tracked.txt'), 'upstream two\n', 'utf8')
+      await command(upstream, ['git', 'commit', '-q', '-am', 'two'])
+      await command(directory, [
+        'git',
+        'clone',
+        '-q',
+        '--depth',
+        '1',
+        `file://${upstream}`,
+        'shallow',
+      ])
+      const shallow = join(directory, 'shallow')
+      const durable = await repository()
+      try {
+        const head = (await git(shallow, ['rev-parse', 'HEAD'])).trim()
+        const tree = (await git(shallow, ['rev-parse', 'HEAD^{tree}'])).trim()
+        const commit = await commitTree(shallow, tree, head, 'beyond the shallow root')
+        const owner = await currentLockOwner('writer-shallow-promote', 'attempt-1')
+        const durableCommonDir = await commonDirectory(durable)
+        await expect(
+          promoteCommit({
+            commit,
+            durableCommonDir,
+            owner,
+            ref: 'refs/pi-subagent/v2/test/shallow',
+            sourceRepoRoot: shallow,
+          }),
+        ).rejects.toThrow('did not promote commit')
+        const refs = await git(durableCommonDir, ['for-each-ref', 'refs/pi-subagent/v2/test/'])
+        expect(refs.trim()).toBe('')
+      } finally {
+        await rm(durable, { force: true, recursive: true })
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+      await rm(upstream, { force: true, recursive: true })
     }
   }, 180_000)
 

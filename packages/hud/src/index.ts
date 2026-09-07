@@ -1,11 +1,18 @@
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getMarkdownTheme,
+  type Theme,
+} from '@earendil-works/pi-coding-agent'
 
 import { AnimationClock } from './animation-clock.ts'
+import { paletteFromTheme } from './colors.ts'
 import { sweepEditors } from './editor-border.ts'
 import { buildCacheLabel, contextSummary } from './format.ts'
 import { emptyGitStatus, readGitStatus, type GitStatus } from './git.ts'
 import { hudCommandCompletions, parseHudCommand, resolveToggle } from './hud-command.ts'
+import { ProjectFileIndex } from './prose-links.ts'
 import { askResultPatch, askRows, normalizeAskPatch } from './rail-ask.ts'
 import {
   builtInRailToolNames,
@@ -51,7 +58,11 @@ import {
   stopSoundPlayback,
 } from './sound.ts'
 import { speakerMotionEnabled, type SpeakerHeaderFrame } from './speaker-header.ts'
-import { installSpeakerSpacingFix, type SpeakerSpacingFix } from './speaker-spacing.ts'
+import {
+  installSpeakerSpacingFix,
+  type ProseSources,
+  type SpeakerSpacingFix,
+} from './speaker-spacing.ts'
 import { installNativeStatusFix, type NativeStatusFix } from './status-indicator.ts'
 import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spacer.ts'
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
@@ -152,6 +163,20 @@ export default function hud(pi: ExtensionAPI): void {
   let liveUsageAssistantAt: number | undefined
   let assistantUsageLines = new Map<number, RailUsageLine>()
   let railCwd: string | undefined
+  const projectFiles = new ProjectFileIndex({
+    cwd: () => railCwd ?? process.cwd(),
+    onChange: () => requestRender?.(),
+  })
+  let hudTheme: Theme | undefined
+  const proseSources: ProseSources = {
+    cwd: () => projectFiles.cwd,
+    highlight: (code, lang) =>
+      lang === undefined ? undefined : getMarkdownTheme().highlightCode?.(code, lang),
+    palette: () => paletteFromTheme(hudTheme),
+    resolve: projectFiles.resolver,
+    revision: () => projectFiles.revision,
+    streaming: () => agentWorking,
+  }
   const railTools = new Set(builtInRailToolNames)
   let fallbackToolCallIds = new Set<string>()
   let railReplacementToolCallIds = new Set<string>()
@@ -349,6 +374,7 @@ export default function hud(pi: ExtensionAPI): void {
     stop()
     active = false
     agentWorking = false
+    if (ctx.hasUI) hudTheme = ctx.ui.theme
     liveHeaderAt = undefined
     liveHeaderMessageAt = undefined
     liveHeaderClosed = true
@@ -385,6 +411,7 @@ export default function hud(pi: ExtensionAPI): void {
     sync(ctx)
     ctx.ui.setFooter((tui, theme, footerData) => {
       let disposed = false
+      hudTheme = theme
       footerOwned = true
       assistantUsageLines = new Map<number, RailUsageLine>()
       const assistantUsage = (timestamp: number | undefined, width: number): readonly string[] => {
@@ -414,6 +441,7 @@ export default function hud(pi: ExtensionAPI): void {
         tui,
         timestampsEnabled,
         (toolCallId) => railEnabled && railReplacementToolCallIds.has(toolCallId),
+        proseSources,
       )
       transcriptLayoutFix = installTranscriptLayoutFix(tui, railOpeningAt)
       nativeStatusFix = installNativeStatusFix(tui)

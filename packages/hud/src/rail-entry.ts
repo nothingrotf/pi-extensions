@@ -3,7 +3,7 @@ import { type Component, truncateToWidth } from '@earendil-works/pi-tui'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { railPaletteFromAnsi, tint } from './colors.ts'
+import { paletteFromTheme, railPaletteFromAnsi, tint } from './colors.ts'
 import { railLines, type RailStore, type RailTheme } from './rail.ts'
 import { shimmerTextAtTick, shimmerTickMs } from './shimmer.ts'
 import {
@@ -21,7 +21,7 @@ export function decodeRailEntry<Input>(data: Input): number | undefined {
   return Value.Check(RailEntrySchema, data) ? data.turn : undefined
 }
 
-export type RailThemeSource = Pick<Theme, 'fg'> & Partial<Pick<Theme, 'getFgAnsi'>>
+export type RailThemeSource = Pick<Theme, 'fg'> & Partial<Pick<Theme, 'getBgAnsi' | 'getFgAnsi'>>
 
 export type RailUsage = {
   row: string | undefined
@@ -30,21 +30,33 @@ export type RailUsage = {
 }
 
 export function railTheme(theme: RailThemeSource, bodyOpacity = 1): RailTheme {
+  const getFgAnsi = theme.getFgAnsi?.bind(theme)
+  const getBgAnsi = theme.getBgAnsi?.bind(theme)
+  const source =
+    getFgAnsi === undefined
+      ? undefined
+      : getBgAnsi === undefined
+        ? { getFgAnsi }
+        : { getBgAnsi, getFgAnsi }
   return {
     fg: (color, text) => theme.fg(color, text),
-    palette: railPaletteFromAnsi(bodyOpacity),
+    palette: railPaletteFromAnsi(bodyOpacity, paletteFromTheme(source)),
   }
 }
 
 export class RailUsageLine {
   private initialTick: number | undefined
-  private readonly theme: RailTheme
+  private theme: RailTheme
 
   constructor(
-    theme: RailThemeSource,
-    private readonly source: RailThemeSource = theme,
+    private readonly themeSource: RailThemeSource,
+    private readonly source: RailThemeSource = themeSource,
   ) {
-    this.theme = railTheme(theme)
+    this.theme = railTheme(themeSource)
+  }
+
+  refreshTheme(): void {
+    this.theme = railTheme(this.themeSource)
   }
 
   render(usage: RailUsage): string | undefined {
@@ -71,8 +83,9 @@ export class RailUsageLine {
 }
 
 export class RailComponent implements Component {
-  private readonly liveTheme: RailTheme
-  private readonly settledTheme: RailTheme
+  private liveTheme: RailTheme
+  private settledTheme: RailTheme
+  private readonly themeSource: RailThemeSource
   private readonly usageLine: RailUsageLine
   private cached:
     | {
@@ -97,6 +110,7 @@ export class RailComponent implements Component {
     private readonly visible: () => boolean = () => true,
     private readonly active: () => boolean = pending,
   ) {
+    this.themeSource = theme
     this.liveTheme = railTheme(theme)
     this.settledTheme = railTheme(theme, 0.75)
     this.source = source ?? theme
@@ -105,6 +119,9 @@ export class RailComponent implements Component {
 
   invalidate(): void {
     this.cached = undefined
+    this.liveTheme = railTheme(this.themeSource)
+    this.settledTheme = railTheme(this.themeSource, 0.75)
+    this.usageLine.refreshTheme()
   }
 
   needsLeadingGap(): boolean {

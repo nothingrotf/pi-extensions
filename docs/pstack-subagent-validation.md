@@ -3,8 +3,12 @@
 ## Verdict
 
 Local SDK integration passes for 68 dispatch contracts and 14 workflow graphs containing 62 nodes.
-The focused contract suites pass 100 tests. The latest repository suite passes 1,589 tests and skips 87 opt-in tests.
-`bun run check` passes.
+The focused contract suites pass 100 tests. The latest completed repository suite passes 1,663 tests and skips 87 opt-in tests.
+That suite includes the progress-feedback correction and uses one worker with a 512 MiB Node heap limit.
+The real nested track also passed after the correction.
+An earlier subagent suite reached its command deadline during overlapping work, but the later complete suite passed.
+The snapshot performance assertion now checks exact membership rather than assuming creation order despite runtime update-based ordering.
+The latest `bun run check` passes formatting, lint, and types.
 
 This is not a full behavioral approval of every skill.
 The SDK uses a scripted model provider. Actual Task tools, child sessions, file tools, Git worktrees, capability policies, and control tools execute.
@@ -28,8 +32,28 @@ bun run test
 ```
 
 The recorded focused report is `/tmp/pstack-workflows.json`.
-The latest repository report is `/tmp/pstack-all-tests-final.json`.
+The latest repository report is `/tmp/pstack-post-fast-final-tests.json`.
 These files are local evidence, not published artifacts.
+
+## Runtime model-policy regression
+
+The model-policy regression uses the actual pstack extension and SubagentRuntime with fake transport at the Pi SDK provider boundary. It does not mock modules or manually inject policy context.
+
+Run the retained regression and policy matrix:
+
+```sh
+bun run test packages/pstack/test/model-policy.test.ts packages/pstack/test/child-bootstrap.test.js
+```
+
+Evidence for this correction lives in `.verification/pstack-model-policy/`. The original omitted-model reproduction selected the parent instead of the configured explorer in both extension load orders. The corrected runtime selects the configured model. Tests also cover root and nested context, grouped keys, all exact roles, inherited panel entries, effort and fast validation, malformed files, batch and background dispatch, reload, and stored resume selection.
+
+The mixed-validity SDK Task batch regression places a valid entry before an invalid role, unavailable selected model, or omitted distinct panel choice. Each call returns a tool error with zero runtime records and zero child provider calls. Batch preflight is all-or-nothing; valid entries do not start when another entry fails preflight.
+
+The live harness records missing policy content as JSON `null` and still passes the policy path to the extension. Only ENOENT is treated as absent. Other read failures propagate. The no-policy regression uses this evidence reader with the SDK harness and confirms parent fallback without a paid provider.
+
+The structural role regression scans literal role declarations in all pstack skill Markdown, including playbooks and references, and checks resolved runnable workflow fixtures against `pstackRoles`. Configuration-only aliases are not dispatch roles. Scanner tests cover misspellings, shorthand used as a Task role, inline declarations, JSON fields, role lists, and role tables.
+
+These scripted checks prove model routing and lifecycle integration. A fresh-session real-model proof remains a separate coordinator review step.
 
 ## Evidence boundaries
 
@@ -169,6 +193,26 @@ Arena and Swarm also permit parallel single calls. Their graph fixtures exercise
 
 The Eval correction prevents a false claim. It does not create a blinded execution environment.
 
+### Stalled dispatch after reload
+
+The observability session `01a06dc6` showed `Dispatching Finish OBS-58 path correction after reload` for 11 minutes 38 seconds before the background receipt arrived.
+The main thread stayed above 85 percent CPU. A CPU profile attributed 90 percent to the TUI render timer, mostly intercom card wrapping.
+The first Task after reload ran startup recovery over 96 dead workspaces with up to 27 nested repositories each.
+Recovery re-captured workspaces that were already captured and staged. The new result commit differed, so the durable ref fetch was rejected as non-fast-forward.
+The failed receipt then replaced the staged receipt. This session lost 62 of 81 staged receipts that way.
+A shallow nested clone (`repos/effect`) also left a broken parent link in the durable store, because git rejects the ref update but keeps the fetched objects.
+
+| Defect                                                               | Correction                                                               |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Startup recovery re-captured every dead workspace                    | Capture only `active` and `closing` manifests                            |
+| Promotion accepted rejected ref updates when the object existed      | Force the internal ref and verify that it points at the promoted commit  |
+| Baselines from shallow repositories referenced missing parents       | Create parentless baselines when the repository is shallow               |
+| Failed captures were staged and could integrate partial repositories | Stage only captured receipts and report the capture error                |
+| Intercom cards re-wrapped their bodies on every render frame         | Cache rendered lines per width, expansion, delivery state, and age label |
+
+Regression tests cover each correction in `packages/subagent/test/isolation.test.ts` and `packages/subagent/test/integration.test.ts`.
+The observability repository still needs manual cleanup: 97 retained worktrees under `.git/pi-subagent/worktrees`, 2,418 internal refs, and a broken link from commit `648f566d` to `e03ea907`.
+
 ## Lifecycle and indirect routes
 
 The full repository run also exercises subagent cancellation, steering, restart, resume, nested failure, decisions, model rejection, graph failure, and isolation recovery.
@@ -219,10 +263,12 @@ Each result starts as `REQUIRES_REVIEW`.
 Run selected cases with a new evidence directory:
 
 ```sh
-PSTACK_LIVE=1 PSTACK_LIVE_DIR=/tmp/pstack-live-new PSTACK_LIVE_CASES=how-explorer,feature-leaf bun run test packages/pstack/test/live-workflows.test.js
+PSTACK_LIVE=1 PSTACK_LIVE_DIR=/tmp/pstack-live-new PSTACK_LIVE_CASES=how-explorer PSTACK_LIVE_TIMEOUT_MS=300000 NODE_OPTIONS=--max-old-space-size=512 bun run test packages/pstack/test/live-workflows.test.js --maxWorkers=1
 ```
 
-Omit `PSTACK_LIVE_CASES` to capture all cases serially.
+Run one case per process on a constrained workstation. Do not overlap live capture with repository suites.
+Check available disk space before each case. The latest serial batch required at least 8 GiB free and stopped on failure.
+The heap limit bounds V8 memory, not total machine memory. It does not guarantee that every nested workflow fits.
 The harness rejects existing case directories rather than overwriting evidence.
 Each coordinator has an eight-minute deadline. History preparation uses separate ninety-second deadlines.
 Local concurrency is limited to three active children per admission check. The harness prohibits publication and external mutation.
@@ -244,6 +290,70 @@ The history failure exposed two integration defects: children ignored custom par
 The correction shares parent storage and admits only linked descendants inside the actual managed Git boundary.
 Additional SDK regressions cover nested owners, sibling managed descendants, linked Git roots, cleanup, duplicate IDs, cycles, symlink escapes, and unrelated projects.
 The original evidence remains under `/tmp/pstack-live-local-v1`. The corrected pilot uses `/tmp/pstack-live-local-v2`.
+
+### Reviewed serial retries
+
+The retained audit is `/tmp/pstack-live-audit.json`. Results and original tool transcripts remain under the evidence directories below.
+
+| Cases                                                   | Evidence                                   | Reviewed result                                                                                                                  |
+| ------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `swarm-runtime`                                         | `/tmp/pstack-live-local-v5/swarm-runtime/` | Real CLI results and strict structured output passed. Manual receipt contains no product changes.                                |
+| `why-followup`                                          | `/tmp/pstack-live-local-v5/why-followup/`  | Actual resume preserves agent ID, role, model, and profile. Initial citations were corrected.                                    |
+| `why-tickets`, `why-documents`, `why-chat`              | `/tmp/pstack-live-local-v5/`               | Separate category packets, linked source guides, and fixture provenance verified. Documents made an unnecessary filename search. |
+| `why-source-control`, `why-observability`, `why-errors` | `/tmp/pstack-live-local-v6/`               | Retried after citation failures. Actual numbered grep results support the corrected citations.                                   |
+| `why-analytics`                                         | `/tmp/pstack-live-local-v7/why-analytics/` | Corrected citations and parent-search provenance. An unnecessary filename search remains a process caveat.                       |
+| `why-synthesis`                                         | `/tmp/pstack-live-local-v5/why-synthesis/` | Supplied-input synthesis distinguishes fixture observations, executed baseline evidence, and unexecuted implementation phases.   |
+
+These are scoped local results, not authenticated external investigations or complete workflow approvals.
+The investigator template now requires numbered citation checks and separates investigator reads from recorded parent searches.
+The parent must correct citation or provenance failures before acceptance.
+
+### Temporary fast-model pilot
+
+The user authorized temporary model substitutions without changing the global configuration.
+The harness accepts `PSTACK_LIVE_POLICY_FILE`, `PSTACK_LIVE_COORDINATOR_MODEL`, and `PSTACK_LIVE_COORDINATOR_EFFORT`.
+The coordinator model is an available `openai-codex` model ID. Supported coordinator effort overrides are `low` and `medium`.
+An explicit policy override is passed to the pstack extension through its `modelPolicyPath` loader option and recorded in every result. The harness does not inject raw policy text or copy it into AGENTS.md. Root and nested policy context comes from the actual extension.
+Panel entry counts and mandatory different-family review requirements remain unchanged.
+
+| Configuration                       | Case            | Elapsed     | Reviewed outcome                                                                                       |
+| ----------------------------------- | --------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
+| Spark coordinator and worker        | `how-simple`    | 27 seconds  | Dispatch succeeded, but the child skipped mandatory skill reads. Not approved.                         |
+| Mini coordinator and worker         | `how-simple`    | 83 seconds  | Three invalid Task calls preceded recovery. Mandatory child skill reads remained absent. Not approved. |
+| Astra low coordinator, Spark worker | `how-simple`    | 65 seconds  | Required reads and dispatch worked. Report contained an incorrect edge-case claim. Not approved.       |
+| Astra low coordinator, Spark worker | `swarm-runtime` | 102 seconds | Actual CLI checks passed. Coordinator corrected a README claim. Scoped verification only.              |
+| Astra low coordinator, Spark worker | `why-followup`  | 201 seconds | Same-agent resume preserved identity. Report retained provenance and reasoning defects. Not approved.  |
+
+Spark refers to `gpt-5.3-codex-spark`, Mini to `gpt-5.4-mini`, and Astra to `gpt-6-astra`.
+Every temporary worker used low reasoning effort. These timings describe different runs, not a controlled performance benchmark.
+The global model-policy SHA-256 remained unchanged across the pilot.
+Evidence remains under `/tmp/pstack-fast-v1/`, `/tmp/pstack-fast-mini-v1/`, and `/tmp/pstack-fast-hybrid-v1/`.
+This pilot does not approve the complete workflow matrix or the original model policy.
+
+### Resource failures
+
+Earlier overlapping suite runs reached timeouts and disk exhaustion. Their failed reports remain available and do not count as passes.
+The serial full suite subsequently passed all 1,624 tests with a 512 MiB Node heap limit.
+
+The later `orchestrate-track` live case exhausted that heap limit near its five-minute deadline.
+Its batch stopped before `orchestrate-static`. The failed attempt retains transcripts but no terminal `result.json`.
+An instrumented retry stopped producing worker timer samples when nested `TaskControl wait` began.
+
+A bounded regression reproduced a progress-notification feedback loop: unchanged updates triggered fresh runtime notifications and repeated publication.
+`JobProgress` now suppresses unchanged watched-job notifications. Its timer still refreshes elapsed time, and meaningful job changes still publish.
+The regression and focused job/control suites pass.
+
+The real nested track then completed under the same 512 MiB heap limit, with an eight-minute deadline.
+The worker's sampled peak heap was 71.9 MiB and sampled peak RSS was 217.6 MiB. No early memory guard fired.
+Actual receipts confirm nested and root patch integration. Destination CLI output matched, and all four fixture tests passed.
+This validates the scoped track, not external orchestration, publication, or the remaining workflow variants.
+
+Evidence:
+
+- Failed attempt: `/tmp/pstack-live-v5-orchestrate-track.log` and `/tmp/pstack-live-local-v5/orchestrate-track/sessions/`.
+- Diagnostic timer samples: `/tmp/pstack-heap-v1/`.
+- Successful retry: `/tmp/pstack-live-heap-v2/orchestrate-track/result.json`.
+- Successful retry memory samples: `/tmp/pstack-heap-v2/`.
 
 Anthropic-dependent roles remain provider-blocked until the configured account accepts requests.
 Eval remains blocked by the revealing standard bootstrap.

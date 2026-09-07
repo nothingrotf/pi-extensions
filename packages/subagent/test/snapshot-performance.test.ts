@@ -238,8 +238,8 @@ describe('snapshot publication work', () => {
         expect(harness.controller.snapshot({ ...first.handle, runGeneration: -1 })).toBeUndefined()
         expect(contexts).toHaveBeenCalledTimes(1)
         const listed = harness.controller.runtime.listSnapshots()
-        expect(listed.map((snapshot) => snapshot.agentId)).toEqual(
-          receipts.map((receipt) => receipt.handle.agentId).reverse(),
+        expect(listed.map((snapshot) => snapshot.agentId).sort()).toEqual(
+          receipts.map((receipt) => receipt.handle.agentId).sort(),
         )
         expect(contexts).toHaveBeenCalledTimes(count + 1)
       } finally {

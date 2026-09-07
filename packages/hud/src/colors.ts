@@ -1,3 +1,5 @@
+import type { Theme, ThemeColor } from '@earendil-works/pi-coding-agent'
+
 export type Rgb = { b: number; g: number; r: number }
 
 type Oklab = { a: number; b: number; l: number }
@@ -36,18 +38,195 @@ export const hudTextFaint: Rgb = { b: 84, g: 62, r: 66 }
 export const hudTextMuted: Rgb = { b: 148, g: 119, r: 125 }
 export const hudTextPrimary: Rgb = { b: 242, g: 228, r: 232 }
 export const hudTextSecondary: Rgb = { b: 192, g: 164, r: 170 }
+export const hudSuccess: Rgb = { b: 171, g: 216, r: 159 }
+export const hudInfo: Rgb = { b: 232, g: 203, r: 151 }
+export const hudWarning: Rgb = { b: 143, g: 196, r: 240 }
+export const hudError: Rgb = { b: 154, g: 140, r: 239 }
+export const hudBackground: Rgb = { b: 28, g: 18, r: 20 }
 
-const hudBackground: Rgb = { b: 28, g: 18, r: 20 }
-const hudError: Rgb = { b: 154, g: 140, r: 239 }
-const hudFile: Rgb = { b: 104, g: 173, r: 115 }
-const hudGenome: Rgb = { b: 104, g: 173, r: 155 }
-const hudShell: Rgb = { b: 155, g: 104, r: 173 }
-const hudSuccess: Rgb = { b: 171, g: 216, r: 159 }
-const hudUser: Rgb = { b: 232, g: 203, r: 151 }
-const hudWeb: Rgb = { b: 139, g: 173, r: 104 }
+export type HudPalette = {
+  background: Rgb
+  brand: Rgb
+  brandAlt: Rgb
+  brandDim: Rgb
+  error: Rgb
+  file: Rgb
+  genome: Rgb
+  info: Rgb
+  shell: Rgb
+  success: Rgb
+  textDim: Rgb
+  textFaint: Rgb
+  textMuted: Rgb
+  textPrimary: Rgb
+  textSecondary: Rgb
+  user: Rgb
+  warning: Rgb
+  web: Rgb
+}
+
+export type PaletteSource = Pick<Theme, 'getFgAnsi'> & Partial<Pick<Theme, 'getBgAnsi'>>
+
+type Hsl = { h: number; l: number; s: number }
+
+function toHsl(color: Rgb): Hsl {
+  const r = color.r / 255
+  const g = color.g / 255
+  const b = color.b / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return { h: 0, l, s: 0 }
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
+  else if (max === g) h = (b - r) / d + 2
+  else h = (r - g) / d + 4
+  return { h: h * 60, l, s }
+}
+
+function fromHsl(color: Hsl): Rgb {
+  const c = (1 - Math.abs(2 * color.l - 1)) * color.s
+  const sector = (((color.h % 360) + 360) % 360) / 60
+  const x = c * (1 - Math.abs((sector % 2) - 1))
+  let [r, g, b] = [0, 0, 0]
+  if (sector < 1) [r, g, b] = [c, x, 0]
+  else if (sector < 2) [r, g, b] = [x, c, 0]
+  else if (sector < 3) [r, g, b] = [0, c, x]
+  else if (sector < 4) [r, g, b] = [0, x, c]
+  else if (sector < 5) [r, g, b] = [x, 0, c]
+  else [r, g, b] = [c, 0, x]
+  const m = color.l - c / 2
+  const channel = (value: number) => Math.max(0, Math.min(255, Math.round((value + m) * 255)))
+  return { b: channel(b), g: channel(g), r: channel(r) }
+}
+
+const categoryOffsets = { file: 210, genome: 175, shell: 55, web: 250 }
+
+export function categoryColors(
+  brand: Rgb,
+  error: Rgb,
+): Pick<HudPalette, keyof typeof categoryOffsets> {
+  const base = toHsl(brand)
+  const avoid = toHsl(error)
+  const s = Math.min(0.5, Math.max(0.3, base.s * 0.7))
+  const l = Math.min(0.68, Math.max(0.52, base.l))
+  const derive = (offset: number): Rgb => {
+    let h = (base.h + offset) % 360
+    const distance = Math.min(Math.abs(h - avoid.h), 360 - Math.abs(h - avoid.h))
+    if (distance < 20) h = (h + 30) % 360
+    return fromHsl({ h, l, s })
+  }
+  return {
+    file: derive(categoryOffsets.file),
+    genome: derive(categoryOffsets.genome),
+    shell: derive(categoryOffsets.shell),
+    web: derive(categoryOffsets.web),
+  }
+}
+
+export const defaultHudPalette: HudPalette = {
+  background: hudBackground,
+  brand: hudBrand,
+  brandAlt: hudBrandAlt,
+  brandDim: hudBrandDim,
+  error: hudError,
+  info: hudInfo,
+  success: hudSuccess,
+  textDim: hudTextDim,
+  textFaint: hudTextFaint,
+  textMuted: hudTextMuted,
+  textPrimary: hudTextPrimary,
+  textSecondary: hudTextSecondary,
+  user: hudInfo,
+  warning: hudWarning,
+  ...categoryColors(hudBrand, hudError),
+}
+
+const paletteTokens = [
+  'accent',
+  'error',
+  'syntaxType',
+  'mdLink',
+  'borderMuted',
+  'success',
+  'dim',
+  'mdQuoteBorder',
+  'muted',
+  'text',
+  'toolOutput',
+  'warning',
+] as const satisfies readonly ThemeColor[]
+
+const tierTolerance = 0.08
+const tierStep = 0.04
+
+const paletteCache = new WeakMap<PaletteSource, { fingerprint: string; palette: HudPalette }>()
+
+export function paletteFromTheme(theme: PaletteSource | undefined): HudPalette {
+  if (theme === undefined) return defaultHudPalette
+  const backgroundAnsi = theme.getBgAnsi === undefined ? '' : theme.getBgAnsi('userMessageBg')
+  const fingerprint = `${paletteTokens.map((token) => theme.getFgAnsi(token)).join('|')}|${backgroundAnsi}`
+  const cached = paletteCache.get(theme)
+  if (cached !== undefined && cached.fingerprint === fingerprint) return cached.palette
+  const fg = (token: ThemeColor, fallback: Rgb) =>
+    parseTrueColor(theme.getFgAnsi(token)) ?? fallback
+  const background = parseTrueColor(backgroundAnsi) ?? hudBackground
+  const textPrimary = fg('text', hudTextPrimary)
+  let previousTier = oklabLightness(textPrimary)
+  const tier = (token: ThemeColor, fallback: Rgb, amount: number): Rgb => {
+    const expected = mixOklab(textPrimary, background, amount)
+    const declared = parseTrueColor(theme.getFgAnsi(token))
+    let chosen = declared ?? fallback
+    if (declared !== undefined) {
+      const lightness = oklabLightness(declared)
+      const drift = Math.abs(lightness - oklabLightness(expected))
+      const ordered = previousTier - lightness >= tierStep
+      if (drift > tierTolerance || !ordered) chosen = expected
+    }
+    previousTier = oklabLightness(chosen)
+    return chosen
+  }
+  const tiers = {
+    secondary: tier('toolOutput', hudTextSecondary, 0.26),
+    muted: tier('muted', hudTextMuted, 0.46),
+    dim: tier('dim', hudTextDim, 0.61),
+    faint: tier('mdQuoteBorder', hudTextFaint, 0.745),
+  }
+  const brand = fg('accent', hudBrand)
+  const brandDim = (() => {
+    const expected = mixOklab(brand, background, 0.72)
+    const declared = parseTrueColor(theme.getFgAnsi('borderMuted'))
+    if (declared === undefined) return hudBrandDim
+    const drift = Math.abs(oklabLightness(declared) - oklabLightness(expected))
+    return drift <= tierTolerance ? declared : expected
+  })()
+  const error = fg('error', hudError)
+  const info = fg('syntaxType', hudInfo)
+  const palette: HudPalette = {
+    background,
+    brand,
+    brandAlt: fg('mdLink', hudBrandAlt),
+    brandDim,
+    error,
+    info,
+    success: fg('success', hudSuccess),
+    textDim: tiers.dim,
+    textFaint: tiers.faint,
+    textMuted: tiers.muted,
+    textPrimary,
+    textSecondary: tiers.secondary,
+    user: info,
+    warning: fg('warning', hudWarning),
+    ...categoryColors(brand, error),
+  }
+  paletteCache.set(theme, { fingerprint, palette })
+  return palette
+}
 
 export function parseTrueColor(ansi: string): Rgb | undefined {
-  const match = /38;2;(\d+);(\d+);(\d+)m/u.exec(ansi)
+  const match = /[34]8;2;(\d+);(\d+);(\d+)m/u.exec(ansi)
   if (match === null) return undefined
   const [, r, g, b] = match
   if (r === undefined || g === undefined || b === undefined) return undefined
@@ -107,6 +286,10 @@ function fromOklab(color: Oklab): Rgb {
   }
 }
 
+export function oklabLightness(color: Rgb): number {
+  return toOklab(color).l
+}
+
 export function mixOklab(first: Rgb, second: Rgb, amount: number): Rgb {
   const clamped = Math.max(0, Math.min(1, amount))
   const from = toOklab(first)
@@ -127,46 +310,52 @@ export function applyOpacity(color: Rgb, opacity: number): Rgb {
   }
 }
 
-export function buildRailPalette(bodyOpacity = 1): RailPalette {
+export function buildRailPalette(
+  bodyOpacity = 1,
+  palette: HudPalette = defaultHudPalette,
+): RailPalette {
   const body = (color: Rgb) => ansiForeground(applyOpacity(color, bodyOpacity))
-  const caret = mixOklab(hudBrandAlt, hudBackground, 0.3)
-  const headFail = mixOklab(hudError, hudTextSecondary, 0.35)
+  const caret = mixOklab(palette.brandAlt, palette.background, 0.3)
+  const headFail = mixOklab(palette.error, palette.textSecondary, 0.35)
   return {
-    agent: body(hudBrand),
-    arg: body(hudTextSecondary),
-    ask: body(hudShell),
-    branch: body(hudTextFaint),
+    agent: body(palette.brand),
+    arg: body(palette.textSecondary),
+    ask: body(palette.shell),
+    branch: body(palette.textFaint),
     caret: ansiForeground(caret),
-    dim: body(hudTextDim),
-    duration: body(hudTextDim),
-    fail: body(hudError),
-    faint: body(hudTextFaint),
-    genome: body(hudGenome),
-    groupCaret: body(hudTextMuted),
-    head: ansiForeground(hudTextSecondary),
+    dim: body(palette.textDim),
+    duration: body(palette.textDim),
+    fail: body(palette.error),
+    faint: body(palette.textFaint),
+    genome: body(palette.genome),
+    groupCaret: body(palette.textMuted),
+    head: ansiForeground(palette.textSecondary),
     headFail: ansiForeground(headFail),
-    native: body(hudFile),
-    neutral: body(hudTextMuted),
-    ok: body(hudSuccess),
-    pseudo: body(hudBrandDim),
-    pseudoBody: body(hudTextDim),
-    read: body(hudFile),
-    shell: body(hudShell),
-    text: body(hudTextPrimary),
-    web: body(hudWeb),
+    native: body(palette.file),
+    neutral: body(palette.textMuted),
+    ok: body(palette.success),
+    pseudo: body(palette.brandDim),
+    pseudoBody: body(palette.textDim),
+    read: body(palette.file),
+    shell: body(palette.shell),
+    text: body(palette.textPrimary),
+    web: body(palette.web),
   }
 }
 
-export function railPaletteFromAnsi(bodyOpacity = 1): RailPalette {
-  return buildRailPalette(bodyOpacity)
+export function railPaletteFromAnsi(
+  bodyOpacity = 1,
+  palette: HudPalette = defaultHudPalette,
+): RailPalette {
+  return buildRailPalette(bodyOpacity, palette)
 }
 
-export function assistantAnsi(): string {
-  return ansiForeground(hudBrand)
+export function assistantAnsi(palette: HudPalette = defaultHudPalette): string {
+  return ansiForeground(palette.brand)
 }
 
-export function userAnsi(): string {
-  return ansiForeground(hudUser)
+export function userAnsi(palette: HudPalette = defaultHudPalette): string {
+  return ansiForeground(palette.user)
 }
 
 export const ansiReset = '\x1b[39m'

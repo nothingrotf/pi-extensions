@@ -15,7 +15,7 @@ Two modes:
 
 Pass `capability_profile: "pstack-leaf"` for every worker below. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
-Concrete configured models use `provider/model-id:effort [fast]`. If a role is absent, `auto`, or `inherit-parent`, omit the `Task` `model` field.
+Use the parsed pstack runtime policy in context. Omit `Task.model` for explorer and explainer roles to select their configured model. Concrete overrides use `provider/model-id:effort [fast]`. For a distinct critic panel, pass each selected entry explicitly, including `inherit-parent` for an inherited entry.
 
 ## Explain Mode
 
@@ -51,7 +51,7 @@ Spawn all explorers in a single message:
 
 - `subagent_type`: `generalPurpose`
 - `role`: `how explorer`
-- `model`: your configured how-explorer model. Omit it to inherit the parent model
+- `model`: omit to use the configured `how explorer` runtime policy
 - `readonly`: `true`
 
 Each explorer gets the same base prompt from `references/explorer-prompt.md` plus a specific exploration angle naming its slice. Each explorer should:
@@ -71,7 +71,7 @@ Spawn a single Task subagent that explores and explains in one pass:
 
 - `role`: `how explainer`
 - `subagent_type`: `generalPurpose`
-- `model`: your configured how-explainer model. Omit it to inherit the parent model
+- `model`: omit to use the configured `how explainer` runtime policy
 - `readonly`: `true`
 
 The agent does its own exploration with `find`, `grep`, and `read`, then writes the explanation directly. Read `references/explainer-prompt.md` for the communication style and output format. Same structure, just no explorer findings as input.
@@ -84,7 +84,7 @@ Once all explorers return, spawn a single Task subagent to synthesize their find
 
 - `role`: `how explainer`
 - `subagent_type`: `generalPurpose`
-- `model`: your configured how-explainer model. Omit it to inherit the parent model
+- `model`: omit to use the configured `how explainer` runtime policy
 - `readonly`: `true`
 
 The explainer gets all explorers' findings and writes the human-facing explanation (output format below). Read `references/explainer-prompt.md` for the full prompt template. The explainer reconciles overlapping findings, resolves contradictions, and weaves the slices into a unified picture.
@@ -122,7 +122,7 @@ After the explanation is complete, spawn one architectural critic per entry in y
 For each critic:
 - `role`: `how critics`
 - `subagent_type`: `generalPurpose`
-- `model`: one concrete model from the configured how-critics list. Omit it for an `auto` or `inherit-parent` entry
+- `model`: the selected `how critics` entry, including an explicit `auto` or `inherit-parent` alias. Omit only when the policy is absent or all choices are identical
 - `readonly`: `true`
 
 Read `references/critic-prompt.md` for the prompt template. Each critic gets:

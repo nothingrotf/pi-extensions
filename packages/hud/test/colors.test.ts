@@ -5,6 +5,8 @@ import {
   applyOpacity,
   assistantAnsi,
   buildRailPalette,
+  categoryColors,
+  defaultHudPalette,
   hudBrand,
   hudBrandAlt,
   hudBrandDim,
@@ -14,6 +16,8 @@ import {
   hudTextPrimary,
   hudTextSecondary,
   mixOklab,
+  oklabLightness,
+  paletteFromTheme,
   parseTrueColor,
   railPaletteFromAnsi,
   tint,
@@ -135,5 +139,78 @@ describe('tint', () => {
 
   test('formats a foreground escape', () => {
     expect(ansiForeground({ b: 3, g: 2, r: 1 })).toBe('\x1b[38;2;1;2;3m')
+  })
+})
+
+describe('paletteFromTheme', () => {
+  const empryoDark = new Map<string, string>([
+    ['accent', '#8069ac'],
+    ['borderMuted', '#2e2845'],
+    ['dim', '#5d5872'],
+    ['error', '#ef8c9a'],
+    ['mdLink', '#a7c7f0'],
+    ['mdQuoteBorder', '#423e54'],
+    ['muted', '#7d7794'],
+    ['success', '#9fd8ab'],
+    ['syntaxType', '#97cbe8'],
+    ['text', '#e8e4f2'],
+    ['toolOutput', '#aaa4c0'],
+    ['warning', '#f0c48f'],
+  ])
+  const hexAnsi = (hex: string) =>
+    `\x1b[38;2;${Number.parseInt(hex.slice(1, 3), 16)};${Number.parseInt(hex.slice(3, 5), 16)};${Number.parseInt(hex.slice(5, 7), 16)}m`
+  const themeLike = (colors: Map<string, string>) => ({
+    getFgAnsi: (token: string) => {
+      const hex = colors.get(token)
+      return hex === undefined ? '' : hexAnsi(hex)
+    },
+  })
+
+  test('reproduces the built-in palette from the empryo-dark theme tokens', () => {
+    const palette = paletteFromTheme(themeLike(empryoDark))
+    const { background: _background, ...tokens } = palette
+    const { background: _defaultBackground, ...expected } = defaultHudPalette
+    expect(tokens).toEqual(expected)
+  })
+
+  test('falls back to the built-in colors for terminal default tokens', () => {
+    expect(paletteFromTheme(themeLike(new Map()))).toEqual(defaultHudPalette)
+    expect(paletteFromTheme(undefined)).toBe(defaultHudPalette)
+  })
+
+  test('follows a theme change through the same theme object', () => {
+    const colors = new Map(empryoDark)
+    const theme = themeLike(colors)
+    const first = paletteFromTheme(theme)
+    expect(paletteFromTheme(theme)).toBe(first)
+    colors.set('accent', '#ff0000')
+    const second = paletteFromTheme(theme)
+    expect(second).not.toBe(first)
+    expect(second.brand).toEqual({ b: 0, g: 0, r: 255 })
+    expect(second.file).not.toEqual(first.file)
+  })
+
+  test('derives category colors with the reference hue offsets', () => {
+    expect(categoryColors(hudBrand, { b: 154, g: 140, r: 239 })).toEqual({
+      file: { b: 104, g: 173, r: 115 },
+      genome: { b: 104, g: 173, r: 155 },
+      shell: { b: 155, g: 104, r: 173 },
+      web: { b: 139, g: 173, r: 104 },
+    })
+  })
+})
+
+describe('paletteFromTheme text tiers', () => {
+  test('derives readable tiers when a theme reuses one quiet color', () => {
+    const quiet = '\x1b[38;2;74;79;87m'
+    const palette = paletteFromTheme({
+      getFgAnsi: (token: string) =>
+        token === 'accent' ? '\x1b[38;2;165;180;252m' : token === 'text' ? '' : quiet,
+    })
+    expect(palette.textPrimary).toEqual(hudTextPrimary)
+    expect(palette.textDim).toEqual({ b: 87, g: 79, r: 74 })
+    expect(oklabLightness(palette.textSecondary)).toBeGreaterThan(oklabLightness(palette.textMuted))
+    expect(oklabLightness(palette.textMuted)).toBeGreaterThan(oklabLightness(palette.textDim))
+    expect(oklabLightness(palette.textDim)).toBeGreaterThan(oklabLightness(palette.textFaint))
   })
 })

@@ -20,6 +20,8 @@ import { createChildSession } from '../../subagent/src/child.ts'
 import { registerSubagent } from '../../subagent/src/index.ts'
 import { loadPstackBootstrap } from '../src/bootstrap.ts'
 import pstack from '../src/index.ts'
+import { pstackRoles } from '../src/model-policy.ts'
+import { readLivePolicy } from './live-policy.js'
 import { workflowCases } from './workflow-cases.js'
 import { workflowGraphs } from './workflow-graphs.js'
 
@@ -43,25 +45,25 @@ function reply(model, content, stopReason) {
   }
 }
 
-async function harness(pstackFirst, plans = new Map()) {
+async function harness(pstackFirst, plans = new Map(), policy) {
   const dir = await mkdtemp(join(tmpdir(), 'pstack-bootstrap-'))
+  const modelPolicyPath = join(dir, 'pstack-models.md')
+  if (policy !== undefined) await writeFile(modelPolicyPath, policy)
   const inventories = []
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false })
-  modelRuntime.registerProvider('pstack-test', {
+  const provider = {
     api: 'openai-completions',
     apiKey: 'test',
     baseUrl: 'https://invalid.test',
-    models: [
-      {
-        id: 'model',
-        name: 'model',
-        reasoning: false,
-        input: ['text'],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 1024,
-      },
-    ],
+    models: ['model', 'configured'].map((id) => ({
+      id,
+      name: id,
+      reasoning: id === 'configured',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 1024,
+    })),
     streamSimple(model, context) {
       const stream = createAssistantMessageEventStream()
       const lastUser = context.messages.findLastIndex((message) => message.role === 'user')
@@ -76,6 +78,7 @@ async function harness(pstackFirst, plans = new Map()) {
       const tail = context.messages.slice(lastUser + 1)
       const results = tail.filter((message) => message.role === 'toolResult')
       inventories.push({
+        model: `${model.provider}/${model.id}`,
         action,
         prompt: context.systemPrompt,
         tools: context.tools?.map((tool) => tool.name) ?? [],
@@ -140,6 +143,12 @@ async function harness(pstackFirst, plans = new Map()) {
       stream.end()
       return stream
     },
+  }
+  modelRuntime.registerProvider('pstack-test', provider)
+  modelRuntime.registerProvider('openai-codex', {
+    ...provider,
+    api: 'openai-codex-responses',
+    models: [{ ...provider.models[1], id: 'gpt-5.4', name: 'Fast fixture' }],
   })
   const model = modelRuntime.getModel('pstack-test', 'model')
   if (model === undefined) throw new Error('Test model missing')
@@ -181,7 +190,12 @@ async function harness(pstackFirst, plans = new Map()) {
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
-    extensionFactories: [capture, ...(pstackFirst ? [pstack, subagent] : [subagent, pstack])],
+    extensionFactories: [
+      capture,
+      ...(pstackFirst
+        ? [(pi) => pstack(pi, { modelPolicyPath }), subagent]
+        : [subagent, (pi) => pstack(pi, { modelPolicyPath })]),
+    ],
   })
   await loader.reload()
   expect(loader.getExtensions().errors).toEqual([])
@@ -195,15 +209,21 @@ async function harness(pstackFirst, plans = new Map()) {
   })
   await session.prompt('seed:parent')
   return {
-    api,
-    ctx,
+    get api() {
+      return api
+    },
+    get ctx() {
+      return ctx
+    },
     dir,
     inventories,
     model,
     modelRuntime,
     publications,
     registry,
-    runtime,
+    get runtime() {
+      return runtime
+    },
     session,
     async close() {
       await runtime.shutdown('Test complete')
@@ -240,6 +260,46 @@ async function child(h, profile, options = {}) {
 
 describe('pstack SDK child bootstrap', () => {
   it.each([true, false])(
+    'applies configured omitted-model policy through runtime (%s)',
+    async (first) => {
+      const h = await harness(
+        first,
+        new Map(),
+        '---\ndescription: RAW_METADATA_SENTINEL\nalwaysApply: true\n---\n# RAW_COMMENT_SENTINEL\nhow explorer: pstack-test/configured:off\n',
+      )
+      try {
+        const result = await h.runtime.run({
+          ctx: h.ctx,
+          input: {
+            description: 'Configured explorer',
+            prompt: 'read:configured',
+            role: 'how explorer',
+            capability_profile: 'pstack-leaf',
+            subagent_type: 'generalPurpose',
+            readonly: true,
+            run_in_background: false,
+          },
+        })
+        expect(result.kind).toBe('completed')
+        expect(h.inventories.find((entry) => entry.action === 'read:configured').model).toBe(
+          'pstack-test/configured',
+        )
+        expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).toContain(
+          'how explorer: pstack-test/configured:off',
+        )
+        expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).not.toContain(
+          'RAW_METADATA_SENTINEL',
+        )
+        expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).not.toContain(
+          'RAW_COMMENT_SENTINEL',
+        )
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each([true, false])(
     'registers defaults in either extension load order (%s), with repeat discovery',
     async (pstackFirst) => {
       const h = await harness(pstackFirst)
@@ -253,6 +313,7 @@ describe('pstack SDK child bootstrap', () => {
           ctx: h.ctx,
           input: {
             description: 'Leaf default',
+            role: 'feature',
             prompt: 'seed:leaf',
             subagent_type: 'poteto-agent',
             model: 'pstack-test/model',
@@ -372,6 +433,7 @@ describe('pstack SDK child bootstrap', () => {
         ctx: h.ctx,
         input: {
           description: 'Nested owner',
+          role: 'hardest tasks',
           prompt: 'seed:owner',
           subagent_type: 'generalPurpose',
           capability_profile: 'pstack-nested',
@@ -464,6 +526,403 @@ describe('pstack SDK child bootstrap', () => {
       expect(await readFile(join(stale, 'SKILL.md'), 'utf8')).toBe('STALE_BOOTSTRAP')
     } finally {
       session?.dispose()
+      await h.close()
+    }
+  })
+})
+
+function policyInput(overrides = {}) {
+  return {
+    description: 'Policy dispatch',
+    prompt: 'read:policy',
+    role: 'how explorer',
+    capability_profile: 'pstack-leaf',
+    subagent_type: 'generalPurpose',
+    readonly: true,
+    run_in_background: false,
+    ...overrides,
+  }
+}
+
+describe('pstack runtime model policy', () => {
+  it('captures missing live policy evidence and dispatches through the SDK', async () => {
+    const h = await harness(true)
+    try {
+      expect(await readLivePolicy(join(h.dir, 'pstack-models.md'))).toBeNull()
+      const result = await h.runtime.run({ ctx: h.ctx, input: policyInput() })
+      expect(result.kind).toBe('completed')
+      expect(h.runtime.getRecord(result.details.agentId).model).toBe('pstack-test/model')
+      await expect(readLivePolicy(h.dir)).rejects.toMatchObject({ code: 'EISDIR' })
+      await writeFile(join(h.dir, 'pstack-models.md'), 'feature: auto')
+      expect(await readLivePolicy(join(h.dir, 'pstack-models.md'))).toBe('feature: auto')
+    } finally {
+      await h.close()
+    }
+  })
+
+  it.each([
+    ['role', { role: 'how explorerr' }, 'Unknown model policy role'],
+    ['model', { model: 'pstack-test/missing:off' }, 'not available'],
+    ['panel', { role: 'how critics' }, 'distinct choices'],
+  ])(
+    'rejects a mixed-validity Task batch before child starts (%s)',
+    async (_label, invalid, error) => {
+      const plans = new Map()
+      const h = await harness(
+        true,
+        plans,
+        'how critics: pstack-test/configured:high, inherit-parent',
+      )
+      try {
+        const tasks = [{}, invalid].map((overrides, index) => {
+          const { run_in_background: _background, ...input } = policyInput({
+            id: `entry-${index}`,
+            prompt: index === 0 ? 'read:valid-child' : 'read:invalid-child',
+            ...overrides,
+          })
+          return input
+        })
+        plans.set('read:mixed-batch', [{ name: 'Task', arguments: { tasks } }])
+        await h.session.prompt('read:mixed-batch')
+        await h.session.agent.waitForIdle()
+        const result = h.session.messages.findLast(
+          (message) => message.role === 'toolResult' && message.toolName === 'Task',
+        )
+        expect(result.isError).toBe(true)
+        expect(JSON.stringify(result.content)).toContain(error)
+        expect(h.runtime.listSnapshots()).toEqual([])
+        expect(
+          h.inventories.filter((entry) =>
+            ['read:valid-child', 'read:invalid-child'].includes(entry.action),
+          ),
+        ).toEqual([])
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each(pstackRoles)('selects every documented role $role', async ({ role }) => {
+    const h = await harness(true, new Map(), `${role}: pstack-test/configured:high`)
+    try {
+      const result = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
+      expect(result.kind, JSON.stringify(result)).toBe('completed')
+      const record = h.runtime.getRecord(result.details.agentId)
+      expect(record.model).toBe('pstack-test/configured')
+      expect(record.effort).toBe('high')
+      expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
+        `${role}: pstack-test/configured:high`,
+      )
+    } finally {
+      await h.close()
+    }
+  })
+
+  it.each([
+    [undefined, undefined, 'pstack-test/model', 'off', false],
+    ['', undefined, 'pstack-test/model', 'off', false],
+    ['bug-fix: pstack-test/configured:high', undefined, 'pstack-test/model', 'off', false],
+    ['how explorer: auto', undefined, 'pstack-test/model', 'off', false],
+    ['how explorer: inherit-parent', undefined, 'pstack-test/model', 'off', false],
+    ['how explorer: pstack-test/configured:max', undefined, 'pstack-test/configured', 'max', false],
+    [
+      'how explorer: openai-codex/gpt-5.4:high [fast]',
+      undefined,
+      'openai-codex/gpt-5.4',
+      'high',
+      true,
+    ],
+    [
+      'how explorer: pstack-test/configured:high',
+      'inherit-parent',
+      'pstack-test/model',
+      'off',
+      false,
+    ],
+    [
+      'how explorer: pstack-test/missing:high',
+      'pstack-test/configured:low',
+      'pstack-test/configured',
+      'low',
+      false,
+    ],
+  ])(
+    'handles defaults aliases effort fast and overrides (%s, %s)',
+    async (policy, model, expected, effort, fast) => {
+      const h = await harness(true, new Map(), policy)
+      try {
+        const result = await h.runtime.run({ ctx: h.ctx, input: policyInput({ model }) })
+        expect(result.kind, JSON.stringify(result)).toBe('completed')
+        expect(h.runtime.getRecord(result.details.agentId)).toMatchObject({
+          model: expected,
+          effort,
+          fast,
+        })
+        expect(h.inventories.find((entry) => entry.action === 'read:policy').model).toBe(expected)
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each([
+    ['how explorer: nonsense', undefined, 'invalid'],
+    ['how explorer: nonsense', 'inherit-parent', 'invalid'],
+    ['how explorer: pstack-test/model', undefined, 'invalid'],
+    ['how explorer: auto\nhow explorer: auto', undefined, 'repeats role'],
+    ['feature, refactoring: auto\nfeature: auto', undefined, 'repeats role'],
+    ['how typo: auto', undefined, 'unknown role'],
+    ['how explorer: pstack-test/missing:off', undefined, 'not available'],
+    ['how explorer: pstack-test/model:high', undefined, 'does not support reasoning'],
+    ['how explorer: pstack-test/configured:high [fast]', undefined, 'does not support the [fast]'],
+    ['---\nalwaysApply: true', undefined, 'unterminated'],
+  ])(
+    'fails affected dispatch without harming generic sessions (%s)',
+    async (policy, model, error) => {
+      const h = await harness(true, new Map(), policy)
+      try {
+        const result = await h.runtime.run({ ctx: h.ctx, input: policyInput({ model }) })
+        expect(result.kind).toBe('failed')
+        expect(result.details.error).toContain(error)
+        expect(h.inventories.some((entry) => entry.action === 'read:policy')).toBe(false)
+        const generic = await h.runtime.run({
+          ctx: h.ctx,
+          input: policyInput({ capability_profile: undefined, role: 'anything' }),
+        })
+        expect(generic.kind).toBe('completed')
+        expect(h.runtime.getRecord(generic.details.agentId).model).toBe('pstack-test/model')
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it('orders explicit, capability, agent default and parent selections', async () => {
+    const h = await harness(true, new Map(), 'how explorer: pstack-test/model:off')
+    try {
+      h.api.events.emit('@nothingrotf/subagent/register-agents', {
+        sourceId: 'policy-agent-fixture',
+        definitions: [
+          {
+            name: 'policy-agent',
+            description: 'Agent model fallback',
+            systemPrompt: 'Return a short result.',
+            model: 'pstack-test/configured:low',
+            capabilityProfile: 'pstack-leaf',
+          },
+        ],
+      })
+      for (const [role, model, expected] of [
+        ['how explorer', undefined, 'pstack-test/model'],
+        ['how explorer', 'pstack-test/configured:high', 'pstack-test/configured'],
+        ['feature', undefined, 'pstack-test/configured'],
+      ]) {
+        const result = await h.runtime.run({
+          ctx: h.ctx,
+          input: policyInput({
+            subagent_type: 'policy-agent',
+            capability_profile: undefined,
+            role,
+            model,
+          }),
+        })
+        expect(result.kind, JSON.stringify(result)).toBe('completed')
+        expect(h.runtime.getRecord(result.details.agentId).model).toBe(expected)
+      }
+      const registered = await h.runtime.run({
+        ctx: h.ctx,
+        input: policyInput({ subagent_type: 'poteto-agent', capability_profile: undefined }),
+      })
+      expect(registered.kind).toBe('completed')
+      expect(h.runtime.getRecord(registered.details.agentId).execution.capability.profileId).toBe(
+        'pstack-leaf',
+      )
+    } finally {
+      await h.close()
+    }
+  })
+
+  it.each([undefined, 'how explorerr', 'divergent'])(
+    'rejects missing and unknown dispatch roles (%s)',
+    async (role) => {
+      const h = await harness(true)
+      try {
+        const result = await h.runtime.run({
+          ctx: h.ctx,
+          input: policyInput({ role, model: 'inherit-parent' }),
+        })
+        expect(result.kind).toBe('failed')
+        expect(result.details.error).toMatch(/Task.role|Unknown model policy role/)
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each(pstackRoles.filter((entry) => entry.panel))(
+    'requires explicit distinct panel selection for $role',
+    async ({ role }) => {
+      const h = await harness(
+        true,
+        new Map(),
+        `${role}: pstack-test/configured:high, inherit-parent`,
+      )
+      try {
+        const omitted = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
+        expect(omitted.kind).toBe('failed')
+        expect(omitted.details.error).toContain('distinct choices')
+        for (const model of [
+          'inherit-parent',
+          'pstack-test/configured:high',
+          'pstack-test/configured:low',
+        ]) {
+          const selected = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role, model }) })
+          expect(selected.kind).toBe('completed')
+          expect(h.runtime.getRecord(selected.details.agentId).model).toBe(
+            model === 'inherit-parent' ? 'pstack-test/model' : 'pstack-test/configured',
+          )
+        }
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each(['auto, inherit-parent', 'pstack-test/configured:high, pstack-test/configured:high'])(
+    'resolves identical panel choices without hidden fanout (%s)',
+    async (choices) => {
+      const h = await harness(true, new Map(), `how critics: ${choices}`)
+      try {
+        const result = await h.runtime.run({
+          ctx: h.ctx,
+          input: policyInput({ role: 'how critics' }),
+        })
+        expect(result.kind).toBe('completed')
+        expect(h.runtime.listSnapshots()).toHaveLength(1)
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it('applies grouped keys and aliases through a real Task batch', async () => {
+    const plans = new Map()
+    const h = await harness(
+      true,
+      plans,
+      'feature, refactoring: pstack-test/configured:low\nreflect judgment, divergent, synthesizer: pstack-test/configured:high',
+    )
+    try {
+      const roles = [
+        'feature',
+        'refactoring',
+        'reflect judgment',
+        'reflect divergent',
+        'reflect synthesizer',
+      ]
+      const result = await invoke(h, plans, 'policy-batch', 'Task', {
+        tasks: roles.map((role, index) => {
+          const { run_in_background: _background, ...input } = policyInput({
+            role,
+            id: `role-${index}`,
+          })
+          return input
+        }),
+      })
+      expect(result.status).toBe('batch')
+      expect(result.items).toHaveLength(roles.length)
+      for (const item of result.items) {
+        expect(item.status, JSON.stringify(item)).toBe('completed')
+        expect(h.runtime.getRecord(item.agentId).model).toBe('pstack-test/configured')
+      }
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('reloads the actual extension policy while preserving stored resume models', async () => {
+    const plans = new Map()
+    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    try {
+      await h.session.bindExtensions({ shutdownHandler: () => undefined })
+      const original = await invoke(h, plans, 'before-reload', 'Task', policyInput())
+      expect(h.runtime.getRecord(original.agentId).model).toBe('pstack-test/configured')
+      await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+      await h.session.reload()
+      const fresh = await invoke(h, plans, 'after-reload', 'Task', policyInput())
+      expect(h.runtime.getRecord(fresh.agentId).model).toBe('pstack-test/model')
+      expect(h.inventories.find((entry) => entry.action === 'read:after-reload').prompt).toContain(
+        'how explorer: inherit-parent',
+      )
+      await writeFile(join(h.dir, 'pstack-models.md'), 'malformed file')
+      await h.session.reload()
+      const resumed = await invoke(h, plans, 'reload-resume', 'Task', {
+        description: 'Resume with invalid new policy',
+        prompt: 'read:reload-resumed',
+        resume: original.agentId,
+        subagent_type: 'generalPurpose',
+        run_in_background: false,
+      })
+      expect(resumed.status).toBe('completed')
+      expect(h.inventories.find((entry) => entry.action === 'read:reload-resumed').model).toBe(
+        'pstack-test/configured',
+      )
+      const rejected = await h.runtime.run({ ctx: h.ctx, input: policyInput() })
+      expect(rejected.kind).toBe('failed')
+      expect(rejected.details.error).toContain('invalid')
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('enforces policy in background and nested Tasks and preserves resume', async () => {
+    const plans = new Map()
+    const h = await harness(
+      true,
+      plans,
+      'feature: pstack-test/configured:high\nhow explorer: pstack-test/model:off',
+    )
+    try {
+      plans.set('read:owner-policy', [
+        { name: 'Task', arguments: policyInput({ prompt: 'read:nested-policy' }) },
+      ])
+      const started = await invoke(
+        h,
+        plans,
+        'background-policy',
+        'Task',
+        policyInput({
+          subagent_type: 'poteto-agent',
+          role: 'feature',
+          capability_profile: 'pstack-nested',
+          prompt: 'read:owner-policy',
+          run_in_background: true,
+        }),
+      )
+      await invoke(h, plans, 'wait-policy', 'TaskControl', {
+        action: 'wait',
+        agent_ids: [started.agentId],
+        timeout_ms: 10000,
+      })
+      expect(h.runtime.getRecord(started.agentId)).toMatchObject({
+        status: 'completed',
+        model: 'pstack-test/configured',
+      })
+      expect(h.inventories.find((entry) => entry.action === 'read:nested-policy').model).toBe(
+        'pstack-test/model',
+      )
+      const resumed = await invoke(h, plans, 'resume-policy', 'Task', {
+        description: 'Resume stored policy',
+        prompt: 'read:resumed-policy',
+        subagent_type: 'poteto-agent',
+        resume: started.agentId,
+        run_in_background: false,
+      })
+      expect(resumed.status).toBe('completed')
+      expect(h.inventories.find((entry) => entry.action === 'read:resumed-policy').model).toBe(
+        'pstack-test/configured',
+      )
+    } finally {
       await h.close()
     }
   })

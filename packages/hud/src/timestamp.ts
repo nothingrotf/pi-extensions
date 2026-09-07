@@ -14,6 +14,7 @@ export const roleEntryType = 'hud-role'
 export const timestampEntryType = 'timestamp-pi'
 
 const minimumDurationMs = 100
+const minimumThroughputDurationMs = 250
 
 export type MessageRole = 'assistant' | 'user'
 
@@ -29,6 +30,8 @@ export type UsageEntryData = {
   durationMs: number | undefined
   input: number
   output: number
+  throughputDurationMs?: number
+  throughputOutput?: number
   timestamp: number
 }
 
@@ -92,8 +95,14 @@ export function formatUsageRow(data: UsageEntryData): string {
   parts.push(`${formatTokens(data.output)} out`)
   const cached = data.input > 0 ? Math.min(100, Math.round((data.cacheRead / data.input) * 100)) : 0
   parts.push(`⛁ ${cached}% cached`)
-  if (data.durationMs !== undefined && data.durationMs > minimumDurationMs && data.output > 0) {
-    parts.push(`⚡${((data.output / data.durationMs) * 1000).toFixed(1)}/s`)
+  const throughputDurationMs = data.throughputDurationMs ?? data.durationMs
+  const throughputOutput = data.throughputOutput ?? data.output
+  if (
+    throughputDurationMs !== undefined &&
+    throughputDurationMs > minimumDurationMs &&
+    throughputOutput > 0
+  ) {
+    parts.push(`⚡${((throughputOutput / throughputDurationMs) * 1000).toFixed(1)}/s`)
   }
   return `▪ ${parts.join(' · ')}`
 }
@@ -104,21 +113,40 @@ export interface RunTotals {
   input: number
   output: number
   startedAt: number | undefined
+  throughputDurationMs: number
+  throughputOutput: number
 }
 
 export function emptyRunTotals(): RunTotals {
-  return { cacheRead: 0, cost: 0, input: 0, output: 0, startedAt: undefined }
+  return {
+    cacheRead: 0,
+    cost: 0,
+    input: 0,
+    output: 0,
+    startedAt: undefined,
+    throughputDurationMs: 0,
+    throughputOutput: 0,
+  }
 }
 
-export function addMessageUsage(totals: RunTotals, message: AssistantCandidate): RunTotals {
+export function addMessageUsage(
+  totals: RunTotals,
+  message: AssistantCandidate,
+  throughputDurationMs?: number,
+): RunTotals {
   const usage = message.usage ?? {}
   const cacheRead = usage.cacheRead ?? 0
+  const output = usage.output ?? 0
+  const measured =
+    throughputDurationMs !== undefined && throughputDurationMs >= minimumThroughputDurationMs
   return {
     cacheRead: totals.cacheRead + cacheRead,
     cost: totals.cost + (usage.cost?.total ?? 0),
     input: totals.input + (usage.input ?? 0) + (usage.cacheWrite ?? 0) + cacheRead,
-    output: totals.output + (usage.output ?? 0),
+    output: totals.output + output,
     startedAt: totals.startedAt,
+    throughputDurationMs: totals.throughputDurationMs + (measured ? throughputDurationMs : 0),
+    throughputOutput: totals.throughputOutput + (measured ? output : 0),
   }
 }
 
@@ -129,6 +157,8 @@ export function toUsageEntry(totals: RunTotals, now: number): UsageEntryData {
     durationMs: totals.startedAt === undefined ? undefined : Math.max(0, now - totals.startedAt),
     input: totals.input,
     output: totals.output,
+    throughputDurationMs: totals.throughputDurationMs,
+    throughputOutput: totals.throughputOutput,
     timestamp: now,
   }
 }
@@ -169,6 +199,8 @@ export function registerTimestamps(
   let assistantHeaderPending = true
   let assistantResponded = false
   let assistantCandidate: RoleEntryData | undefined
+  let firstOutputAt: number | undefined
+  let lastOutputAt: number | undefined
 
   const openAssistant = (data: RoleEntryData) => {
     if (!enabled || !assistantHeaderPending) return
@@ -198,6 +230,8 @@ export function registerTimestamps(
     assistantHeaderPending = true
     assistantResponded = false
     assistantCandidate = undefined
+    firstOutputAt = undefined
+    lastOutputAt = undefined
   })
 
   pi.on('turn_start', (event, ctx) => {
@@ -224,6 +258,8 @@ export function registerTimestamps(
       return
     }
     if (role !== 'assistant') return
+    firstOutputAt = undefined
+    lastOutputAt = undefined
     if (assistantHasResponse(event.message)) assistantResponded = true
     if (assistantHeaderPending) {
       openAssistant(
@@ -238,9 +274,13 @@ export function registerTimestamps(
   })
 
   pi.on('message_update', (event) => {
-    if (event.message.role === 'assistant' && assistantHasResponse(event.message)) {
-      assistantResponded = true
-    }
+    if (event.message.role !== 'assistant') return
+    if (assistantHasResponse(event.message)) assistantResponded = true
+    const type = event.assistantMessageEvent.type
+    if (type !== 'text_delta' && type !== 'thinking_delta' && type !== 'toolcall_delta') return
+    const now = Date.now()
+    firstOutputAt ??= now
+    lastOutputAt = now
   })
 
   pi.on('message_end', (event) => {
@@ -249,7 +289,13 @@ export function registerTimestamps(
     }
     if (event.message.role === 'assistant') {
       if (assistantHasResponse(event.message)) assistantResponded = true
-      totals = addMessageUsage(totals, event.message)
+      const throughputDurationMs =
+        firstOutputAt === undefined || lastOutputAt === undefined
+          ? undefined
+          : Math.max(0, lastOutputAt - firstOutputAt)
+      totals = addMessageUsage(totals, event.message, throughputDurationMs)
+      firstOutputAt = undefined
+      lastOutputAt = undefined
     }
   })
 
@@ -259,6 +305,8 @@ export function registerTimestamps(
     totals = emptyRunTotals()
     assistantResponded = false
     assistantCandidate = undefined
+    firstOutputAt = undefined
+    lastOutputAt = undefined
     const entry = toUsageEntry(run, Date.now())
     if (enabled && hasUsage(entry)) {
       pi.appendEntry<UsageEntryData>(timestampEntryType, entry)

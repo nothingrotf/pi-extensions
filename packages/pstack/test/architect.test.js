@@ -24,9 +24,9 @@ describe('architect', () => {
   it('uses the ported model and todo contracts', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
     expect(skill).toContain('Use `todo_write`')
-    expect(skill).toContain('~/.agents/rules/pstack-models.md')
+    expect(skill).toContain('parsed `architect runners` runtime policy')
     expect(skill).toContain('provider/model-id:effort [fast]')
-    expect(skill).toContain('Omit `Task.model` for `auto` or `inherit-parent`')
+    expect(skill).toContain('pass each selected `Task.model` explicitly')
     expect(skill).toContain('use four inherited runners')
     expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })

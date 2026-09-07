@@ -15,6 +15,7 @@ import { SubagentResolver, type SubagentDefinition } from './agents.ts'
 import {
   CapabilityRegistry,
   isCapabilitySubset,
+  selectCapabilityModel,
   type CapabilityProfile,
   type CapabilityRegistration,
   type ResolvedCapabilities,
@@ -1970,12 +1971,13 @@ export class SubagentRuntime {
     }
     const systemPrompt =
       discovered === undefined ? await loadRolePrompt(role) : discovered.systemPrompt
-    const selector = input.model ?? role.model
-    const model = resolveModel(selector, role, ctx, runtime)
     const capabilities = this.capabilities.resolve(
       input.capability_profile ?? discovered?.capabilityProfile,
       readonly,
     )
+    const selector =
+      selectCapabilityModel(capabilities.modelPolicies, input.role, input.model) ?? role.model
+    const model = resolveModel(selector, role, ctx, runtime)
     if (
       attenuation !== undefined &&
       !isCapabilitySubset(capabilities.contract, attenuation.capability)
@@ -2587,7 +2589,11 @@ export class SubagentRuntime {
           outputState,
         )
       }
-      if (isolationReceipt?.integration === 'apply' && active.destination !== undefined) {
+      if (
+        isolationReceipt?.captureStatus === 'captured' &&
+        isolationReceipt.integration === 'apply' &&
+        active.destination !== undefined
+      ) {
         if (background || active.deferIntegration) {
           active.isolationReceipt = {
             ...isolationReceipt,
@@ -2621,7 +2627,7 @@ export class SubagentRuntime {
             )
           }
         }
-      } else if (isolationReceipt !== undefined && background) {
+      } else if (isolationReceipt?.captureStatus === 'captured' && background) {
         const stagedReceipt: IsolationReceipt = {
           ...isolationReceipt,
           integrationStatus: isolationReceipt.integration === 'apply' ? 'staged' : 'not-requested',
@@ -2641,10 +2647,12 @@ export class SubagentRuntime {
         this.propagateDescendantVisibility(record, 'visible')
       }
       const integrationError =
-        active.isolationReceipt?.status === 'conflict' ||
-        active.isolationReceipt?.status === 'partial'
-          ? 'The isolated changes could not be integrated without a conflict.'
-          : undefined
+        active.isolationReceipt?.captureStatus === 'failed'
+          ? `The isolated changes could not be captured: ${active.isolationReceipt.error ?? 'unknown capture failure'}`
+          : active.isolationReceipt?.status === 'conflict' ||
+              active.isolationReceipt?.status === 'partial'
+            ? 'The isolated changes could not be integrated without a conflict.'
+            : undefined
       if (integrationError !== undefined) {
         return this.finishFailure(
           record,

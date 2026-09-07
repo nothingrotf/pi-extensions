@@ -25,9 +25,9 @@ describe('interrogate', () => {
   it('uses exact Task selectors and inherited fallbacks', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
     expect(skill).toContain('provider/model-id:effort [fast]')
-    expect(skill).toContain('~/.agents/rules/pstack-models.md')
+    expect(skill).toContain('parsed `interrogate reviewers` runtime policy')
     expect(skill.match(/\| Reviewer [A-D] \| `inherit-parent` \|/g)).toHaveLength(4)
-    expect(skill).toContain('Omit it for an absent, `auto`, or `inherit-parent` value')
+    expect(skill).toContain('including an explicit `auto` or `inherit-parent` alias')
     expect(skill).toContain('mark that reviewer `BLOCKED`')
     expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })

@@ -6,6 +6,11 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { loadPstackBootstrap } from './bootstrap.ts'
+import {
+  loadPstackModelPolicy,
+  renderPstackModelPolicy,
+  type PstackModelPolicyOptions,
+} from './model-policy.ts'
 
 const AgentMetadataSchema = Type.Object(
   {
@@ -51,8 +56,16 @@ async function loadAgent(path: string, label: string, skillRoot: string): Promis
   return definition
 }
 
-export default async function pstack(pi: ExtensionAPI): Promise<void> {
+export default async function pstack(
+  pi: ExtensionAPI,
+  options: PstackModelPolicyOptions = {},
+): Promise<void> {
   const bootstrap = await loadPstackBootstrap()
+  const modelPolicy = await loadPstackModelPolicy(options)
+  const policyPrompt = renderPstackModelPolicy(modelPolicy)
+  pi.on('before_agent_start', (event) => ({
+    systemPrompt: `${event.systemPrompt}\n\n${policyPrompt}`,
+  }))
   const definitions = await Promise.all([
     loadAgent('../agents/comment-sicko.md', 'Comment Sicko', bootstrap.root),
     loadAgent('../agents/poteto-agent.md', 'poteto-agent', bootstrap.root),
@@ -64,8 +77,9 @@ export default async function pstack(pi: ExtensionAPI): Promise<void> {
           createTools: createSessionTodoTools,
           extensions: [],
           id: 'pstack-planning',
+          modelPolicy,
           readonlyTools: ['todo_write', 'todo_read'],
-          systemPrompt: bootstrap.systemPrompt,
+          systemPrompt: `${bootstrap.systemPrompt}\n\n${policyPrompt}`,
           tools: createSessionTodoTools(),
           version: '1',
         },

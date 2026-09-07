@@ -10,9 +10,19 @@ Use the labels from `setup-pstack`, including `feature`, `refactoring`, `how exp
 
 For an ad-hoc reviewer, evidence reducer, or verifier, use `judgment and prose`. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
 
-Set `role` even when the model policy is absent, `auto`, or `inherit-parent`. Omit `model` for those policies.
+Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
-A role is display metadata, not a model selector or a permission. The runtime never infers it from a model or prompt.
+The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a parsed runtime policy to root and nested context. Do not rely on an `alwaysApply` loader or copy raw file text into prompts. Omit `model` for scalar roles to use the configured selector. Precedence is explicit `Task.model`, matching capability policy, agent default, then parent.
+
+For a panel or pool with distinct choices, pass the selected entry explicitly, including `model: "inherit-parent"` or `model: "auto"` for an inherited entry. Never silently use the first entry. Identical choices may omit `model`. The skill determines counts; the runtime never creates a panel or fans out.
+
+Missing files and unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
+
+Explicit model overrides may select outside a configured panel or pool, including for different-family reviews. The runtime guards omitted ambiguous choices, not panel membership or counts. Unavailable models and unsupported effort or fast settings fail selection. Reload or start a new session after editing the file. Resume preserves the stored model even when the policy changes.
+
+Task batches preflight every entry before starting children. An invalid role, unavailable selected model, or omitted distinct panel choice rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
+
+A role never grants permissions. The runtime never infers it from a model or prompt.
 
 Preserve the role on resume. Start a fresh agent when the role or required capabilities change.
 
@@ -70,6 +80,7 @@ A runtime verifier needs shell access but must never integrate incidental files.
   "prompt": "Run the scoped runtime checks in the effective workspace. Do not modify product code. Return evidence and findings.",
   "subagent_type": "poteto-agent",
   "role": "judgment and prose",
+  "capability_profile": "pstack-leaf",
   "readonly": false,
   "run_in_background": true,
   "isolation": { "mode": "worktree", "integration": "manual" }

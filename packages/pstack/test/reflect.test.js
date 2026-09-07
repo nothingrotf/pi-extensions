@@ -39,9 +39,11 @@ describe('reflect', () => {
     expect(port).toContain('`needs` list contains all three reviewer nodes')
     expect(port).toContain('`readonly: true` for every node')
     expect(port).toContain('`reflect tooling`')
-    expect(port).toContain('`reflect judgment, divergent, synthesizer`')
+    expect(port).toContain('`reflect judgment`')
+    expect(port).toContain('`reflect divergent`')
+    expect(port).toContain('`reflect synthesizer`')
     expect(port).toContain('provider/model-id:effort [fast]')
-    expect(port).toContain('Omit `Task.model` when a role is absent, `auto`, or `inherit-parent`')
+    expect(port).toContain("Omit `Task.model` to use each role's configured runtime selector")
   })
 
   it('keeps external queries with the parent and preserves stable references', () => {

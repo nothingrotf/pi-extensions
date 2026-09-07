@@ -48,7 +48,7 @@ Read `references/epistemics.md` for the full confidence framework and phrasing g
 
 Pass `capability_profile: "pstack-leaf"` for every investigator and synthesizer. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
-Concrete configured models use `provider/model-id:effort [fast]`. If a role is absent, `auto`, or `inherit-parent`, omit the `Task` `model` field.
+Omit `Task.model` to select the configured `why investigators` or `why synthesizer` runtime policy. The extension supplies the parsed policy in context. Concrete overrides use `provider/model-id:effort [fast]`. Missing configuration falls back to the agent default, then the parent. `auto` and `inherit-parent` select the parent.
 
 ## Step 1. Understand the Target and the Question
 
@@ -125,7 +125,7 @@ The parent owns all source tools. A `Task` child does not inherit ambient extens
 Subagent config (each):
 - `role`: `why investigators`
 - `subagent_type`: `generalPurpose`
-- `model`: your configured why-investigators model. Omit it for an absent, `auto`, or `inherit-parent` value
+- `model`: omit to use the configured `why investigators` runtime policy
 - `readonly`: `true`
 
 Each investigator gets:
@@ -169,13 +169,17 @@ If your scope assessment suggests a single-commit trivial target where the PR de
 
 ## Step 4. Synthesize
 
-Before synthesis, the parent spot-checks investigator citations through the original source tools. Remove unsupported claims or fetch the missing context.
+Before synthesis, verify investigator citations through the original source tools. For local files, use line-numbered evidence to check every cited range against its supporting text.
+
+Check that reported parent searches match the recorded parent actions rather than the investigator's own reads.
+
+If citations or search provenance fail verification, resume the affected investigator with the exact mismatches before accepting its report. Preserve unresolved defects as failures rather than claiming a clean pass.
 
 Spawn one synthesizer subagent:
 
 - `role`: `why synthesizer`
 - `subagent_type`: `generalPurpose`
-- `model`: your configured why-synthesizer model. Omit it for an absent, `auto`, or `inherit-parent` value
+- `model`: omit to use the configured `why synthesizer` runtime policy
 - `readonly`: `true`. The parent spot-verifies citations through the original source tools before presentation.
 
 The synthesizer gets:
