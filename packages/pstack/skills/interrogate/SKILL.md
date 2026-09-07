@@ -33,7 +33,7 @@ Write one clear paragraph. Reviewers challenge whether the work achieves the int
 
 ## Step 3, Spawn Reviewers
 
-Launch all reviewers in a single message using the Task tool. Use the `interrogate reviewers` list from `~/.agents/rules/pstack-models.md` when present. Use one reviewer per entry, and extend or shrink the Reviewer A/B/C/D labels to match. If the role is absent, use the inherited fallbacks below.
+Launch all reviewers in a single message using the Task tool. Use the parsed `interrogate reviewers` runtime policy in context when configured. Use one reviewer per entry, and extend or shrink the Reviewer A/B/C/D labels to match. If the role is absent, use the inherited fallbacks below.
 
 Concrete configured models use `provider/model-id:effort [fast]`.
 
@@ -50,10 +50,10 @@ For each reviewer:
 - `role`: `interrogate reviewers`
 - `capability_profile`: `pstack-leaf`
 - `subagent_type`: `generalPurpose`
-- `model`: the configured `interrogate reviewers` entry. Omit it for an absent, `auto`, or `inherit-parent` value
+- `model`: the selected `interrogate reviewers` entry, including an explicit `auto` or `inherit-parent` alias. Omit only when unconfigured or all choices are identical
 - `readonly`: `true`
 
-If Pi rejects a concrete model selector, mark that reviewer `BLOCKED` and report the invalid configuration. Continue with the remaining reviewers. Do not substitute a different model. If the value is `inherit-parent` or `auto`, omit `model`. Never treat those aliases as invalid selectors.
+If Pi rejects a concrete model selector, mark that reviewer `BLOCKED` and report the invalid configuration. Continue with the remaining reviewers. Do not substitute a different model. For distinct panel choices, pass inherited entries explicitly as `model: "inherit-parent"` or `model: "auto"`. Never treat those aliases as invalid selectors.
 
 Read `references/reviewer-prompt.md` and fill in the template with:
 1. The stated intent

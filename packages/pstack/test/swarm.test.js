@@ -14,9 +14,9 @@ function skill() {
 describe('swarm', () => {
   it('uses Pi model configuration without substitution', () => {
     const port = skill()
-    expect(port).toContain('~/.agents/rules/pstack-models.md')
+    expect(port).toContain('parsed `swarm workers` runtime policy')
     expect(port).toContain('provider/model-id:effort [fast]')
-    expect(port).toContain('Omit `Task.model` for `auto` or `inherit-parent`')
+    expect(port).toContain('Omit `Task.model` to select its scalar default')
     expect(port).toContain('mark that arm `BLOCKED`')
     expect(port).toContain('Do not substitute a model.')
     expect(port).not.toMatch(/~\/\.cursor|grok-4\.6|environment:|cloud_base_branch/)

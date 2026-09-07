@@ -55,9 +55,58 @@ Before the first response, an active run shows `waiting for the model` instead o
 After the response starts, the run shows a zero-value row until token metrics arrive.
 A completed run with no tokens shows no row. Each row starts at the transcript body column.
 
-The throughput divides total output tokens by the time from the first turn through the run end.
+The throughput divides measured output tokens by the combined streaming intervals for assistant responses.
+Each interval starts on its first output delta and ends on its last output delta.
+Intervals shorter than 250 ms do not contribute to the throughput sample.
 
 Headers and usage rows are active by default. They never enter the model context.
+
+## Message prose
+
+When speaker headers are active, the HUD renders message bodies with its own prose renderer.
+The renderer follows the Empryo transcript model instead of the stock Pi Markdown component.
+
+User messages stay literal. Markdown punctuation such as `**`, backticks, and `#` remains visible.
+URLs and known project files inside a user message become underlined anchors.
+
+Assistant messages render Markdown with these rules:
+
+- Link labels use the brand accent color, and the destination follows in dim text, such as `Docs (https://example.com)`.
+- The destination stays visible with or without terminal hyperlink support. Both parts stay clickable when OSC 8 is available.
+- Autolinks and file links do not repeat their destination.
+- Bare project paths and single-backtick paths become `file://` links after the path exists on disk. Line and column suffixes stay visible in the label.
+- Headings hide their `#` markers. Level one and two use the primary color. Deeper levels use the secondary color.
+- Code blocks use a brand-colored left border instead of fences. Highlighting uses the active Pi syntax theme when the language is known.
+- Tables use rounded borders and one header rule.
+- List markers use the warning color. Task markers use success and dim colors.
+- Quotes use a faint border with muted italic text.
+
+File lookups run asynchronously against the session working directory and cache each result.
+A path that does not exist renders as plain text. Paths inside fenced code, explicit links, and URLs never change.
+While a response streams, the renderer closes open fences and unbalanced inline markers, and it delays file links for a path that touches the end of the text.
+
+Thinking text keeps the native Pi rendering.
+
+Paths with shell-escaped spaces, such as `~/Shots/Screen\ 1.png`, resolve after unescaping. The label keeps the escaped form.
+
+## Theme colors
+
+The HUD derives its palette from the active Pi theme. The mapping uses these theme tokens:
+
+| HUD role                                   | Pi theme token                                        |
+| ------------------------------------------ | ----------------------------------------------------- |
+| brand                                      | `accent`                                              |
+| brand alt                                  | `mdLink`                                              |
+| brand dim                                  | `borderMuted`                                         |
+| text primary, secondary, muted, dim, faint | `text`, `toolOutput`, `muted`, `dim`, `mdQuoteBorder` |
+| success, warning, error                    | `success`, `warning`, `error`                         |
+| info and user glyph                        | `syntaxType`                                          |
+| caret background                           | `userMessageBg`                                       |
+
+Tool category colors rotate the brand hue with the Empryo offsets: file 210, shell 55, web 250, genome 175.
+A token set to the terminal default falls back to the built-in Empryo dark value.
+The `empryo-dark` theme in `~/.pi/agent/themes` reproduces the previous fixed palette exactly, except for the caret mix background.
+Theme changes apply on the next render without a restart.
 
 Use `/hud` to open the settings picker. All HUD settings use this command:
 

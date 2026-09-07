@@ -66,6 +66,16 @@ Don't synthesize or form a final opinion on "the why." Collect the raw material 
 - **Preserve uncertainty.** If the evidence is ambiguous, say so. If one reading is more plausible but not certain, say that. Don't collapse ambiguity to look decisive.
 - **No silent substitutions.** If the question is about feature X and you only find evidence about feature Y, don't present Y's evidence as if it answers X.
 
+## Verify Local Citations
+
+Before returning findings, verify every local file citation through tool output that includes line numbers. Use `grep` with a distinctive literal passage and enough context to locate each claim.
+
+Copy the returned line numbers instead of estimating them from unnumbered `read` output. Confirm that every cited range contains the supporting text and stays within the file.
+
+For historical content, retain the commit-qualified reference. Do not substitute current-file line numbers for a historical version.
+
+If line-numbered evidence is unavailable, return the exact quote and stable file reference with an explicit citation-verification gap. Never invent a line number.
+
 ## Output Format
 
 Return your findings in this structure. The synthesizer will read it directly.
@@ -74,7 +84,9 @@ Return your findings in this structure. The synthesizer will read it directly.
 Which source you investigated (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, code comments, etc.).
 
 ### What the Parent Searched
-The recorded queries, opened items, and searched locations. Be specific. This tells the synthesizer what might remain unsearched.
+Include only parent queries, opened items, and searched locations explicitly recorded in the bundle or handoff. Label missing parent provenance as unrecorded.
+
+List your own reads separately. Never attribute your tool calls to the parent, or treat fixture preparation as a parent search.
 
 ### Direct Evidence Found
 For each piece that explicitly addresses the question:

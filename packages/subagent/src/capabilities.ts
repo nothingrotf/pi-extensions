@@ -2,11 +2,21 @@ import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-
 import { type StaticDecode, Type, type TSchema } from 'typebox'
 import { Value } from 'typebox/value'
 
-import type { CapabilityContract } from './schema.ts'
+import { TaskRoleSchema, type CapabilityContract } from './schema.ts'
 
 export type CapabilityToolDefinition = ToolDefinition<TSchema, unknown, unknown>
 
+export interface RoleModelPolicyEntry {
+  role: string
+  selectors: readonly string[]
+}
+
+export type CapabilityModelPolicy =
+  | { status: 'valid'; roles: readonly RoleModelPolicyEntry[] }
+  | { status: 'invalid'; error: string }
+
 export interface CapabilityRegistration {
+  modelPolicy?: CapabilityModelPolicy
   createTools?: () => readonly CapabilityToolDefinition[]
   extensions: readonly InlineExtension[]
   id: string
@@ -23,6 +33,7 @@ export interface CapabilityProfile {
 }
 
 export interface ResolvedCapabilities {
+  modelPolicies: readonly CapabilityModelPolicy[]
   contract: CapabilityContract
   extensions: readonly InlineExtension[]
   tools: readonly string[]
@@ -107,11 +118,70 @@ const InlineExtensionSchema = Type.Object({
   name: Type.String(),
 })
 
+const CapabilityModelPolicySchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Literal('valid'),
+      roles: Type.Array(
+        Type.Object(
+          {
+            role: TaskRoleSchema,
+            selectors: Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 64 }),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 128 },
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Literal('invalid'),
+      error: Type.String({ minLength: 1, maxLength: 4096 }),
+    },
+    { additionalProperties: false },
+  ),
+])
+
+export function selectCapabilityModel(
+  policies: readonly CapabilityModelPolicy[],
+  role: string | undefined,
+  explicit: string | undefined,
+): string | undefined {
+  const matches: RoleModelPolicyEntry[] = []
+  for (const policy of policies) {
+    if (policy.status === 'invalid') throw new Error(`Model policy is invalid. ${policy.error}`)
+    if (role === undefined)
+      throw new Error('This capability requires an exact Task.role for model selection.')
+    const entry = policy.roles.find((candidate) => candidate.role === role)
+    if (entry !== undefined) matches.push(entry)
+  }
+  if (policies.length > 0 && matches.length === 0)
+    throw new Error(`Unknown model policy role "${role}".`)
+  if (explicit !== undefined) return explicit
+  const distinct = new Set(
+    matches
+      .flatMap((entry) => entry.selectors)
+      .map((selector) =>
+        ['auto', 'inherit', 'default', 'inherit-parent'].includes(selector)
+          ? 'inherit-parent'
+          : selector,
+      ),
+  )
+  if (distinct.size > 1)
+    throw new Error(
+      `Model policy role "${role}" has distinct choices. Pass an explicit Task.model for this panel or pool entry, including inherit-parent for an inherited entry.`,
+    )
+  return distinct.values().next().value
+}
+
 const CapabilityRegistrationSchema = Type.Object(
   {
     createTools: Type.Optional(Type.Function([], Type.Unknown())),
     extensions: Type.Array(InlineExtensionSchema, { maxItems: 64 }),
     id: Type.String({ maxLength: 128, minLength: 1 }),
+    modelPolicy: Type.Optional(CapabilityModelPolicySchema),
     readonlyTools: Type.Optional(Type.Array(Type.String(), { maxItems: 64, uniqueItems: true })),
     systemPrompt: Type.Optional(Type.String({ maxLength: 256 * 1024 })),
     tools: Type.Array(CapabilityToolSchema, { maxItems: 64 }),
@@ -249,6 +319,18 @@ export class CapabilityRegistry {
       })),
       version: registration.version,
     }
+    if (registration.modelPolicy !== undefined) {
+      const policy = registration.modelPolicy
+      if (
+        policy.status === 'valid' &&
+        new Set(policy.roles.map((entry) => entry.role)).size !== policy.roles.length
+      ) {
+        throw new Error(
+          `Capability registration "${registration.id}" has duplicate model policy roles.`,
+        )
+      }
+      stored.modelPolicy = structuredClone(policy)
+    }
     if (registration.createTools !== undefined) stored.createTools = registration.createTools
     if (registration.systemPrompt !== undefined) stored.systemPrompt = registration.systemPrompt
     validateToolContract(stored, instantiateTools(stored))
@@ -298,6 +380,7 @@ export class CapabilityRegistry {
   resolve(profileId: string | undefined, readonly = false): ResolvedCapabilities {
     if (profileId === undefined) {
       return {
+        modelPolicies: [],
         contract: { extensions: [], nested: { enabled: false }, registrations: [], tools: [] },
         extensions: [],
         tools: [],
@@ -305,6 +388,7 @@ export class CapabilityRegistry {
     }
     const profile = this.profiles.get(profileId)
     if (profile === undefined) throw new Error(`Capability profile "${profileId}" does not exist.`)
+    const modelPolicies: CapabilityModelPolicy[] = []
     const extensions: InlineExtension[] = []
     const tools: string[] = []
     const registrations: { id: string; version: string }[] = []
@@ -314,6 +398,8 @@ export class CapabilityRegistry {
       if (registration === undefined) {
         throw new Error(`Capability registration "${registrationId}" does not exist.`)
       }
+      if (registration.modelPolicy !== undefined)
+        modelPolicies.push(structuredClone(registration.modelPolicy))
       registrations.push({ id: registration.id, version: registration.version })
       if (!readonly) extensions.push(...registration.extensions)
       const definitions = registration.tools
@@ -348,6 +434,7 @@ export class CapabilityRegistry {
       }
     }
     return {
+      modelPolicies,
       contract: {
         extensions: registrations,
         nested:

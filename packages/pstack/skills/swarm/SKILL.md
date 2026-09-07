@@ -22,7 +22,7 @@ Use `todo_write` to create one item per phase before you launch anything.
 1. State the done predicate and the artifact or report the swarm must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
 3. Set N from the user or derive it from the shape. N is total workers.
-4. Pick worker models from `swarm workers` in `~/.agents/rules/pstack-models.md` when present. Concrete entries use `provider/model-id:effort [fast]`. Omit `Task.model` for `auto` or `inherit-parent`. If the role is absent, use inherited workers. For a model race, name each arm's model up front. Verify each concrete selector against the active Pi runtime. If Pi rejects it, mark that arm `BLOCKED`. Do not substitute a model.
+4. Use the parsed `swarm workers` runtime policy in context. Omit `Task.model` to select its scalar default. Concrete overrides use `provider/model-id:effort [fast]`. If the role is absent, use inherited workers. For a model race, name each arm's model up front. Verify each concrete selector against the active Pi runtime. If Pi rejects it, mark that arm `BLOCKED`. Do not substitute a model.
 5. Give each worker its own writable output when it writes. For repository writers, use `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, use `/tmp/swarm-<slug>/worker-<n>/` or another distinct output directory.
 
 ## Phase B: Fan out

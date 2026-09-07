@@ -1,11 +1,11 @@
 ---
 name: setup-pstack
-description: Configure which models pstack uses per role. Detects your available models and writes an always-applied rule that overrides the skill defaults. Use for /setup-pstack, "configure pstack models", or changing pstack's model choices.
+description: Configure which models pstack uses per role. Detects available models and writes the runtime policy that overrides skill defaults. Use for /setup-pstack, "configure pstack models", or changing pstack's model choices.
 ---
 
 # Setup pstack
 
-Write `~/.agents/rules/pstack-models.md`, an always-applied rule that sets pstack's model per role. The skills read it and fall back to their inline defaults when a line is absent, so this is an override layer, not a requirement.
+Write `~/.agents/rules/pstack-models.md`. The pstack extension parses this file on load and publishes it through the `pstack-planning` capability. It adds the parsed policy to root and nested prompts. Pi does not automatically load this file through `alwaysApply`. Missing files and absent documented roles fall back to the agent default, then the parent.
 
 ## Steps
 
@@ -19,20 +19,19 @@ The default role-to-model mapping is the rule shape shown in step 5 below. If `~
 
 ### 3. Map and confirm
 
-Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model and omit the `Task` `model` field. Prefer AskQuestion over free text. For panel roles (how critics, arena runners, architect runners, interrogate reviewers) the value is a list, and one subagent runs per entry, alias entries included, so the list length sets the count. `arena cross-judge pool` is also a list, but Arena selects one value from it whose model family differs from the parent's when possible. `swarm workers` is the default model for every worker unless a race or comparison assigns another model per arm.
+Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Panel and pool dispatches must pass the selected entry explicitly when the list contains distinct choices, including `model: "inherit-parent"` for an inherited entry. Prefer AskQuestion over free text. For panel roles (how critics, arena runners, architect runners, interrogate reviewers) the value is a list, and one subagent runs per entry, alias entries included, so the list length sets the count. `arena cross-judge pool` is also a list, but Arena selects one value from it whose model family differs from the parent's when possible. `swarm workers` is the default model for every worker unless a race or comparison assigns another model per arm.
 
 ### 4. Validate
 
-Every concrete selector must contain a detected `provider/model-id` and an effort value. `inherit-parent` and `auto` always pass. If a concrete model is unavailable, stop and ask again. An unavailable model breaks every delegation that reads the rule.
+Every concrete selector must contain a detected `provider/model-id` and an effort value. `inherit-parent` and `auto` always pass. If a concrete model is unavailable, stop and ask again. An unavailable model fails dispatches that select it. Malformed files block all fresh pstack dispatches, including explicit overrides, without blocking unrelated Tasks or the root session.
 
 ### 5. Write the rule
 
-Write `~/.agents/rules/pstack-models.md` with `alwaysApply: true` and one line per role, using the same labels poteto-mode uses. Overwrite the whole file so re-runs stay idempotent. Shape:
+Write `~/.agents/rules/pstack-models.md` with one line per role, using the labels below. Optional frontmatter is metadata only, never prompt content. Overwrite the whole file so re-runs stay idempotent. Shape:
 
 ```
 ---
 description: pstack per-role model choices (overrides skill defaults)
-alwaysApply: true
 ---
 feature, refactoring: inherit-parent
 bug-fix: inherit-parent
@@ -60,10 +59,14 @@ Tell the user the rule was written and that it applies to new sessions. Re-runni
 
 Every dispatch must pass the selected role as `Task.role`, including inherited models. Use `feature` or `refactoring` for the active grouped role. Use `why synthesizer`, `how explorer`, or another exact role label for routed workers.
 
-The runner preserves this explicit label through execution, resume, and display beside the model. `role` does not select a model or grant capabilities. Continue resolving `Task.model` from the rule. Never infer a role from a model shared by several roles.
+Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing and unknown dispatch roles fail clearly. Grouped file keys expand to exact roles. The configuration aliases `divergent` and `synthesizer` mean `reflect divergent` and `reflect synthesizer`; use the full names in Task calls.
+
+Omit `Task.model` for scalar roles to use the runtime policy. Selection precedence is explicit `Task.model`, matching capability policy, agent default, then parent. Explicit overrides may select outside a configured panel or pool, including for different-family reviews. The runtime guards omitted ambiguous choices, not panel membership or counts. A distinct panel or pool requires an explicit choice, never first-entry selection or hidden fanout. Identical choices may omit the selector. Skills still own panel counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Reload or start a new session to load an edited file.
+
+The runtime preserves the role through execution and display. A role never grants capabilities or comes from a guessed model name.
 
 Read [Task contracts](../poteto-mode/references/task-contracts.md) for capability and isolation requirements.
 
 ### 7. Offer a verification skill (optional)
 
-Check whether the project has a way to drive the real app for proof (a `verify-*` skill, or an existing harness). If not, offer once: "want a project-local verification skill, so agents can drive the app the way a user does and prove changes work? I can generate one with /create-verification-skill." On yes, invoke `/create-verification-skill` (resolves wherever pstack is installed — workspace, user, or plugin). On no, move on without pushing.
+Check whether the project has a way to drive the real app for proof (a `verify-*` skill, or an existing harness). If not, offer once: "want a project-local verification skill, so agents can drive the app the way a user does and prove changes work? I can generate one with /create-verification-skill." On yes, invoke `/create-verification-skill` using its canonical installed path. On no, move on without pushing.

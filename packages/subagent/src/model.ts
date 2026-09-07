@@ -8,7 +8,7 @@ import type { RoleDefinition } from './roles.ts'
 import { EffortSchema, type Effort } from './schema.ts'
 
 const FAST_SUFFIX = ' [fast]'
-const RESERVED_SELECTORS = new Set(['auto', 'default', 'inherit'])
+const RESERVED_SELECTORS = new Set(['auto', 'default', 'inherit', 'inherit-parent'])
 
 export interface ResolvedModel {
   effort: Effort

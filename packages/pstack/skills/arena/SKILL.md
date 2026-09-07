@@ -27,7 +27,7 @@ The N candidates will receive the same prompt, so the prompt is the contract. Ge
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. Concrete: `Adds a --dry-run flag that skips writes`. Vague: `code is correct`. The rubric is the picker's tool in Phase D; candidates only see the task.
-3. Pick the runners. Use `arena runners` from `~/.agents/rules/pstack-models.md` when present. Concrete entries use `provider/model-id:effort [fast]`. Omit `Task.model` for `auto` or `inherit-parent`. If the role is absent, use four inherited runners. Spawn more when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. If the role is absent, use four inherited runners. Spawn more when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
 4. Assign isolated outputs. For repository writers, give each candidate `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, assign a distinct output directory to each candidate. N candidates must never write to the same path, per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -40,7 +40,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose one entry from the `arena cross-judge pool` in `~/.agents/rules/pstack-models.md`. If the role is absent, inherit the parent model. Prefer a verified concrete selector from a different model family. Omit `Task.model` for `auto` or `inherit-parent`. Spawn one read-only judge with `Task` and `role: "arena cross-judge pool"`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with the parent's Phase D review, not with the candidates. If Pi rejects a concrete selector, mark the judge `BLOCKED` and continue the parent's review. Do not substitute a model.
+After all Phase B candidates complete, choose one entry from the parsed `arena cross-judge pool` runtime policy in context. If the role is absent, inherit the parent model. Prefer a verified concrete selector from a different model family. For a distinct pool, pass the chosen `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. Never silently choose the first entry. Spawn one read-only judge with `Task` and `role: "arena cross-judge pool"`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with the parent's Phase D review, not with the candidates. If Pi rejects a concrete selector, mark the judge `BLOCKED` and continue the parent's review. Do not substitute a model.
 
 ## Phase D: Pick a base
 

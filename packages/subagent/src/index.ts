@@ -11,6 +11,8 @@ import { decodeSubagentRegistration } from './agents.ts'
 import { decodeCapabilityProfileRegistration, decodeCapabilityPublication } from './capabilities.ts'
 import {
   decodeIntercomDetails,
+  intercomTiming,
+  intercomTimingKey,
   nativeIntercomLayout,
   renderIntercomCard,
   transcriptIntercomLayout,
@@ -167,32 +169,44 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     if (details === undefined) return undefined
     const snapshot = runtime.listSnapshots().find((entry) => entry.agentId === details.agentId)
     const label = snapshot?.description ?? details.agentId
+    let cached: { key: string; lines: string[] } | undefined
     return {
-      invalidate() {},
+      invalidate() {
+        cached = undefined
+      },
       render(width) {
         const framed = rail.active
+        const now = Date.now()
+        const delivery =
+          details.deliveryId === undefined ? undefined : runtime.deliveries.get(details.deliveryId)
+        const key = [
+          width,
+          framed ? 'framed' : 'native',
+          options.expanded ? 'expanded' : 'collapsed',
+          intercomTimingKey(intercomTiming(details, message.timestamp, { delivery, now })),
+        ].join('\u001f')
+        if (cached?.key === key) return cached.lines
         const layout = framed ? transcriptIntercomLayout(width) : nativeIntercomLayout(width)
-        return new Text(
+        const lines = new Text(
           renderIntercomCard(
             details,
             label,
             message.timestamp,
             {
               expanded: options.expanded,
-              now: Date.now(),
+              now,
               model: snapshot?.model,
               role: snapshot?.role,
               layout,
-              delivery:
-                details.deliveryId === undefined
-                  ? undefined
-                  : runtime.deliveries.get(details.deliveryId),
+              delivery,
             },
             theme,
           ).join('\n'),
           framed ? 0 : 1,
           0,
         ).render(width)
+        cached = { key, lines }
+        return lines
       },
     }
   })
@@ -224,7 +238,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   pi.registerTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>({
     description:
-      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label, independent of agent type and model, preserved on resume. Foreground is the default unless the selected agent defines background mode.',
+      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label preserved on resume. A selected capability profile may require an exact role and provide its default model. Explicit model overrides take precedence over valid capability policy. Foreground is the default unless the selected agent defines background mode.',
     execute: async (callId, input, signal, onUpdate, ctx) => {
       const progress = new JobProgress(
         runtime,
@@ -426,6 +440,8 @@ export { TaskControlInputSchema } from './control.ts'
 export type { TaskControlDetails, TaskControlInput } from './control.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
 export type {
+  CapabilityModelPolicy,
+  RoleModelPolicyEntry,
   CapabilityProfile,
   CapabilityPublication,
   CapabilityRegistration,

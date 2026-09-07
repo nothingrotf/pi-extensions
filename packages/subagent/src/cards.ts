@@ -135,6 +135,34 @@ export function unescapeXml(text: string): string {
     .replace(/&amp;/g, '&')
 }
 
+export interface IntercomTiming {
+  age: string | undefined
+  queue: string | undefined
+  state: DeliveryRecord['state'] | undefined
+}
+
+export function intercomTiming(
+  details: NonNullable<IntercomDetails>,
+  timestamp: number | undefined,
+  options: { delivery?: DeliveryRecord | undefined; now: number },
+): IntercomTiming {
+  const sentAt = options.delivery?.sentAt ?? details.sentAt
+  const createdAt = sentAt ?? timestamp
+  const receipt = options.delivery
+  return {
+    age: createdAt === undefined ? undefined : formatAge(options.now - createdAt),
+    queue:
+      receipt?.deliveredAt === undefined
+        ? undefined
+        : formatAge(receipt.deliveredAt - receipt.queuedAt),
+    state: receipt?.state,
+  }
+}
+
+export function intercomTimingKey(timing: IntercomTiming): string {
+  return `${timing.age ?? ''}\u001f${timing.state ?? ''}\u001f${timing.queue ?? ''}`
+}
+
 export function renderIntercomCard(
   details: NonNullable<IntercomDetails>,
   label: string,
@@ -157,8 +185,7 @@ export function renderIntercomCard(
   const width = Math.max(1, Math.floor(layout.width))
   const indent = ' '.repeat(Math.max(0, Math.floor(layout.bodyIndent)))
   const dim = (text: string) => theme.fg('dim', text)
-  const sentAt = options.delivery?.sentAt ?? details.sentAt
-  const createdAt = sentAt ?? timestamp
+  const timing = intercomTiming(details, timestamp, options)
   const peer = theme.fg('accent', theme.bold(oneLineLabel(label, Number.POSITIVE_INFINITY)))
   const meta: string[] = []
   const identity = taskRoleLabel(options.role, options.model)
@@ -166,12 +193,10 @@ export function renderIntercomCard(
   if (details.kind === 'notification' && details.level !== 'info') {
     meta.push(theme.fg(details.level, details.level))
   }
-  if (createdAt !== undefined) meta.push(dim(`${formatAge(options.now - createdAt)} ago`))
-  const receipt = options.delivery
-  if (receipt !== undefined) {
-    meta.push(dim(receipt.state))
-    if (receipt.deliveredAt !== undefined)
-      meta.push(dim(`queue ${formatAge(receipt.deliveredAt - receipt.queuedAt)}`))
+  if (timing.age !== undefined) meta.push(dim(`${timing.age} ago`))
+  if (timing.state !== undefined) {
+    meta.push(dim(timing.state))
+    if (timing.queue !== undefined) meta.push(dim(`queue ${timing.queue}`))
   }
   if (details.kind === 'request') meta.push(dim('coordinator decision'))
   if (details.kind === 'automatic-reply') meta.push(dim('advisory only'))

@@ -43,7 +43,7 @@ describe('how', () => {
     expect(setup).toContain(
       'how critics: inherit-parent, inherit-parent, inherit-parent, inherit-parent',
     )
-    expect(setup).toContain('omit the `Task` `model` field')
+    expect(setup).toContain('Scalar dispatches can omit `Task.model`')
     expect(setup).not.toMatch(/grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 })

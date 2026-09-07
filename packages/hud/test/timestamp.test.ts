@@ -72,18 +72,33 @@ describe('transcript rows', () => {
         role: 'assistant',
         usage: { cacheRead: 7, cacheWrite: 3, cost: { total: 0.5 }, input: 2, output: 4 },
       },
+      400,
     )
-    const second = addMessageUsage(first, {
-      role: 'assistant',
-      usage: { cacheRead: 1, cacheWrite: 0, cost: { total: 0.25 }, input: 1, output: 6 },
+    const second = addMessageUsage(
+      first,
+      {
+        role: 'assistant',
+        usage: { cacheRead: 1, cacheWrite: 0, cost: { total: 0.25 }, input: 1, output: 6 },
+      },
+      600,
+    )
+    expect(second).toEqual({
+      cacheRead: 8,
+      cost: 0.75,
+      input: 14,
+      output: 10,
+      startedAt: 100,
+      throughputDurationMs: 1_000,
+      throughputOutput: 10,
     })
-    expect(second).toEqual({ cacheRead: 8, cost: 0.75, input: 14, output: 10, startedAt: 100 })
     expect(toUsageEntry(second, 1_100)).toEqual({
       cacheRead: 8,
       cost: 0.75,
       durationMs: 1_000,
       input: 14,
       output: 10,
+      throughputDurationMs: 1_000,
+      throughputOutput: 10,
       timestamp: 1_100,
     })
     expect(toUsageEntry(emptyRunTotals(), 9)).toEqual({
@@ -92,7 +107,34 @@ describe('transcript rows', () => {
       durationMs: undefined,
       input: 0,
       output: 0,
+      throughputDurationMs: 0,
+      throughputOutput: 0,
       timestamp: 9,
     })
+  })
+
+  test('uses generation time instead of full run time for throughput', () => {
+    const timestamp = new Date(2026, 8, 1, 11, 43, 23).getTime()
+    const totals = addMessageUsage(
+      { ...emptyRunTotals(), startedAt: 1_000 },
+      { role: 'assistant', usage: { output: 100 } },
+      2_000,
+    )
+    const entry = toUsageEntry(totals, 11_000)
+
+    expect(entry.durationMs).toBe(10_000)
+    expect(formatUsageRow({ ...entry, timestamp })).toContain('⚡50.0/s')
+  })
+
+  test('ignores unmeasurably short generation windows', () => {
+    const totals = addMessageUsage(
+      emptyRunTotals(),
+      { role: 'assistant', usage: { output: 100 } },
+      249,
+    )
+
+    expect(totals.output).toBe(100)
+    expect(totals.throughputOutput).toBe(0)
+    expect(totals.throughputDurationMs).toBe(0)
   })
 })

@@ -26,10 +26,10 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
-import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
+import { stripTerminalSequences, Text, visibleWidth } from '@earendil-works/pi-tui'
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
-import { describe, expect, it } from 'vite-plus/test'
+import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { acquireSubagentHost } from '../src/controller.ts'
 import { runBatch as runCoordinatedBatch } from '../src/coordinator.ts'
@@ -272,7 +272,12 @@ function parentMessage(
 function childMessage(model: Model<Api>, context: Context): AssistantMessage {
   const prompts = userPrompts(context)
   const prompt = prompts.at(-1) ?? ''
-  if (prompt === 'WRITE_ISOLATED' || prompt === 'WRITE_INVALID' || prompt === 'WRITE_THEN_BLOCK') {
+  if (
+    prompt === 'WRITE_ISOLATED' ||
+    prompt === 'WRITE_INVALID' ||
+    prompt === 'WRITE_THEN_BLOCK' ||
+    prompt === 'WRITE_NESTED_BOUNDARY'
+  ) {
     const written = toolResultText(context, 'write')
     if (written !== undefined) {
       return assistant(
@@ -290,7 +295,10 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
       model,
       [
         {
-          arguments: { content: 'isolated content\n', path: 'isolated.txt' },
+          arguments:
+            prompt === 'WRITE_NESTED_BOUNDARY'
+              ? { content: 'gitdir: nowhere\n', path: 'nested/.git' }
+              : { content: 'isolated content\n', path: 'isolated.txt' },
           id: `write-isolated-${Date.now()}`,
           name: 'write',
           type: 'toolCall',
@@ -1370,6 +1378,49 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it('reuses rendered IRC card lines until an input changes', async () => {
+    const harness = await createHarness()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const renderSpy = vi.spyOn(Text.prototype, 'render')
+    try {
+      initTheme('dark')
+      vi.setSystemTime(10_000)
+      const renderer = harness.session.extensionRunner.getMessageRenderer('subagent-intercom')
+      expect(renderer).toBeDefined()
+      const component = new CustomMessageComponent(
+        {
+          role: 'custom',
+          customType: 'subagent-intercom',
+          content: 'Cached probe',
+          display: true,
+          timestamp: 5_000,
+          details: {
+            agentId: 'cache-probe',
+            kind: 'notification',
+            level: 'info',
+            message: 'Cached probe body line.\n'.repeat(4),
+          },
+        },
+        renderer,
+      )
+      const first = component.render(100)
+      const rendersAfterFirst = renderSpy.mock.calls.length
+      expect(rendersAfterFirst).toBeGreaterThan(0)
+      expect(component.render(100)).toEqual(first)
+      expect(renderSpy.mock.calls.length).toBe(rendersAfterFirst)
+      expect(component.render(60)).not.toEqual(first)
+      const rendersAfterResize = renderSpy.mock.calls.length
+      expect(rendersAfterResize).toBeGreaterThan(rendersAfterFirst)
+      vi.setSystemTime(10_000 + 61_000)
+      expect(component.render(60).join('\n')).toContain('1m ago')
+      expect(renderSpy.mock.calls.length).toBeGreaterThan(rendersAfterResize)
+    } finally {
+      renderSpy.mockRestore()
+      vi.useRealTimers()
+      await harness.close()
+    }
+  })
+
   it('refreshes existing transcript cards after delivery and acknowledgment', async () => {
     const harness = await createHarness()
     try {
@@ -1706,6 +1757,97 @@ describe('subagent Task integration', () => {
       await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
     } finally {
       for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('does not stage a background writer whose capture failed', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        description: 'Break the nested boundary',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'WRITE_NESTED_BOUNDARY',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.notification.promise
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.status).toBe('failed')
+      expect(record?.error).toContain('could not be captured')
+      expect(record?.error).toContain('nested repository boundary')
+      expect(record?.isolation?.captureStatus).toBe('failed')
+      expect(record?.isolation?.integrationStatus).toBe('not-requested')
+      const workspace = latestState(harness).workspaces.find(
+        (candidate) => candidate.writerId === id,
+      )
+      expect(workspace?.lifecycleState).toBe('capture-conflict')
+      const joined = await harness.runtime.joinStaged(
+        id,
+        await harness.runtime.rootDestination(harness.context()),
+        harness.session.sessionManager.getSessionId(),
+      )
+      expect(joined.status).toBe('rejected')
+      await expect(readFile(join(harness.dir, 'nested', '.git'), 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('keeps staged writer receipts intact when a reloaded owner runs recovery', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        description: 'Stage isolated work',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'WRITE_ISOLATED',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.notification.promise
+      const staged = latestState(harness).records.find((record) => record.agentId === id)
+      expect(staged?.isolation?.captureStatus).toBe('captured')
+      expect(staged?.isolation?.integrationStatus).toBe('staged')
+      const resultCommit = staged?.isolation?.repositories[0]?.resultCommit
+      expect(resultCommit).toHaveLength(40)
+      const workspace = latestState(harness).workspaces.find(
+        (candidate) => candidate.writerId === id,
+      )
+      if (workspace?.manifestUri === undefined) throw new Error('The writer manifest is missing.')
+      expect(workspace.lifecycleState).toBe('staged')
+      const manifest = Value.Decode(
+        ManifestSchema,
+        JSON.parse(await readFile(workspace.manifestUri, 'utf8')),
+      )
+      expect(manifest.state).toBe('staged')
+      manifest.owner = {
+        ...manifest.owner,
+        pid: 2_147_483_647,
+        startToken: 'dead-process',
+      }
+      await writeFile(workspace.manifestUri, JSON.stringify(manifest), 'utf8')
+
+      const recovered = new SubagentRuntime(harness.pi)
+      recovered.restore({ sessionManager: harness.session.sessionManager })
+      await recovered.preflight(harness.context(), [
+        { ...baseInput, prompt: 'recovery preflight', readonly: true },
+      ])
+      const snapshot = recovered.listSnapshots().find((candidate) => candidate.agentId === id)
+      expect(snapshot?.isolation?.captureStatus).toBe('captured')
+      expect(snapshot?.isolation?.integrationStatus).toBe('staged')
+      expect(snapshot?.isolation?.repositories[0]?.resultCommit).toBe(resultCommit)
+      const joined = await recovered.joinStaged(
+        id,
+        await recovered.rootDestination(harness.context()),
+        harness.session.sessionManager.getSessionId(),
+      )
+      expect(joined.status).toBe('joined')
+      expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+    } finally {
       await harness.close()
     }
   }, 180_000)

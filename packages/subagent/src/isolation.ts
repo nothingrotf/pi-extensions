@@ -31,6 +31,7 @@ import type {
   IsolationPatchRef,
   IsolationReceipt,
   IsolationRepositoryReceipt,
+  WorkspaceLifecycle,
 } from './schema.ts'
 import {
   currentLockOwner,
@@ -60,6 +61,18 @@ export interface IsolationRecovery {
   receipt: IsolationReceipt | undefined
   workspaceId: string
   writerId: string | undefined
+}
+
+const UNCAPTURED_STATES: ReadonlySet<WorkspaceLifecycle> = new Set<WorkspaceLifecycle>([
+  'active',
+  'closing',
+])
+
+export function needsRecoveryCapture(manifest: {
+  repositories: ArrayLike<unknown>
+  state: WorkspaceLifecycle
+}): boolean {
+  return manifest.repositories.length > 0 && UNCAPTURED_STATES.has(manifest.state)
 }
 
 export async function createIsolation(options: {
@@ -461,7 +474,7 @@ export async function recoverIsolationStore(storeRoot: string): Promise<Isolatio
     const classification = classifications.get(manifest.workspaceId) ?? 'ambiguous'
     if (classification === 'live' || manifest.state === 'cleaned') continue
     let receipt: IsolationReceipt | undefined
-    if (classification === 'dead' && manifest.repositories.length > 0) {
+    if (classification === 'dead' && needsRecoveryCapture(manifest)) {
       const workspace = workspaceFromManifest(manifest, path)
       receipt = await captureIsolation(workspace).catch(() => undefined)
       const durableCapture =

@@ -151,16 +151,26 @@ async function headCommit(repoRoot: string): Promise<string | undefined> {
   }
 }
 
+export async function isShallowRepository(repoRoot: string): Promise<boolean> {
+  try {
+    const shallow = await readFile(join(await commonDirectory(repoRoot), 'shallow'), 'utf8')
+    return shallow.trim().length > 0
+  } catch {
+    return false
+  }
+}
+
 export async function syntheticBaseline(
   repoRoot: string,
 ): Promise<{ baselineCommit: string; baselineTree: string; headState: 'committed' | 'unborn' }> {
   const head = await headCommit(repoRoot)
+  const parent = head !== undefined && (await isShallowRepository(repoRoot)) ? undefined : head
   const indexPath = join(await mkdtemp(join(tmpdir(), 'pi-subagent-index-')), 'index')
   try {
     if (head !== undefined) await gitWithIndex(repoRoot, indexPath, ['read-tree', 'HEAD'])
     await gitWithIndex(repoRoot, indexPath, ['add', '-A', '--', '.'])
     const baselineTree = (await gitWithIndex(repoRoot, indexPath, ['write-tree'])).trim()
-    const baselineCommit = await commitTree(repoRoot, baselineTree, head, 'pi-subagent baseline')
+    const baselineCommit = await commitTree(repoRoot, baselineTree, parent, 'pi-subagent baseline')
     return { baselineCommit, baselineTree, headState: head === undefined ? 'unborn' : 'committed' }
   } finally {
     await rm(dirname(indexPath), { force: true, recursive: true })
@@ -248,15 +258,37 @@ export async function promoteCommit(options: {
     }
     const sourceRef = `refs/pi-subagent/promote-${randomUUID()}`
     await git(sourceRepoRoot, ['update-ref', sourceRef, commit])
+    let fetchDetail = ''
     try {
-      await git(durableCommonDir, ['fetch', '--no-tags', sourceRepoRoot, `${sourceRef}:${ref}`])
+      const fetched = await run(durableCommonDir, [
+        'git',
+        'fetch',
+        '--no-tags',
+        sourceRepoRoot,
+        `+${sourceRef}:${ref}`,
+      ])
+      fetchDetail = fetched.stderr.trim()
     } finally {
       await git(sourceRepoRoot, ['update-ref', '-d', sourceRef]).catch(() => '')
     }
-    if (!(await objectExists(durableCommonDir, commit))) {
-      throw new Error(`The durable repository cannot resolve promoted commit ${commit}.`)
+    const promoted = await resolveRef(durableCommonDir, ref)
+    if (promoted !== commit) {
+      throw new Error(
+        `The durable repository did not promote commit ${commit} to ${ref}${
+          fetchDetail.length === 0 ? '.' : `: ${fetchDetail}`
+        }`,
+      )
     }
   })
+}
+
+async function resolveRef(cwd: string, ref: string): Promise<string | undefined> {
+  try {
+    const value = (await git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim()
+    return value.length === 0 ? undefined : value
+  } catch {
+    return undefined
+  }
 }
 
 export async function deleteRef(

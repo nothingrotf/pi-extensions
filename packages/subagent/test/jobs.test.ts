@@ -148,6 +148,33 @@ describe('job tree', () => {
 })
 
 describe('job progress', () => {
+  it('does not feed unchanged progress back into runtime notifications', async () => {
+    const listeners = new Set<() => void>()
+    const runtime = {
+      listSnapshots: () => [snapshot('leaf', 'running')],
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    }
+    let updates = 0
+    const progress = new JobProgress(
+      runtime,
+      { hasUI: false, ui: { setWorkingMessage: () => undefined } },
+      () => {
+        updates += 1
+        if (updates < 20) queueMicrotask(() => listeners.forEach((listener) => listener()))
+      },
+    )
+    try {
+      progress.started('leaf')
+      for (let turn = 0; turn < 25; turn += 1) await Promise.resolve()
+      expect(updates).toBe(1)
+    } finally {
+      progress.stop()
+    }
+  })
+
   it('publishes tracked jobs on runtime changes and clears the status when stopped', () => {
     vi.useFakeTimers()
     try {
@@ -173,6 +200,10 @@ describe('job progress', () => {
       progress.started('a')
       expect(updates).toEqual(['a'])
       expect(messages.at(-1)).toBe('Waiting on 1 job')
+      vi.setSystemTime(Date.now() + 200)
+      for (const listener of listeners) listener()
+      expect(updates).toEqual(['a'])
+      snapshots[0] = { ...snapshot('a', 'running'), lastActivity: 'Run test' }
       for (const listener of listeners) listener()
       expect(updates).toEqual(['a', 'a'])
       vi.advanceTimersByTime(1_000)

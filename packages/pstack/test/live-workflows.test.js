@@ -19,6 +19,7 @@ import { registerSubagent } from '../../subagent/src/index.ts'
 import { loadPstackBootstrap } from '../src/bootstrap.ts'
 import pstack from '../src/index.ts'
 import { prepareLiveFixture } from './live-fixtures.js'
+import { readLivePolicy } from './live-policy.js'
 import { workflowCases } from './workflow-cases.js'
 import { workflowGraphs } from './workflow-graphs.js'
 
@@ -26,6 +27,9 @@ const enabled = process.env.PSTACK_LIVE === '1'
 const destination = process.env.PSTACK_LIVE_DIR
 const selected = process.env.PSTACK_LIVE_CASES?.split(',')
 const deadlineMs = Number(process.env.PSTACK_LIVE_TIMEOUT_MS ?? 480_000)
+const policyOverride = process.env.PSTACK_LIVE_POLICY_FILE
+const coordinatorModelId = process.env.PSTACK_LIVE_COORDINATOR_MODEL ?? 'gpt-6-astra'
+const coordinatorEffort = process.env.PSTACK_LIVE_COORDINATOR_EFFORT ?? 'medium'
 const execute = promisify(execFile)
 
 const scenarios = [
@@ -127,7 +131,7 @@ function prompt(scenario, root, localGoal) {
   if (scenario.mode === 'workflow') {
     return `${scope}\nRead ${join(root, scenario.source)} and run its local workflow for this repository. The requested workflow variant is ${scenario.graph}. Determine the Task calls yourself from the skill, including roles, profiles, model policy, independent reviews, and dependencies. Run only this workflow now. ${localGoal ?? objective(scenario)}\nReview actual child results and artifacts before concluding. Return a concise verdict with local work completed, observed integration failures, and blocked phases. Do not claim a full workflow pass if a mandatory phase did not execute.`
   }
-  return `${scope}\nValidate the ${scenario.id} scenario as one real delegated role from ${join(root, scenario.source)}. Read that source first, then dispatch exactly one initial Task with subagent_type ${scenario.type}, role ${scenario.role}, and capability_profile ${scenario.profile}. Resolve its model from the supplied real pstack model policy. For a panel role, use its first configured entry in this single-role probe. Additional delegation is allowed only when required. A leaf cannot delegate, but you can dispatch independent root reviewers for coordinator-owned phases. Do not treat a leaf limitation as a restriction on the root.\nThe child must read its relevant skill references and act independently on this scope: ${localGoal ?? objective(scenario)}\n${scenario.kind === 'static' ? 'The child is read-only.' : `Use mutable managed worktree isolation with integration ${scenario.kind === 'verifier' ? 'manual' : (scenario.integration ?? 'apply')}.`}\nUse native completion and TaskControl. Review the actual result and diff. Do not apply verifier or candidate patches. Do not silently substitute tools or models. Return a concise verdict with observed evidence and exact blockers. This is a scoped role probe, not permission to claim the entire enclosing workflow completed.`
+  return `${scope}\nValidate the ${scenario.id} scenario as one real delegated role from ${join(root, scenario.source)}. Read that source first, then dispatch exactly one initial Task with subagent_type ${scenario.type}, role ${scenario.role}, and capability_profile ${scenario.profile}. Use the parsed pstack runtime model policy in your context. Omit Task.model for a scalar role. For a panel role, deliberately choose and state one configured entry for this single-role probe and pass it explicitly, including inherit-parent for an inherited entry. Additional delegation is allowed only when required. A leaf cannot delegate, but you can dispatch independent root reviewers for coordinator-owned phases. Do not treat a leaf limitation as a restriction on the root.\nThe child must read its relevant skill references and act independently on this scope: ${localGoal ?? objective(scenario)}\n${scenario.kind === 'static' ? 'The child is read-only.' : `Use mutable managed worktree isolation with integration ${scenario.kind === 'verifier' ? 'manual' : (scenario.integration ?? 'apply')}.`}\nUse native completion and TaskControl. Review the actual result and diff. Do not apply verifier or candidate patches. Do not silently substitute tools or models. Return a concise verdict with observed evidence and exact blockers. This is a scoped role probe, not permission to claim the entire enclosing workflow completed.`
 }
 
 async function inspectTranscript(path) {
@@ -231,10 +235,13 @@ describe.skipIf(!enabled)('capture real-model pstack local workflow evidence', (
       const directory = join(caseRoot, 'project')
       await fixture(directory)
       const localGoal = await prepareLiveFixture(directory, scenario)
-      const policy = await readFile(join(homedir(), '.agents/rules/pstack-models.md'), 'utf8')
+      const policySource = policyOverride ?? join(homedir(), '.agents/rules/pstack-models.md')
+      const policy = await readLivePolicy(policySource)
+      if (!['low', 'medium'].includes(coordinatorEffort))
+        throw new Error('PSTACK_LIVE_COORDINATOR_EFFORT must be low or medium')
       const bootstrap = await loadPstackBootstrap()
       const modelRuntime = await ModelRuntime.create()
-      const model = modelRuntime.getModel('openai-codex', 'gpt-6-astra')
+      const model = modelRuntime.getModel('openai-codex', coordinatorModelId)
       if (model === undefined) throw new Error('Configured coordinator model is unavailable')
       let runtime
       const boundaries = []
@@ -310,12 +317,12 @@ describe.skipIf(!enabled)('capture real-model pstack local workflow evidence', (
         noThemes: true,
         settingsManager,
         appendSystemPrompt: [
-          `You are the coordinator for one local, disposable pstack workflow. Follow the user scope over skill autonomy language. Never publish, push, merge, deploy, mutate external services, access credentials, or modify installed skills. Only local repository work is authorized.\n${policy}\n${bootstrap.systemPrompt}`,
+          `You are the coordinator for one local, disposable pstack workflow. Follow the user scope over skill autonomy language. Never publish, push, merge, deploy, mutate external services, access credentials, or modify installed skills. Only local repository work is authorized.\n${bootstrap.systemPrompt}`,
         ],
         extensionFactories: [
           observer,
           sessionHistory,
-          pstack,
+          (pi) => pstack(pi, { modelPolicyPath: policySource }),
           (pi) => {
             runtime = registerSubagent(pi, Math.min(deadlineMs, 300_000))
           },
@@ -326,7 +333,7 @@ describe.skipIf(!enabled)('capture real-model pstack local workflow evidence', (
         cwd: directory,
         model,
         modelRuntime,
-        thinkingLevel: 'medium',
+        thinkingLevel: coordinatorEffort,
         resourceLoader: loader,
         settingsManager,
         sessionManager: SessionManager.create(directory, join(caseRoot, 'sessions')),
@@ -406,6 +413,10 @@ describe.skipIf(!enabled)('capture real-model pstack local workflow evidence', (
           mode: scenario.mode,
           source: scenario.source,
           policy,
+          policySource,
+          temporaryPolicy: policyOverride !== undefined,
+          coordinatorModel: `openai-codex/${coordinatorModelId}`,
+          coordinatorEffort,
           objective: localGoal ?? objective(scenario),
           startedAt,
           endedAt: Date.now(),

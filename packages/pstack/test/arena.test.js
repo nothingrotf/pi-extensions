@@ -14,10 +14,10 @@ function skill() {
 describe('arena', () => {
   it('uses Pi model configuration and inherited fallbacks', () => {
     const port = skill()
-    expect(port).toContain('~/.agents/rules/pstack-models.md')
+    expect(port).toContain('parsed `arena runners` runtime policy')
     expect(port).toContain('provider/model-id:effort [fast]')
     expect(port).toContain('use four inherited runners')
-    expect(port).toContain('Omit `Task.model` for `auto` or `inherit-parent`')
+    expect(port).toContain('pass each selected `Task.model` explicitly')
     expect(port).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 

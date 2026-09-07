@@ -1,5 +1,6 @@
 import {
   Box,
+  Container,
   Markdown,
   stripTerminalSequences,
   type Component,
@@ -8,8 +9,11 @@ import {
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { ansiForeground, ansiReset, hudTextPrimary } from './colors.ts'
-import { childrenOf, maxTreeDepth, walkComponents } from './component-tree.ts'
+import { defaultHudPalette, type HudPalette } from './colors.ts'
+import { childrenOf, maxTreeDepth } from './component-tree.ts'
+import type { FileResolver } from './prose-links.ts'
+import { type ProseHighlighter, ProseMarkdown } from './prose-markdown.ts'
+import { ProsePlain } from './prose-plain.ts'
 import { RailComponent } from './rail-entry.ts'
 import {
   frameTranscriptLine,
@@ -28,7 +32,6 @@ const osc133ZoneFinal = `${osc}]133;C${bell}`
 
 const patchedAssistants = new WeakSet<Component>()
 const patchedEntries = new WeakSet<Component>()
-const patchedMarkdown = new WeakSet<Component>()
 const patchedRails = new WeakSet<Component>()
 const patchedSpacers = new WeakSet<Component>()
 const patchedTools = new WeakSet<Component>()
@@ -60,10 +63,26 @@ type AssistantMessageLike = Component &
 type UserMessageLike = Component & PaddedMessage & Static<typeof UserMessageSchema>
 type ToolExecutionLike = Component & Static<typeof ToolExecutionComponentSchema>
 
-const primaryAnsi = ansiForeground(hudTextPrimary)
-const primaryTextStyle = {
-  color: (text: string) => `${primaryAnsi}${text}${ansiReset}`,
+export type ProseSources = {
+  cwd: () => string
+  highlight?: ProseHighlighter
+  palette?: () => HudPalette
+  resolve: FileResolver
+  revision: () => number
+  streaming: () => boolean
 }
+
+export const defaultProseSources: ProseSources = {
+  cwd: () => process.cwd(),
+  resolve: () => undefined,
+  revision: () => 0,
+  streaming: () => false,
+}
+
+const MarkdownSourceSchema = Type.Object({ text: Type.String() })
+const ThinkingMarkdownSchema = Type.Object({
+  defaultTextStyle: Type.Object({ italic: Type.Literal(true) }),
+})
 
 function isBlank(line: string): boolean {
   return stripTerminalSequences(line).trim().length === 0
@@ -99,13 +118,40 @@ function isToolExecution(component: Component): component is ToolExecutionLike {
   return Value.Check(ToolExecutionComponentSchema, component)
 }
 
-function styleMarkdown(component: Component): void {
-  walkComponents(component, (child) => {
-    if (!(child instanceof Markdown) || patchedMarkdown.has(child)) return false
-    patchedMarkdown.add(child)
-    Reflect.set(child, 'defaultTextStyle', primaryTextStyle)
-    child.invalidate()
-    return true
+function markdownSource(component: Component): string | undefined {
+  const source: unknown = component
+  return Value.Check(MarkdownSourceSchema, source) ? source.text : undefined
+}
+
+function isThinkingMarkdown(component: Component): boolean {
+  return Value.Check(ThinkingMarkdownSchema, component)
+}
+
+function adoptProse(
+  root: Component,
+  build: (markdown: Markdown) => Component | undefined,
+  depth = 0,
+): void {
+  if (depth > maxTreeDepth) return
+  if (root instanceof Container || root instanceof Box) {
+    root.children.forEach((child, index) => {
+      if (!(child instanceof Markdown)) return
+      const replacement = build(child)
+      if (replacement !== undefined) root.children[index] = replacement
+    })
+  }
+  for (const child of childrenOf(root)) adoptProse(child, build, depth + 1)
+}
+
+function adoptUserProse(component: UserMessageLike, prose: ProseSources): void {
+  adoptProse(component, () => new ProsePlain(component.text, prose))
+}
+
+function adoptAssistantProse(component: AssistantMessageLike, prose: ProseSources): void {
+  adoptProse(component, (markdown) => {
+    if (isThinkingMarkdown(markdown)) return undefined
+    const text = markdownSource(markdown)
+    return text === undefined ? undefined : new ProseMarkdown(text, prose)
   })
 }
 
@@ -171,7 +217,7 @@ class MessageFrame {
   }
 }
 
-function patchUser(component: UserMessageLike, active: () => boolean): void {
+function patchUser(component: UserMessageLike, active: () => boolean, prose: ProseSources): void {
   if (patchedUsers.has(component)) return
   patchedUsers.add(component)
   const original = component.render.bind(component)
@@ -189,7 +235,7 @@ function patchUser(component: UserMessageLike, active: () => boolean): void {
     }
     if (!enabled) return original(width)
     clearUserBackground(component)
-    styleMarkdown(component)
+    adoptUserProse(component, prose)
     const inner = transcriptMessageWidth(width, true)
     return frame.render(original(inner), width)
   }
@@ -241,6 +287,7 @@ function patchAssistant(
   component: AssistantMessageLike,
   active: () => boolean,
   needsLeadingGap: () => boolean,
+  prose: ProseSources,
 ): void {
   if (patchedAssistants.has(component)) return
   patchedAssistants.add(component)
@@ -258,7 +305,7 @@ function patchAssistant(
       styled = false
     }
     if (!enabled) return original(width)
-    styleMarkdown(component)
+    adoptAssistantProse(component, prose)
     const inner = transcriptMessageWidth(width, false)
     return frame.render(original(inner), width, needsLeadingGap())
   }
@@ -268,6 +315,7 @@ export function sweepSpeakerSpacing(
   root: Component,
   active: () => boolean,
   hideTools: (toolCallId: string) => boolean = () => active(),
+  prose: ProseSources = defaultProseSources,
   depth = 0,
 ): void {
   if (depth > maxTreeDepth) return
@@ -301,7 +349,7 @@ export function sweepSpeakerSpacing(
       earlierRail = false
     } else if (isUserMessage(child)) {
       if (pendingUser) {
-        patchUser(child, active)
+        patchUser(child, active, prose)
         const previous = children[index - 1]
         if (previous !== undefined && isSpacer(previous)) patchSpacer(previous, active)
       }
@@ -309,9 +357,11 @@ export function sweepSpeakerSpacing(
     } else if (isAssistantMessage(child)) {
       if (earlierRail) assistantsAfterRail.add(child)
       else assistantsAfterRail.delete(child)
-      if (assistantTurn) patchAssistant(child, active, () => assistantsAfterRail.has(child))
+      if (assistantTurn) {
+        patchAssistant(child, active, () => assistantsAfterRail.has(child), prose)
+      }
     }
-    sweepSpeakerSpacing(child, active, hideTools, depth + 1)
+    sweepSpeakerSpacing(child, active, hideTools, prose, depth + 1)
   })
 }
 
@@ -321,7 +371,11 @@ export type SpeakerSpacingFix = {
 }
 
 type InstalledSpacingFix = SpeakerSpacingFix & {
-  setSources: (active: () => boolean, hideTools: (toolCallId: string) => boolean) => void
+  setSources: (
+    active: () => boolean,
+    hideTools: (toolCallId: string) => boolean,
+    prose: ProseSources,
+  ) => void
 }
 
 const installed = new WeakMap<TUI, InstalledSpacingFix>()
@@ -330,23 +384,33 @@ export function installSpeakerSpacingFix(
   tui: TUI,
   active: () => boolean,
   hideTools: (toolCallId: string) => boolean = () => active(),
+  prose: ProseSources = defaultProseSources,
 ): SpeakerSpacingFix {
   const current = installed.get(tui)
   if (current !== undefined) {
-    current.setSources(active, hideTools)
+    current.setSources(active, hideTools, prose)
     current.markDirty()
     return current
   }
 
   let activeSource = active
   let hideToolsSource = hideTools
+  let proseSource = prose
   let installedActive = true
   let subscription: TranscriptSubscription | undefined
   const isActive = () => installedActive && activeSource()
   const toolsHidden = (toolCallId: string) => installedActive && hideToolsSource(toolCallId)
+  const liveProse: ProseSources = {
+    cwd: () => proseSource.cwd(),
+    highlight: (code, lang) => proseSource.highlight?.(code, lang),
+    palette: () => proseSource.palette?.() ?? defaultHudPalette,
+    resolve: (candidate) => proseSource.resolve(candidate),
+    revision: () => proseSource.revision(),
+    streaming: () => proseSource.streaming(),
+  }
   const subscribe = () => {
     subscription ??= observeTranscript(tui, 30, () => {
-      sweepSpeakerSpacing(tui, isActive, toolsHidden)
+      sweepSpeakerSpacing(tui, isActive, toolsHidden, liveProse)
     })
   }
   const fix: InstalledSpacingFix = {
@@ -357,9 +421,10 @@ export function installSpeakerSpacingFix(
       tui.requestRender()
     },
     markDirty: () => subscription?.markDirty(),
-    setSources: (next, nextHideTools) => {
+    setSources: (next, nextHideTools, nextProse) => {
       activeSource = next
       hideToolsSource = nextHideTools
+      proseSource = nextProse
       installedActive = true
       subscribe()
     },

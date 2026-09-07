@@ -39,7 +39,7 @@ Task({
 })
 ```
 
-`role` is optional task-purpose display metadata, for example `feature`, `refactoring`, or `why synthesizer`. It accepts 1-64 ASCII letters, digits, underscores, or hyphens, with single spaces between words. Empty labels, leading or trailing spaces, control characters, and longer labels are rejected.
+`role` is an optional task-purpose label and capability-policy lookup key, for example `feature`, `refactoring`, or `why synthesizer`. It accepts 1-64 ASCII letters, digits, underscores, or hyphens, with single spaces between words. Empty labels, leading or trailing spaces, control characters, and longer labels are rejected.
 
 Set `role` on a single Task or separately on each `tasks[]` item. Nested dispatch accepts its own explicit role; it does not inherit the parent's role. The value never selects an agent, changes tools or prompts, or derives from a model or prompt. `subagent_type` still selects the executable agent definition and its glyph.
 
@@ -383,6 +383,26 @@ runtime.registerCapabilityProfile({
 ```
 
 Set `capability_profile` on a Task call to select an approved profile.
+
+Registrations can include an optional typed `modelPolicy` through the same registration API or capability-publication event:
+
+```ts
+modelPolicy: {
+  status: 'valid',
+  roles: [
+    { role: 'review', selectors: ['provider/model-id:high'] },
+    { role: 'panel', selectors: ['provider/model-id:high', 'inherit-parent'] },
+  ],
+}
+```
+
+A valid policy contains exact role entries with selector arrays. An empty array leaves that role unconfigured. An invalid policy is `{ status: 'invalid', error: 'Configuration could not be parsed.' }`.
+
+Fresh dispatch resolves capabilities before selecting a model. Selection precedence is explicit Task model, matching capability policy, agent default, then parent. A capability policy requires an exact Task role. Missing or unknown roles fail. Invalid policy blocks fresh dispatches for that capability even with an explicit model. Unrelated profiles remain unaffected.
+
+Distinct selectors require an explicit Task model. Explicit overrides may select outside the configured choices. The runtime guards omitted ambiguity, not list membership or Task counts. Identical selectors can resolve without an explicit choice. `auto`, `default`, `inherit`, and `inherit-parent` select the parent. No policy creates additional Tasks or chooses the first entry from a distinct list. Existing availability, effort, and fast validation applies to the selected model.
+
+A stored resume model does not change when policy changes. Capability identity and tool checks still apply. Publishers own configuration parsing and prompt rendering; subagent never reads publisher-specific files.
 
 A separate extension can publish static profiles through the shared event bus:
 

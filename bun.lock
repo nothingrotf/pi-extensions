@@ -112,10 +112,12 @@
       "devDependencies": {
         "@earendil-works/pi-ai": "catalog:",
         "@earendil-works/pi-coding-agent": "catalog:",
+        "@nothingrotf/subagent": "workspace:^",
         "typebox": "catalog:",
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
+        "@nothingrotf/subagent": "*",
         "typebox": "*",
       },
     },

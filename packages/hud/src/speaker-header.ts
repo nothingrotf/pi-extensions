@@ -5,12 +5,8 @@ import {
   ansiForeground,
   ansiReset,
   assistantAnsi,
-  hudBrand,
-  hudBrandAlt,
-  hudBrandDim,
-  hudTextFaint,
-  hudTextMuted,
-  hudTextPrimary,
+  type HudPalette,
+  paletteFromTheme,
   userAnsi,
 } from './colors.ts'
 import { pulseFrame } from './pulse.ts'
@@ -35,14 +31,38 @@ export type SpeakerHeaderFrame = {
 
 export type SpeakerHeaderSource = (timestamp: number) => SpeakerHeaderFrame
 
-export type SpeakerHeaderTheme = Pick<Theme, 'bold'>
+export type SpeakerHeaderTheme = Pick<Theme, 'bold'> &
+  Partial<Pick<Theme, 'getBgAnsi' | 'getFgAnsi'>>
 
-const brandAnsi = assistantAnsi()
-const brandAltAnsi = ansiForeground(hudBrandAlt)
-const brandDimAnsi = ansiForeground(hudBrandDim)
-const textFaintAnsi = ansiForeground(hudTextFaint)
-const textMutedAnsi = ansiForeground(hudTextMuted)
-const textPrimaryAnsi = ansiForeground(hudTextPrimary)
+type SpeakerTones = {
+  brandAlt: string
+  brandDim: string
+  palette: HudPalette
+  textFaint: string
+  textMuted: string
+  textPrimary: string
+}
+
+function speakerTones(theme: Partial<Pick<Theme, 'getBgAnsi' | 'getFgAnsi'>>): SpeakerTones {
+  const getFgAnsi = theme.getFgAnsi?.bind(theme)
+  const getBgAnsi = theme.getBgAnsi?.bind(theme)
+  const source =
+    getFgAnsi === undefined
+      ? undefined
+      : getBgAnsi === undefined
+        ? { getFgAnsi }
+        : { getBgAnsi, getFgAnsi }
+  const palette = paletteFromTheme(source)
+  return {
+    brandAlt: ansiForeground(palette.brandAlt),
+    brandDim: ansiForeground(palette.brandDim),
+    palette,
+    textFaint: ansiForeground(palette.textFaint),
+    textMuted: ansiForeground(palette.textMuted),
+    textPrimary: ansiForeground(palette.textPrimary),
+  }
+}
+
 const clockFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 
 export function formatSpeakerClock(timestamp: number): string {
@@ -59,8 +79,9 @@ function staticSpeakerLine(
   theme: SpeakerHeaderTheme,
   timestamp: number,
 ): string {
-  const tone = data.assistant ? brandAnsi : userAnsi()
-  return `${tone}${data.glyph}${ansiReset}${theme.bold(`${textPrimaryAnsi} ${data.label}${ansiReset}`)}${textFaintAnsi} · ${formatSpeakerClock(timestamp)}${ansiReset}`
+  const tones = speakerTones(theme)
+  const tone = data.assistant ? assistantAnsi(tones.palette) : userAnsi(tones.palette)
+  return `${tone}${data.glyph}${ansiReset}${theme.bold(`${tones.textPrimary} ${data.label}${ansiReset}`)}${tones.textFaint} · ${formatSpeakerClock(timestamp)}${ansiReset}`
 }
 
 function initialLiveLine(
@@ -68,7 +89,8 @@ function initialLiveLine(
   theme: SpeakerHeaderTheme,
   timestamp: number,
 ): string {
-  return `${brandDimAnsi}·${ansiReset}${theme.bold(`${textPrimaryAnsi} ${data.label}${ansiReset}`)}${textFaintAnsi} · ${formatSpeakerClock(timestamp)}${ansiReset}`
+  const tones = speakerTones(theme)
+  return `${tones.brandDim}·${ansiReset}${theme.bold(`${tones.textPrimary} ${data.label}${ansiReset}`)}${tones.textFaint} · ${formatSpeakerClock(timestamp)}${ansiReset}`
 }
 
 export function speakerHeaderLine(
@@ -81,22 +103,27 @@ export function speakerHeaderLine(
     return staticSpeakerLine(data, theme, frame?.timestamp ?? data.timestamp)
   }
   if (frame.tick === initialTick) return initialLiveLine(data, theme, frame.timestamp)
-  const pulse = pulseFrame(frame.tick, hudBrandDim, hudBrand)
+  const tones = speakerTones(theme)
+  const pulse = pulseFrame(frame.tick, tones.palette.brandDim, tones.palette.brand)
   const glyph = `${ansiForeground(pulse.color)}${pulse.glyph}${ansiReset}`
   const name = theme.bold(
     shimmerTextAtTick(
       ` ${data.label}`,
-      { baseAnsi: textPrimaryAnsi, tintAnsi: brandAltAnsi },
+      { baseAnsi: tones.textPrimary, tintAnsi: tones.brandAlt },
       frame.tick,
     ),
   )
-  return `${glyph}${name}${textFaintAnsi} · ${formatSpeakerClock(frame.timestamp)}${ansiReset}`
+  return `${glyph}${name}${tones.textFaint} · ${formatSpeakerClock(frame.timestamp)}${ansiReset}`
 }
 
-export function speakerWaitingLine(frame: WorkingFrame): string {
+export function speakerWaitingLine(
+  frame: WorkingFrame,
+  theme: Partial<Pick<Theme, 'getBgAnsi' | 'getFgAnsi'>> = {},
+): string {
+  const tones = speakerTones(theme)
   const elapsed =
-    frame.elapsed === undefined ? '' : `${textFaintAnsi} · ${frame.elapsed}${ansiReset}`
-  return `${brandDimAnsi}${frame.spinner}${ansiReset}${textMutedAnsi} ${frame.message}${ansiReset}${elapsed}`
+    frame.elapsed === undefined ? '' : `${tones.textFaint} · ${frame.elapsed}${ansiReset}`
+  return `${tones.brandDim}${frame.spinner}${ansiReset}${tones.textMuted} ${frame.message}${ansiReset}${elapsed}`
 }
 
 export class SpeakerHeaderComponent implements Component {
@@ -132,7 +159,11 @@ export class SpeakerHeaderComponent implements Component {
         ? [frameTranscriptLine(line, width)]
         : [
             frameTranscriptLine(line, width),
-            frameTranscriptLine(speakerWaitingLine(frame.waiting), width, speakerBodyIndent),
+            frameTranscriptLine(
+              speakerWaitingLine(frame.waiting, this.theme),
+              width,
+              speakerBodyIndent,
+            ),
             frameTranscriptLine('', width),
           ]
     this.cached = { key, lines }
