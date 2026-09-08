@@ -88,7 +88,7 @@ export async function prepareLiveFixture(directory, scenario) {
       'import { normalizeNames } from "./names.js"\nlet input = ""\nfor await (const chunk of process.stdin) input += chunk\nconsole.log(JSON.stringify(normalizeNames(input.split("\\n"))))\n',
     )
     goal =
-      'Explain both independent entry points: argv through cli.js and newline-delimited stdin through stdin.js. Trace the shared normalization boundary, data flow, ownership, and edge cases. Use the complex exploration, synthesis, and independent critique path, not the simple explainer shortcut.'
+      'Explain both independent entry points: argv through cli.js and newline-delimited stdin through stdin.js. Trace the shared normalization boundary, data flow, ownership, and edge cases. Use the complex exploration and synthesis path, not the simple explainer shortcut.'
   } else if (
     id.startsWith('flow-swarm') ||
     ['swarm-partition', 'swarm-race', 'swarm-mixed'].includes(id)

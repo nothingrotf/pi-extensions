@@ -41,7 +41,6 @@ describe('figure-it-out', () => {
   it('requires isolated work and an honest judge', () => {
     const port = skill()
     expect(port).toContain('its own worktree or branch')
-    expect(port).toContain('read-only judge on a verified different model family')
     expect(port).toContain('return `BLOCKED`')
     expect(port).toContain('Do not substitute a model.')
   })

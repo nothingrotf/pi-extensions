@@ -2,7 +2,7 @@
 
 ## Verdict
 
-Local SDK integration passes for 68 dispatch contracts and 14 workflow graphs containing 62 nodes.
+Local SDK integration passes for 67 dispatch contracts and 14 workflow graphs containing 61 nodes.
 The focused contract suites pass 100 tests. The latest completed repository suite passes 1,663 tests and skips 87 opt-in tests.
 That suite includes the progress-feedback correction and uses one worker with a 512 MiB Node heap limit.
 The real nested track also passed after the correction.
@@ -90,7 +90,6 @@ Exact source paths, roles, agent types, and profiles appear in `packages/pstack/
 | how-simple                 | how explainer          | static                     |
 | how-explorer               | how explorer           | static                     |
 | how-synthesis              | how explainer          | static                     |
-| how-critique               | how critics            | static                     |
 | why-source-control         | why investigators      | static                     |
 | why-tickets                | why investigators      | static                     |
 | why-documents              | why investigators      | static                     |

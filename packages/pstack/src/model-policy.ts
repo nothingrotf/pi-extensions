@@ -20,7 +20,6 @@ export const pstackRoles: readonly PstackRole[] = [
   { role: 'hardest tasks', panel: false, aliases: [] },
   { role: 'how explorer', panel: false, aliases: [] },
   { role: 'how explainer', panel: false, aliases: [] },
-  { role: 'how critics', panel: true, aliases: [] },
   { role: 'why investigators', panel: false, aliases: [] },
   { role: 'why synthesizer', panel: false, aliases: [] },
   { role: 'reflect tooling', panel: false, aliases: [] },
@@ -33,6 +32,8 @@ export const pstackRoles: readonly PstackRole[] = [
   { role: 'architect runners', panel: true, aliases: [] },
   { role: 'interrogate reviewers', panel: true, aliases: [] },
 ]
+
+const legacyPstackRoles: readonly PstackRole[] = [{ role: 'how critics', panel: true, aliases: [] }]
 
 export interface PstackModelPolicyOptions {
   modelPolicyPath?: string
@@ -79,7 +80,7 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
         `pstack-models.md line ${index + 1} has an invalid model selector. Use provider/model-id:effort [fast], auto, or inherit-parent.`,
       )
     for (const label of labels) {
-      const role = pstackRoles.find(
+      const role = [...pstackRoles, ...legacyPstackRoles].find(
         (entry) => entry.role === label || entry.aliases.includes(label),
       )
       if (role === undefined)

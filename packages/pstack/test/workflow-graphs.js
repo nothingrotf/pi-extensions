@@ -5,7 +5,6 @@ export const workflowGraphs = [
       { id: 'state', scenario: 'how-explorer' },
       { id: 'request', scenario: 'how-explorer' },
       { id: 'explanation', scenario: 'how-synthesis', needs: ['state', 'request'] },
-      { id: 'critic', scenario: 'how-critique', needs: ['explanation'] },
     ],
   },
   {

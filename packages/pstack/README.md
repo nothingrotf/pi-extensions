@@ -25,7 +25,7 @@ Restart Pi after installation.
 
 ## Resources
 
-The package provides 44 upstream skills and four Pi compatibility skills. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 46 upstream skills and four Pi compatibility skills. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -42,6 +42,7 @@ The package provides 44 upstream skills and four Pi compatibility skills. `make-
 - `interrogate`
 - `maintain-verification-skill`
 - `no-comments`
+- `principle-attack-the-premise`
 - `principle-boundary-discipline`
 - `principle-build-the-lever`
 - `principle-encode-lessons-in-structure`
@@ -62,6 +63,7 @@ The package provides 44 upstream skills and four Pi compatibility skills. `make-
 - `principle-separate-before-serializing-shared-state`
 - `principle-sequence-verifiable-units`
 - `principle-subtract-before-you-add`
+- `principle-test-behavior-not-implementation`
 - `principle-type-system-discipline`
 - `poteto-mode`
 - `recall`
@@ -85,6 +87,20 @@ The `poteto-agent` defaults to background mode. Mutable background work runs in 
 Inspect a completed writer with `TaskControl`. Use `action: "join"` only when the parent workspace must receive its accepted patch.
 
 Background results arrive as follow-up messages. The skills do not poll. When the parent is blocked with no other work, it calls `TaskControl` with `action: "wait"`, which streams the job tree until the first Task settles.
+
+## Upstream synchronization
+
+This port incorporates these upstream changes:
+
+- [cursor/plugins#329](https://github.com/cursor/plugins/pull/329) at `c57a66799701c3e533568b0667bf1560bbd3b503` reduces prose and updates workflows.
+- [cursor/plugins#331](https://github.com/cursor/plugins/pull/331) at `9ed271d798099a9c0c7982a9a8b170f18cb37cd2` adjusts prose punctuation and terminology.
+
+The sync preserves Pi tools, Task contracts, model selection, and stack backends.
+
+`how` now explains architecture without a Critique mode.
+Existing `how critics:` configuration lines remain valid but no longer publish a dispatch role.
+`poteto-mode` starts its task list with the matched playbook steps and cites only principles read during the session.
+The new principles cover questioning a shared premise after repeated failed fixes and testing observable behavior.
 
 ## Task roles and workspace contracts
 

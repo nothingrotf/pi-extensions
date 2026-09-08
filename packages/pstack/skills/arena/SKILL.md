@@ -12,7 +12,7 @@ Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispat
 
 ## Start
 
-Use `todo_write` to create one item per phase before you launch anything. The arena runs autonomously, and the list keeps each phase visible.
+Use `todo_write` to create one item per phase before you launch anything.
 
 1. Frame
 2. Fan out
@@ -23,10 +23,10 @@ Use `todo_write` to create one item per phase before you launch anything. The ar
 
 ## Phase A: Frame
 
-The N candidates will receive the same prompt, so the prompt is the contract. Get it right before spawning anything.
+The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
-2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. Concrete: `Adds a --dry-run flag that skips writes`. Vague: `code is correct`. The rubric is the picker's tool in Phase D; candidates only see the task.
+2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
 3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. If the role is absent, use four inherited runners. Spawn more when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
 4. Assign isolated outputs. For repository writers, give each candidate `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, assign a distinct output directory to each candidate. N candidates must never write to the same path, per the **separate-before-serializing-shared-state** principle skill.
 
@@ -34,7 +34,7 @@ The N candidates will receive the same prompt, so the prompt is the contract. Ge
 
 Set each candidate's `Task.role` to `arena runners`, or `architect runners` when Architect selects the runner policy. Spawn all N candidates in one message with `Task`. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Give each candidate the task, shared grounding path, isolated output contract, and instructions to produce an artifact and short rationale. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
 
-The rationale is mandatory. Without it, the parent cannot tell whether a candidate's structure is principled or accidental, which makes Phase E grafting unreliable. Each rationale names the alternatives the candidate considered and what it rejected.
+Each rationale names the alternatives the candidate considered and what it rejected.
 
 If a candidate fails to produce output, proceed with N-1 and note the dropout in the synthesis record.
 
@@ -44,11 +44,11 @@ After all Phase B candidates complete, choose one entry from the parsed `arena c
 
 ## Phase D: Pick a base
 
-Read every candidate end to end before picking. Skimming N candidates surfaces only the candidate whose surface looks most familiar.
+Read every candidate end to end before picking.
 
 Score each candidate against the rubric criterion by criterion, not on holistic feel. Compare against the cross-judge. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
 
-Pick the base on which candidate a future maintainer can extend most easily without breaking invariants. Prefer the cleaner boundary or smaller surface area when two feel tied, per the Laziness Protocol.
+Pick the base on which candidate a future maintainer can extend most easily without breaking invariants. Prefer the cleaner boundary or smaller API when two feel tied, per the Laziness Protocol.
 
 Record the pick and the reason in a short synthesis note alongside the base artifact, including the cross-judge's verdict.
 
@@ -58,13 +58,13 @@ Walk each losing candidate once more and identify what is worth porting into the
 
 Fold each graft in by hand, per the **redesign-from-first-principles** principle skill. Don't paste mechanically. The result has to remain coherent under one mental model. For repository artifacts, use the retained `Task` branches or patches. Apply only the selected base and explicit grafts.
 
-Record what was grafted, from which candidate, and what was rejected and why. The rejection notes are the highest-signal part of the record. Future readers learn from what you considered and dropped, not just what you kept.
+Record what was grafted, from which candidate, and what was rejected and why.
 
 When N candidates converge on the same shape, that is a strong agreement signal. Note the convergence in the record and ship the consensus shape. No graft is needed. When N candidates wildly diverge, Phase A was under-specified. Reframe and re-run rather than averaging the divergence.
 
 ## Phase F: Verify
 
-The synthesized artifact has to hold up under the same scrutiny as any other output, per the **prove-it-works** principle skill. The arena does not earn you a pass.
+The synthesized artifact has to hold up under the same scrutiny as any other output, per the **prove-it-works** principle skill.
 
 If verification surfaces a problem the arena did not catch, either Phase A was wrong (re-frame and re-run) or one candidate caught it and you missed the graft (go back to Phase E). Don't paper over.
 

@@ -1,6 +1,6 @@
 ### Shipping
 
-**You own what lands. Verify each PR independently, land only the verified run from the root, then leave the queue unchanged.** For "land the stack", "ship it", "enable merge when ready", or the second half of a stack that **Babysit** already drove to green.
+**You own what lands. Verify each PR independently, land only the verified run from the root, then leave the queue unchanged.**
 
 This playbook follows `playbooks/babysit.md`. Babysit makes a stack mergeable. Shipping decides what is safe through the selected stack backend. Select and verify that backend through `../references/stack-backends.md` before any stack mutation.
 

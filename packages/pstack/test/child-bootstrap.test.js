@@ -563,7 +563,7 @@ describe('pstack runtime model policy', () => {
   it.each([
     ['role', { role: 'how explorerr' }, 'Unknown model policy role'],
     ['model', { model: 'pstack-test/missing:off' }, 'not available'],
-    ['panel', { role: 'how critics' }, 'distinct choices'],
+    ['panel', { role: 'arena runners' }, 'distinct choices'],
   ])(
     'rejects a mixed-validity Task batch before child starts (%s)',
     async (_label, invalid, error) => {
@@ -571,7 +571,7 @@ describe('pstack runtime model policy', () => {
       const h = await harness(
         true,
         plans,
-        'how critics: pstack-test/configured:high, inherit-parent',
+        'arena runners: pstack-test/configured:high, inherit-parent',
       )
       try {
         const tasks = [{}, invalid].map((overrides, index) => {
@@ -791,11 +791,11 @@ describe('pstack runtime model policy', () => {
   it.each(['auto, inherit-parent', 'pstack-test/configured:high, pstack-test/configured:high'])(
     'resolves identical panel choices without hidden fanout (%s)',
     async (choices) => {
-      const h = await harness(true, new Map(), `how critics: ${choices}`)
+      const h = await harness(true, new Map(), `arena runners: ${choices}`)
       try {
         const result = await h.runtime.run({
           ctx: h.ctx,
-          input: policyInput({ role: 'how critics' }),
+          input: policyInput({ role: 'arena runners' }),
         })
         expect(result.kind).toBe('completed')
         expect(h.runtime.listSnapshots()).toHaveLength(1)

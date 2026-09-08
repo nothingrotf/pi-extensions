@@ -13,7 +13,6 @@ export const workflowCases = [
   leaf('how-simple', skill('how'), 'how explainer'),
   leaf('how-explorer', skill('how'), 'how explorer'),
   leaf('how-synthesis', skill('how'), 'how explainer'),
-  leaf('how-critique', skill('how'), 'how critics'),
   ...['source-control', 'tickets', 'documents', 'chat', 'observability', 'errors', 'analytics'].map(
     (category) => leaf(`why-${category}`, skill('why'), 'why investigators'),
   ),

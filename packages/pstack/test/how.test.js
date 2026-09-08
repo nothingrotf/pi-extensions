@@ -12,15 +12,6 @@ function text(path) {
 }
 
 describe('how', () => {
-  it('ships the critic prompt and rubric', () => {
-    expect(text(join(skillRoot, 'references', 'critic-prompt.md'))).toContain(
-      '# Critic Prompt Template',
-    )
-    expect(text(join(skillRoot, 'references', 'critique-rubric.md'))).toContain(
-      '# Architectural Critique Rubric',
-    )
-  })
-
   it('uses Pi tools and Task model selectors', () => {
     const port = [
       text(join(skillRoot, 'SKILL.md')),
@@ -40,9 +31,7 @@ describe('how', () => {
     const setup = text(join(packageRoot, 'skills', 'setup-pstack', 'SKILL.md'))
     expect(setup).toContain('provider/model-id:effort [fast]')
     expect(setup).toContain('how explorer: inherit-parent')
-    expect(setup).toContain(
-      'how critics: inherit-parent, inherit-parent, inherit-parent, inherit-parent',
-    )
+    expect(setup).not.toContain('how critics')
     expect(setup).toContain('Scalar dispatches can omit `Task.model`')
     expect(setup).not.toMatch(/grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })

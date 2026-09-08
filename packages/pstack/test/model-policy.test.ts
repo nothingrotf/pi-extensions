@@ -36,11 +36,24 @@ describe('pstack model policy parser', () => {
     ])
   })
 
+  it('accepts legacy how critics configuration without publishing the obsolete role', () => {
+    const parsed = parsePstackModelPolicy(
+      'how critics: inherit-parent, provider/model:high\nhow explorer: inherit-parent',
+    )
+    expect(parsed.status).toBe('valid')
+    if (parsed.status !== 'valid') throw new Error(parsed.error)
+    expect(parsed.roles).toHaveLength(pstackRoles.length)
+    expect(parsed.roles.some((entry) => entry.role === 'how critics')).toBe(false)
+    expect(parsed.roles.find((entry) => entry.role === 'how explorer')?.selectors).toEqual([
+      'inherit-parent',
+    ])
+  })
+
   it.each([
     'how explorer: ',
     'how explorer: auto, inherit-parent',
-    'how critics: auto,',
-    'how critics: ,auto',
+    'arena runners: auto,',
+    'arena runners: ,auto',
     'feature, feature: auto',
     'reflect divergent: auto\ndivergent: auto',
     'reflect judgment, divergent, synthesizer: auto\nreflect synthesizer: auto',
