@@ -18,7 +18,8 @@ Fast Mode uses the status from `@nothingrotf/fast-mode`. Unavailable Fast Mode s
 The session cache percentage divides cache-read tokens by all input tokens on the current branch, including cache writes. It stays hidden until response usage is available.
 
 Footer groups use `·` separators. Flexible space keeps the right group aligned with the terminal edge.
-The stock editor's lower rule stays hidden between the input and footer. The upper rule stays visible.
+The editor's plain lower rule stays hidden between the input and footer, including custom editors that use Pi's border hooks.
+The upper rule, labeled borders, and scroll indicators stay visible.
 A fixed `›` marks the first visible input row without entering the submitted text.
 
 The transcript labels each message author and closes each agent run with one usage row:

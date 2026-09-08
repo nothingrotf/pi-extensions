@@ -16,7 +16,7 @@ Operate as a **careful, cautious, and precise investigator**. Be honest about wh
 
 Pass `capability_profile: "pstack-leaf"` for every investigator and synthesizer. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
-Omit `Task.model` to select the configured `why investigators` or `why synthesizer` runtime policy. The extension supplies the parsed policy in context. Concrete overrides use `provider/model-id:effort [fast]`. Missing configuration falls back to the agent default, then the parent. `auto` and `inherit-parent` select the parent.
+Omit `Task.model` to select the configured `why investigators` or `why synthesizer` runtime policy. The extension supplies the parsed policy in context. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role. Missing configuration falls back to the agent default, then the parent. `auto` and `inherit-parent` select the parent.
 
 ## Step 1. Understand the Target and the Question
 

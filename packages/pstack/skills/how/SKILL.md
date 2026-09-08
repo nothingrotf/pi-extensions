@@ -10,7 +10,7 @@ Explore the codebase to answer "how does X work?" questions. Produce architectur
 
 Pass `capability_profile: "pstack-leaf"` for every worker below. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
-Use the parsed pstack runtime policy in context. Omit `Task.model` for explorer and explainer roles to select their configured model. Concrete overrides use `provider/model-id:effort [fast]`.
+Use the parsed pstack runtime policy in context. Omit `Task.model` for explorer and explainer roles to select their configured model. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
 
 ## Step 1. Assess Complexity
 

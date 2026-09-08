@@ -5,7 +5,7 @@ description: Configure which models pstack uses per role. Detects available mode
 
 # Setup pstack
 
-Write `~/.agents/rules/pstack-models.md`. The pstack extension parses this file on load and publishes it through the `pstack-planning` capability. It adds the parsed policy to root and nested prompts. Pi does not automatically load this file through `alwaysApply`. Missing files and absent documented roles fall back to the agent default, then the parent.
+Write `~/.agents/rules/pstack-models.md`. The pstack extension reads this file at startup, before each root prompt, and before root `Task` calls. It publishes an enforced policy through the `pstack-planning` capability. It adds the parsed policy to root and nested prompts. Pi does not automatically load this file through `alwaysApply`. Missing files and absent documented roles fall back to the agent default, then the parent.
 
 ## Steps
 
@@ -54,13 +54,15 @@ interrogate reviewers: inherit-parent, inherit-parent, inherit-parent, inherit-p
 
 ### 6. Confirm
 
-Tell the user the rule was written and that it applies to new sessions. Re-running this skill updates it.
+Tell the user that the rule applies before the next root prompt or root `Task` call without reload. Re-running this skill updates it.
 
 Every dispatch must pass the selected role as `Task.role`, including inherited models. Use `feature` or `refactoring` for the active grouped role. Use `why synthesizer`, `how explorer`, or another exact role label for routed workers.
 
 Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing and unknown dispatch roles fail clearly. Grouped file keys expand to exact roles. The configuration aliases `divergent` and `synthesizer` mean `reflect divergent` and `reflect synthesizer`; use the full names in Task calls.
 
-Omit `Task.model` for scalar roles to use the runtime policy. Selection precedence is explicit `Task.model`, matching capability policy, agent default, then parent. Explicit overrides may select outside a configured panel or pool, including for different-family reviews. The runtime guards omitted ambiguous choices, not panel membership or counts. A distinct panel or pool requires an explicit choice, never first-entry selection or hidden fanout. Identical choices may omit the selector. Skills still own panel counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Reload or start a new session to load an edited file.
+Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Unconfigured roles allow explicit models before the agent default and parent fallback.
+
+A distinct panel or pool requires an explicit choice, never first-entry selection or hidden fanout. Identical choices may omit the selector. Skills still own panel counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
 
 The runtime preserves the role through execution and display. A role never grants capabilities or comes from a guessed model name.
 

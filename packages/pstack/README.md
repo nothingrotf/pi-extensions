@@ -106,15 +106,15 @@ The new principles cover questioning a shared premise after repeated failed fixe
 
 Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `why synthesizer`.
 The runner preserves this label beside the model without inferring it from the model name.
-With a pstack capability profile, the role selects the configured default model. It never grants capabilities.
+With a pstack capability profile, the role enforces the configured model choices. It never grants capabilities.
 
-The extension loads `~/.agents/rules/pstack-models.md` at startup or reload. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. The file is not automatically loaded by an `alwaysApply` directive.
+The extension reads `~/.agents/rules/pstack-models.md` at startup, before each root prompt, and before root `Task` calls. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. Policy edits do not require reload. Pi does not interpret `alwaysApply`; the extension applies this policy directly without asking the model to read the file.
 
-Selection precedence is explicit `Task.model`, matching capability policy, agent default, then parent. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
+Configured selectors are mandatory, including effort and fast mode. An explicit `Task.model` outside the configured choices fails before execution. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
 
 Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
 
-Use `/setup-pstack` to configure the file. Explicit model overrides can select outside a configured panel or pool, including for different-family reviews. The runtime guards omitted ambiguous choices, not panel membership or counts. Resume preserves the stored model rather than applying a newer policy.
+Use `/setup-pstack` to configure the file. For different-family reviews, select a configured entry or update the policy with user approval. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
 Runtime verifiers use `isolation: { mode: "worktree", integration: "manual" }`.
 Their artifacts remain inspectable, but the runtime rejects `join`.

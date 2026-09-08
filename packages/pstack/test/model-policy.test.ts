@@ -172,7 +172,7 @@ describe('generic capability model policy boundary', () => {
       parsePstackModelPolicy('feature: inherit-parent'),
     ]
     expect(() => selectCapabilityModel(policies, 'feature', undefined)).toThrow('distinct choices')
-    expect(selectCapabilityModel(policies, 'feature', 'auto')).toBe('auto')
+    expect(() => selectCapabilityModel(policies, 'feature', 'auto')).toThrow('configured')
     expect(
       selectCapabilityModel(
         [

@@ -89,14 +89,12 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   const tui = new SubagentTui(runtime)
   const agentRegistrations = new Map<string, () => void>()
   const capabilityProfileSources = new Set<string>()
-  const capabilitySources = new Set<string>()
   const unregisterCapabilityEvents = pi.events.on(
     SUBAGENT_CAPABILITY_REGISTRATION_EVENT,
     (value) => {
       const publication = decodeCapabilityPublication(value)
-      if (publication === undefined || capabilitySources.has(publication.sourceId)) return
-      runtime.registerCapabilities(publication.registrations)
-      capabilitySources.add(publication.sourceId)
+      if (publication === undefined) return
+      runtime.publishCapabilities(publication)
     },
   )
   const unregisterAgentEvents = pi.events.on(SUBAGENT_REGISTRATION_EVENT, (value) => {

@@ -61,11 +61,23 @@ export default async function pstack(
   options: PstackModelPolicyOptions = {},
 ): Promise<void> {
   const bootstrap = await loadPstackBootstrap()
-  const modelPolicy = await loadPstackModelPolicy(options)
-  const policyPrompt = renderPstackModelPolicy(modelPolicy)
-  pi.on('before_agent_start', (event) => ({
-    systemPrompt: `${event.systemPrompt}\n\n${policyPrompt}`,
-  }))
+  let modelPolicy = await loadPstackModelPolicy(options)
+  let policyPrompt = renderPstackModelPolicy(modelPolicy)
+  const refreshPolicy = async () => {
+    const next = await loadPstackModelPolicy(options)
+    const nextPrompt = renderPstackModelPolicy(next)
+    if (nextPrompt === policyPrompt) return
+    modelPolicy = next
+    policyPrompt = nextPrompt
+    publishCapabilities()
+  }
+  pi.on('before_agent_start', async (event) => {
+    await refreshPolicy()
+    return { systemPrompt: `${event.systemPrompt}\n\n${policyPrompt}` }
+  })
+  pi.on('tool_call', async (event) => {
+    if (event.toolName === 'Task') await refreshPolicy()
+  })
   const definitions = await Promise.all([
     loadAgent('../agents/comment-sicko.md', 'Comment Sicko', bootstrap.root),
     loadAgent('../agents/poteto-agent.md', 'poteto-agent', bootstrap.root),

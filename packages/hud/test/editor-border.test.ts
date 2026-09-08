@@ -93,7 +93,7 @@ describe('patchEditorBorder', () => {
     patchEditorBorder(editor, theme, () => working)
     const frame = editor.render(20)
 
-    expect(frame[0]).toBe((working ? theme.fg('borderMuted', '─') : idle('─')).repeat(20))
+    expect(frame[0]).toBe(working ? theme.fg('borderMuted', '─'.repeat(20)) : idle('─'.repeat(20)))
     expect(frame).toHaveLength(3)
     expect(frame[1]).toContain('hello')
     expect(frame[2]).toBe('')
@@ -263,12 +263,12 @@ describe('patchEditorBorder', () => {
     const editor = realEditor()
     patchEditorBorder(editor, theme, () => true)
     editor.borderColor = later
-    expect(editor.render(20)[0]).toBe(theme.fg('borderMuted', '─').repeat(20))
+    expect(editor.render(20)[0]).toBe(theme.fg('borderMuted', '─'.repeat(20)))
     const replacement = { fg: (_color: 'borderMuted', text: string) => `<new>${text}</new>` }
     patchEditorBorder(editor, replacement, () => true)
-    expect(editor.render(20)[0]).toBe(replacement.fg('borderMuted', '─').repeat(20))
+    expect(editor.render(20)[0]).toBe(replacement.fg('borderMuted', '─'.repeat(20)))
     patchEditorBorder(editor, replacement, () => false)
-    expect(editor.render(20)[0]).toBe(later('─').repeat(20))
+    expect(editor.render(20)[0]).toBe(later('─'.repeat(20)))
     expect(editor.render(20)).toHaveLength(3)
   })
 

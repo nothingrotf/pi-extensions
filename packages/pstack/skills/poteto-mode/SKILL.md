@@ -93,7 +93,7 @@ The `poteto-agent` defaults to background mode. Set `run_in_background: false` w
 
 Use `request_parent` for real coordinator decisions. Use `ask_parent` only for non-authoritative advice. Foreground and nested workers return decision blockers instead of assuming authorization.
 
-The extension supplies the parsed runtime model policy in root and nested context. Omit `Task.model` for scalar roles to select their configured model. Concrete overrides use `provider/model-id:effort [fast]`. For a panel or pool with distinct choices, pass the selected entry explicitly, including `inherit-parent` for an inherited entry. Never silently pick the first model or invent a selector. Every dispatch needs an exact policy role and a pstack capability profile.
+The extension supplies the parsed runtime model policy in root and nested context. Omit `Task.model` for scalar roles to select their configured model. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role. For a panel or pool with distinct choices, pass the selected entry explicitly, including `inherit-parent` for an inherited entry. Never silently pick the first model or invent a selector. Every dispatch needs an exact policy role and a pstack capability profile.
 
 You own every subagent's work. Review each diff and write your own summary. Use a fresh subagent with consolidated scope when directives changed materially. A second opinion uses the same prompt against another configured model. Agreement is high-signal.
 

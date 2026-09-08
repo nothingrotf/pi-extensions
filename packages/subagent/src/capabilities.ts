@@ -12,7 +12,7 @@ export interface RoleModelPolicyEntry {
 }
 
 export type CapabilityModelPolicy =
-  | { status: 'valid'; roles: readonly RoleModelPolicyEntry[] }
+  | { status: 'valid'; enforcement?: 'configured'; roles: readonly RoleModelPolicyEntry[] }
   | { status: 'invalid'; error: string }
 
 export interface CapabilityRegistration {
@@ -122,6 +122,7 @@ const CapabilityModelPolicySchema = Type.Union([
   Type.Object(
     {
       status: Type.Literal('valid'),
+      enforcement: Type.Optional(Type.Literal('configured')),
       roles: Type.Array(
         Type.Object(
           {
@@ -144,6 +145,23 @@ const CapabilityModelPolicySchema = Type.Union([
   ),
 ])
 
+function normalizeSelector(selector: string): string {
+  return ['auto', 'inherit', 'default', 'inherit-parent'].includes(selector)
+    ? 'inherit-parent'
+    : selector
+}
+
+export function preservesMandatoryModelPolicies(
+  required: readonly CapabilityModelPolicy[],
+  requested: readonly CapabilityModelPolicy[],
+): boolean {
+  return required.every(
+    (policy) =>
+      (policy.status === 'valid' && policy.enforcement !== 'configured') ||
+      requested.some((candidate) => JSON.stringify(candidate) === JSON.stringify(policy)),
+  )
+}
+
 export function selectCapabilityModel(
   policies: readonly CapabilityModelPolicy[],
   role: string | undefined,
@@ -155,20 +173,24 @@ export function selectCapabilityModel(
     if (role === undefined)
       throw new Error('This capability requires an exact Task.role for model selection.')
     const entry = policy.roles.find((candidate) => candidate.role === role)
+    if (
+      explicit !== undefined &&
+      policy.enforcement === 'configured' &&
+      entry !== undefined &&
+      entry.selectors.length > 0 &&
+      !entry.selectors.some(
+        (selector) => normalizeSelector(selector) === normalizeSelector(explicit),
+      )
+    )
+      throw new Error(
+        `Task.model "${explicit}" is outside configured selectors for role "${role}".`,
+      )
     if (entry !== undefined) matches.push(entry)
   }
   if (policies.length > 0 && matches.length === 0)
     throw new Error(`Unknown model policy role "${role}".`)
   if (explicit !== undefined) return explicit
-  const distinct = new Set(
-    matches
-      .flatMap((entry) => entry.selectors)
-      .map((selector) =>
-        ['auto', 'inherit', 'default', 'inherit-parent'].includes(selector)
-          ? 'inherit-parent'
-          : selector,
-      ),
-  )
+  const distinct = new Set(matches.flatMap((entry) => entry.selectors).map(normalizeSelector))
   if (distinct.size > 1)
     throw new Error(
       `Model policy role "${role}" has distinct choices. Pass an explicit Task.model for this panel or pool entry, including inherit-parent for an inherited entry.`,
@@ -262,8 +284,42 @@ function validateIdentifier(value: string, label: string): void {
 }
 
 export class CapabilityRegistry {
+  private readonly owners = new Map<string, string>()
   private readonly profiles = new Map<string, CapabilityProfile>()
   private readonly registrations = new Map<string, CapabilityRegistration>()
+
+  publishCapabilities(publication: CapabilityPublication): void {
+    const staged = new CapabilityRegistry()
+    for (const [id, registration] of this.registrations) staged.registrations.set(id, registration)
+    const ids = new Set<string>()
+    for (const registration of publication.registrations) {
+      if (ids.has(registration.id)) throw new Error(`Duplicate capability "${registration.id}".`)
+      ids.add(registration.id)
+      const previous = this.registrations.get(registration.id)
+      if (previous !== undefined) {
+        if (this.owners.get(registration.id) !== publication.sourceId)
+          throw new Error(`Capability "${registration.id}" belongs to another source.`)
+        const contract = (entry: CapabilityRegistration) =>
+          JSON.stringify({
+            version: entry.version,
+            tools: entry.tools.map((tool) => ({ name: tool.name, parameters: tool.parameters })),
+            extensions: entry.extensions.map((extension) => ({
+              name: extension.name,
+            })),
+            readonlyTools: entry.readonlyTools ?? [],
+          })
+        if (contract(previous) !== contract(registration))
+          throw new Error(`Capability "${registration.id}" republication changed its contract.`)
+        staged.registrations.delete(registration.id)
+      }
+      staged.stageCapability(registration)
+    }
+    for (const id of ids) {
+      const registration = staged.registrations.get(id)
+      if (registration !== undefined) this.registrations.set(id, registration)
+      this.owners.set(id, publication.sourceId)
+    }
+  }
 
   registerCapability(registration: CapabilityRegistration): void {
     this.registerCapabilities([registration])

@@ -45,7 +45,7 @@ function reply(model, content, stopReason) {
   }
 }
 
-async function harness(pstackFirst, plans = new Map(), policy) {
+async function harness(pstackFirst, plans = new Map(), policy, fixtureExtension) {
   const dir = await mkdtemp(join(tmpdir(), 'pstack-bootstrap-'))
   const modelPolicyPath = join(dir, 'pstack-models.md')
   if (policy !== undefined) await writeFile(modelPolicyPath, policy)
@@ -192,6 +192,7 @@ async function harness(pstackFirst, plans = new Map(), policy) {
     noThemes: true,
     extensionFactories: [
       capture,
+      ...(fixtureExtension === undefined ? [] : [(pi) => fixtureExtension(pi, modelPolicyPath)]),
       ...(pstackFirst
         ? [(pi) => pstack(pi, { modelPolicyPath }), subagent]
         : [subagent, (pi) => pstack(pi, { modelPolicyPath })]),
@@ -205,7 +206,13 @@ async function harness(pstackFirst, plans = new Map(), policy) {
     modelRuntime,
     resourceLoader: loader,
     sessionManager: SessionManager.create(dir, join(dir, 'sessions')),
-    tools: ['todo_write', 'todo_read', 'Task', 'TaskControl'],
+    tools: [
+      'todo_write',
+      'todo_read',
+      'Task',
+      'TaskControl',
+      ...(fixtureExtension === undefined ? [] : ['change_policy']),
+    ],
   })
   await session.prompt('seed:parent')
   return {
@@ -633,14 +640,7 @@ describe('pstack runtime model policy', () => {
       true,
     ],
     [
-      'how explorer: pstack-test/configured:high',
-      'inherit-parent',
-      'pstack-test/model',
-      'off',
-      false,
-    ],
-    [
-      'how explorer: pstack-test/missing:high',
+      'how explorer: pstack-test/configured:low',
       'pstack-test/configured:low',
       'pstack-test/configured',
       'low',
@@ -666,6 +666,8 @@ describe('pstack runtime model policy', () => {
   )
 
   it.each([
+    ['how explorer: pstack-test/configured:high', 'inherit-parent', 'configured'],
+    ['how explorer: pstack-test/missing:high', 'pstack-test/configured:low', 'configured'],
     ['how explorer: nonsense', undefined, 'invalid'],
     ['how explorer: nonsense', 'inherit-parent', 'invalid'],
     ['how explorer: pstack-test/model', undefined, 'invalid'],
@@ -697,7 +699,7 @@ describe('pstack runtime model policy', () => {
     },
   )
 
-  it('orders explicit, capability, agent default and parent selections', async () => {
+  it('uses configured roles before agent defaults and unconfigured explicit selections', async () => {
     const h = await harness(true, new Map(), 'how explorer: pstack-test/model:off')
     try {
       h.api.events.emit('@nothingrotf/subagent/register-agents', {
@@ -714,7 +716,7 @@ describe('pstack runtime model policy', () => {
       })
       for (const [role, model, expected] of [
         ['how explorer', undefined, 'pstack-test/model'],
-        ['how explorer', 'pstack-test/configured:high', 'pstack-test/configured'],
+        ['feature', 'pstack-test/configured:high', 'pstack-test/configured'],
         ['feature', undefined, 'pstack-test/configured'],
       ]) {
         const result = await h.runtime.run({
@@ -771,11 +773,13 @@ describe('pstack runtime model policy', () => {
         const omitted = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
         expect(omitted.kind).toBe('failed')
         expect(omitted.details.error).toContain('distinct choices')
-        for (const model of [
-          'inherit-parent',
-          'pstack-test/configured:high',
-          'pstack-test/configured:low',
-        ]) {
+        const outside = await h.runtime.run({
+          ctx: h.ctx,
+          input: policyInput({ role, model: 'pstack-test/configured:low' }),
+        })
+        expect(outside.kind).toBe('failed')
+        expect(outside.details.error).toContain('configured')
+        for (const model of ['inherit-parent', 'pstack-test/configured:high']) {
           const selected = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role, model }) })
           expect(selected.kind).toBe('completed')
           expect(h.runtime.getRecord(selected.details.agentId).model).toBe(
@@ -835,6 +839,108 @@ describe('pstack runtime model policy', () => {
         expect(item.status, JSON.stringify(item)).toBe('completed')
         expect(h.runtime.getRecord(item.agentId).model).toBe('pstack-test/configured')
       }
+    } finally {
+      await h.close()
+    }
+  })
+
+  it.each([true, false])(
+    'refreshes policy without reload in either extension order (%s)',
+    async (pstackFirst) => {
+      const plans = new Map()
+      const h = await harness(pstackFirst, plans, 'how explorer: pstack-test/configured:high')
+      try {
+        const original = await invoke(h, plans, 'original-policy', 'Task', policyInput())
+        expect(h.runtime.getRecord(original.agentId).model).toBe('pstack-test/configured')
+        await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+        const fresh = await invoke(h, plans, 'fresh-policy', 'Task', policyInput())
+        expect(h.runtime.getRecord(fresh.agentId).model).toBe('pstack-test/model')
+        const prompt = h.inventories.find((entry) => entry.action === 'read:fresh-policy').prompt
+        expect(prompt).toContain('how explorer: inherit-parent')
+        expect(prompt).not.toContain('how explorer: pstack-test/configured:high')
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it('refreshes policy after a tool edits it within the same root prompt', async () => {
+    const plans = new Map()
+    const h = await harness(
+      true,
+      plans,
+      'how explorer: pstack-test/configured:high',
+      (pi, path) => {
+        pi.registerTool({
+          name: 'change_policy',
+          label: 'Change policy',
+          description: 'Change the fixture policy.',
+          parameters: { type: 'object', properties: {} },
+          async execute() {
+            await writeFile(path, 'how explorer: inherit-parent')
+            return { content: [{ type: 'text', text: 'Policy changed' }], details: {} }
+          },
+        })
+      },
+    )
+    try {
+      plans.set('read:edit-policy', [
+        { name: 'change_policy', arguments: {} },
+        { name: 'Task', arguments: policyInput() },
+      ])
+      await h.session.prompt('read:edit-policy')
+      await h.session.agent.waitForIdle()
+      expect(await readFile(join(h.dir, 'pstack-models.md'), 'utf8')).toBe(
+        'how explorer: inherit-parent',
+      )
+      const result = lastToolResult(h.session, 'Task')
+      expect(h.runtime.getRecord(result.agentId).model).toBe('pstack-test/model')
+      expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
+        'how explorer: inherit-parent',
+      )
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('fails closed on an invalid edit and recovers without reload', async () => {
+    const plans = new Map()
+    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    try {
+      await writeFile(join(h.dir, 'pstack-models.md'), 'malformed policy')
+      plans.set('read:invalid-policy', [{ name: 'Task', arguments: policyInput() }])
+      await h.session.prompt('read:invalid-policy')
+      await h.session.agent.waitForIdle()
+      const result = h.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolName === 'Task',
+      )
+      expect(result.details.status).toBe('error')
+      expect(JSON.stringify(result.content)).toContain('invalid')
+      expect(h.runtime.listSnapshots()).toEqual([])
+      await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+      const recovered = await invoke(h, plans, 'recovered-policy', 'Task', policyInput())
+      expect(h.runtime.getRecord(recovered.agentId).model).toBe('pstack-test/model')
+    } finally {
+      await h.close()
+    }
+  })
+
+  it('rejects an explicit model outside the configured role before a child starts', async () => {
+    const plans = new Map()
+    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    try {
+      plans.set('read:policy-conflict', [
+        { name: 'Task', arguments: policyInput({ model: 'inherit-parent' }) },
+      ])
+      await h.session.prompt('read:policy-conflict')
+      await h.session.agent.waitForIdle()
+      const result = h.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolName === 'Task',
+      )
+      expect(result.details.status).toBe('error')
+      expect(JSON.stringify(result.content)).toContain('configured')
+      expect(h.runtime.listSnapshots()).toEqual([])
+      expect(h.inventories.some((entry) => entry.action === 'read:policy')).toBe(false)
     } finally {
       await h.close()
     }

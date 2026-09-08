@@ -400,7 +400,9 @@ A valid policy contains exact role entries with selector arrays. An empty array 
 
 Fresh dispatch resolves capabilities before selecting a model. Selection precedence is explicit Task model, matching capability policy, agent default, then parent. A capability policy requires an exact Task role. Missing or unknown roles fail. Invalid policy blocks fresh dispatches for that capability even with an explicit model. Unrelated profiles remain unaffected.
 
-Distinct selectors require an explicit Task model. Explicit overrides may select outside the configured choices. The runtime guards omitted ambiguity, not list membership or Task counts. Identical selectors can resolve without an explicit choice. `auto`, `default`, `inherit`, and `inherit-parent` select the parent. No policy creates additional Tasks or chooses the first entry from a distinct list. Existing availability, effort, and fast validation applies to the selected model.
+Distinct selectors require an explicit Task model. Explicit overrides may select outside the configured choices by default. Set `enforcement: 'configured'` on a valid policy to require an explicit model to match the configured selectors in every applicable enforced policy. Parent aliases are equivalent for membership. Empty selector arrays remain unconfigured. Enforcement does not control Task counts. Identical selectors can resolve without an explicit choice. `auto`, `default`, `inherit`, and `inherit-parent` select the parent. No policy creates additional Tasks or chooses the first entry from a distinct list. Existing availability, effort, and fast validation applies to the selected model.
+
+An agent profile override must preserve its default profile’s mandatory policies (enforced valid policies and invalid policies). Nested Tasks must also preserve their parent profile’s mandatory policies. Profiles without policies remain unrestricted.
 
 A stored resume model does not change when policy changes. Capability identity and tool checks still apply. Publishers own configuration parsing and prompt rendering; subagent never reads publisher-specific files.
 
@@ -419,7 +421,7 @@ publish()
 pi.on('session_shutdown', unsubscribe)
 ```
 
-Publish each source one time. The runtime ignores later publications from the same source.
+Profile publications are static: the runtime ignores later profile publications from the same source. Capability publications can be repeated by their owning `sourceId` to refresh model policies and system prompts for new children. Updates validate atomically and cannot take over another source’s registration or change existing versions, tool names/schemas, extension names, or read-only tool permissions. Omitted registrations remain registered. Existing children retain their resolved snapshot.
 
 The effective contract persists the profile, registration versions, approved tools, and extension providers.
 

@@ -1,8 +1,11 @@
-import { type Component, Editor } from '@earendil-works/pi-tui'
+import { type Component } from '@earendil-works/pi-tui'
 
 import { walkComponents } from './component-tree.ts'
 
 type BorderPainter = (text: string) => string
+type BorderRenderer = (width: number, hiddenLineCount: number) => string
+
+const BOTTOM_MARKER = '\x1b_hud:bottom-border\x07'
 
 export type EditorLike = Component & {
   borderColor: BorderPainter
@@ -23,6 +26,12 @@ const patched = new WeakMap<Component, BorderSources>()
 export function isEditorLike(component: Component): component is EditorLike {
   if (!('borderColor' in component) || !('getText' in component)) return false
   return component.borderColor instanceof Function && component.getText instanceof Function
+}
+
+function hasBottomBorder(
+  editor: EditorLike,
+): editor is EditorLike & { renderBottomBorder: BorderRenderer } {
+  return 'renderBottomBorder' in editor && editor.renderBottomBorder instanceof Function
 }
 
 export function patchEditorBorder(
@@ -57,7 +66,10 @@ export function patchEditorBorder(
       idle = painter
     },
   })
-  if (!(editor instanceof Editor) || editor.render !== Editor.prototype.render) return
+  if (!hasBottomBorder(editor)) return
+  const renderBottomBorder = editor.renderBottomBorder.bind(editor)
+  editor.renderBottomBorder = (width, hiddenLineCount) =>
+    BOTTOM_MARKER + renderBottomBorder(width, hiddenLineCount)
   const render = editor.render.bind(editor)
   editor.render = (width) => {
     const current: { border?: string; width: number } = { width }
@@ -68,10 +80,11 @@ export function patchEditorBorder(
     } finally {
       frame = undefined
     }
-    if (width < 2 || current.border === undefined) return lines
-    const bottom = lines.findIndex((line, index) => index > 0 && line === current.border)
-    if (bottom !== -1) lines[bottom] = ''
-    return lines
+    return lines.map((line) => {
+      if (!line.includes(BOTTOM_MARKER)) return line
+      const border = line.replaceAll(BOTTOM_MARKER, '')
+      return width >= 2 && border === current.border ? '' : border
+    })
   }
 }
 

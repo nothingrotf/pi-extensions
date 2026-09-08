@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vite-plus/test'
 
 import {
   CapabilityRegistry,
+  type CapabilityModelPolicy,
   decodeCapabilityPublication,
   isCapabilitySubset,
+  selectCapabilityModel,
 } from '../src/capabilities.ts'
 import type { CapabilityContract } from '../src/schema.ts'
 
@@ -242,5 +244,100 @@ describe('capability profiles', () => {
     expect(() =>
       registry.registerProfile({ id: 'too-deep', nested: { maxDepth: 17 }, registrations: [] }),
     ).toThrow('from 1 through 16')
+  })
+})
+
+describe('configured model enforcement', () => {
+  it('rejects explicit models outside each enforced policy', () => {
+    expect(() =>
+      selectCapabilityModel(
+        [
+          {
+            status: 'valid',
+            enforcement: 'configured',
+            roles: [{ role: 'feature', selectors: ['allowed'] }],
+          },
+        ],
+        'feature',
+        'outside',
+      ),
+    ).toThrow('configured')
+  })
+})
+
+describe('model policy selection compatibility', () => {
+  const policy: CapabilityModelPolicy = {
+    status: 'valid',
+    enforcement: 'configured',
+    roles: [
+      { role: 'scalar', selectors: ['chosen'] },
+      { role: 'panel', selectors: ['chosen', 'auto'] },
+      { role: 'unconfigured', selectors: [] },
+    ],
+  }
+  it('preserves scalar, panel, aliases and unconfigured roles', () => {
+    expect(selectCapabilityModel([policy], 'scalar', undefined)).toBe('chosen')
+    expect(() => selectCapabilityModel([policy], 'panel', undefined)).toThrow('distinct choices')
+    for (const alias of ['auto', 'inherit', 'default', 'inherit-parent'])
+      expect(selectCapabilityModel([policy], 'panel', alias)).toBe(alias)
+    expect(selectCapabilityModel([policy], 'unconfigured', 'outside')).toBe('outside')
+    expect(
+      selectCapabilityModel([{ status: 'valid', roles: policy.roles }], 'scalar', 'outside'),
+    ).toBe('outside')
+    expect(() => selectCapabilityModel([policy], undefined, 'chosen')).toThrow('exact Task.role')
+    expect(() => selectCapabilityModel([policy], 'unknown', 'chosen')).toThrow('Unknown')
+    expect(() =>
+      selectCapabilityModel(
+        [
+          policy,
+          {
+            status: 'valid',
+            enforcement: 'configured',
+            roles: [{ role: 'scalar', selectors: ['other'] }],
+          },
+        ],
+        'scalar',
+        'chosen',
+      ),
+    ).toThrow('configured')
+  })
+
+  it('updates same-source policies atomically without transferring ownership or changing contracts', () => {
+    const registry = new CapabilityRegistry()
+    const registration = {
+      id: 'policy',
+      version: '1',
+      extensions: [],
+      tools: [],
+      modelPolicy: policy,
+    }
+    registry.publishCapabilities({ sourceId: 'owner', registrations: [registration] })
+    registry.registerProfile({ id: 'profile', registrations: ['policy'] })
+    const invalid: CapabilityModelPolicy = { status: 'invalid', error: 'bad file' }
+    registry.publishCapabilities({
+      sourceId: 'owner',
+      registrations: [{ ...registration, modelPolicy: invalid, systemPrompt: 'Updated selectors' }],
+    })
+    expect(() =>
+      selectCapabilityModel(registry.resolve('profile').modelPolicies, 'scalar', 'chosen'),
+    ).toThrow('bad file')
+    expect(() =>
+      registry.publishCapabilities({ sourceId: 'stranger', registrations: [registration] }),
+    ).toThrow('another source')
+    expect(() =>
+      registry.publishCapabilities({
+        sourceId: 'owner',
+        registrations: [registration, { ...registration, id: 'bad id' }],
+      }),
+    ).toThrow('invalid')
+    expect(registry.resolve('profile').modelPolicies).toEqual([invalid])
+    expect(() =>
+      registry.publishCapabilities({
+        sourceId: 'owner',
+        registrations: [{ ...registration, tools: [tool()] }],
+      }),
+    ).toThrow('changed its contract')
+    registry.publishCapabilities({ sourceId: 'owner', registrations: [registration] })
+    expect(registry.resolve('profile').modelPolicies).toEqual([policy])
   })
 })

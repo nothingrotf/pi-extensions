@@ -95,7 +95,7 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
     role,
     selectors: configured.get(role) ?? [],
   }))
-  return { status: 'valid', roles }
+  return { status: 'valid', enforcement: 'configured', roles }
 }
 
 export async function loadPstackModelPolicy(
@@ -117,10 +117,11 @@ export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
   const instructions = [
     '# Pstack runtime model policy',
     'Every pstack Task must pass an exact role below and capability_profile pstack-leaf, or pstack-nested for a delegating owner. Registered pstack agents default to pstack-leaf.',
-    'The runtime selects explicit Task.model before the configured role, then the agent default, then the parent model. Unknown or missing Task.role fails for pstack capabilities. Other capabilities are unaffected.',
+    'The configured role is mandatory. Task.model must match a configured selector, including effort and fast mode. Unknown or missing Task.role fails for pstack capabilities. Other capabilities are unaffected.',
     'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
     'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
-    'Explicit model overrides may select outside a configured panel or pool, including for different-family reviews. The runtime guards omitted ambiguous choices, not panel membership or counts. Invalid policy files block fresh pstack dispatches even with an override. Resume preserves the stored model. Reload or start a new session after editing the policy file.',
+    'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
+    'The extension reads ~/.agents/rules/pstack-models.md automatically before each root prompt and root Task call. No manual read or alwaysApply support is required. Invalid policies block fresh pstack dispatches. Resume preserves its stored model.',
   ]
   if (policy.status === 'invalid')
     return [...instructions, `Policy unavailable. ${policy.error}`].join('\n')

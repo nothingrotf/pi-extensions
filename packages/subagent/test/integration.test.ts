@@ -38,6 +38,7 @@ import {
   acquireSubagentController,
   registerSubagent,
   SUBAGENT_CAPABILITY_PROFILE_REGISTRATION_EVENT,
+  SUBAGENT_CAPABILITY_REGISTRATION_EVENT,
   SUBAGENT_REGISTRATION_EVENT,
   TaskControlInputSchema,
   type SubagentController,
@@ -1885,6 +1886,100 @@ describe('subagent Task integration', () => {
       expect(second).not.toBe(first)
     } finally {
       await rm(copyRoot, { force: true, recursive: true })
+      await harness.close()
+    }
+  })
+
+  it('prevents dropping the registered agent mandatory model policy', async () => {
+    const harness = await createHarness()
+    try {
+      harness.runtime.registerCapability({
+        id: 'mandatory-model',
+        version: '1',
+        tools: [],
+        extensions: [],
+        modelPolicy: {
+          status: 'valid',
+          enforcement: 'configured',
+          roles: [{ role: 'feature', selectors: ['inherit-parent'] }],
+        },
+      })
+      harness.runtime.registerCapabilityProfiles([
+        { id: 'mandatory-profile', registrations: ['mandatory-model'] },
+        { id: 'unrestricted-profile', registrations: [] },
+      ])
+      harness.controller.registerAgents('mandatory-agent', [
+        {
+          name: 'mandatory-agent',
+          description: 'Policy fixture',
+          effort: 'low',
+          readonly: true,
+          systemPrompt: 'Policy fixture',
+          tools: ['read'],
+          capabilityProfile: 'mandatory-profile',
+        },
+      ])
+      const result = await runTask(harness, {
+        ...baseInput,
+        subagent_type: 'mandatory-agent',
+        role: 'feature',
+        capability_profile: 'unrestricted-profile',
+      })
+      expect(result).toContain('mandatory model policies')
+      harness.runtime.registerCapabilityProfile({
+        id: 'mandatory-nested',
+        registrations: ['mandatory-model'],
+        nested: { maxDepth: 2 },
+      })
+      expect(
+        await runTask(harness, {
+          ...baseInput,
+          role: 'feature',
+          capability_profile: 'mandatory-nested',
+          model: 'inherit-parent',
+          prompt: `NESTED_CAPABILITY:${JSON.stringify({
+            description: 'Drop inherited policy',
+            prompt: 'RETURN_TOOLS',
+            subagent_type: 'generalPurpose',
+            role: 'feature',
+            capability_profile: 'unrestricted-profile',
+          })}`,
+        }),
+      ).toContain('parent mandatory model policies')
+
+      const publication = {
+        sourceId: 'hot-policy',
+        registrations: [
+          {
+            id: 'hot-policy',
+            version: '1',
+            tools: [],
+            extensions: [],
+            systemPrompt: 'First prompt',
+          },
+        ],
+      }
+      harness.pi.events.emit(SUBAGENT_CAPABILITY_REGISTRATION_EVENT, publication)
+      harness.runtime.registerCapabilityProfile({
+        id: 'hot-profile',
+        registrations: ['hot-policy'],
+      })
+      harness.pi.events.emit(SUBAGENT_CAPABILITY_REGISTRATION_EVENT, {
+        ...publication,
+        registrations: publication.registrations.map((registration) => ({
+          ...registration,
+          systemPrompt: 'Refreshed prompt',
+          modelPolicy: { status: 'invalid', error: 'REFRESHED_POLICY_ERROR' },
+        })),
+      })
+      expect(
+        await runTask(harness, {
+          ...baseInput,
+          capability_profile: 'hot-profile',
+          role: 'feature',
+        }),
+      ).toContain('REFRESHED_POLICY_ERROR')
+    } finally {
       await harness.close()
     }
   })

@@ -16,6 +16,8 @@ import {
   CapabilityRegistry,
   isCapabilitySubset,
   selectCapabilityModel,
+  preservesMandatoryModelPolicies,
+  type CapabilityPublication,
   type CapabilityProfile,
   type CapabilityRegistration,
   type ResolvedCapabilities,
@@ -611,6 +613,10 @@ export class SubagentRuntime {
 
   registerCapability(registration: CapabilityRegistration): void {
     this.capabilities.registerCapability(registration)
+  }
+
+  publishCapabilities(publication: CapabilityPublication): void {
+    this.capabilities.publishCapabilities(publication)
   }
 
   registerCapabilities(registrations: readonly CapabilityRegistration[]): void {
@@ -1975,6 +1981,16 @@ export class SubagentRuntime {
       input.capability_profile ?? discovered?.capabilityProfile,
       readonly,
     )
+    if (discovered?.capabilityProfile !== undefined && input.capability_profile !== undefined) {
+      const required = this.capabilities.resolve(discovered.capabilityProfile, readonly)
+      if (!preservesMandatoryModelPolicies(required.modelPolicies, capabilities.modelPolicies))
+        throw new Error('A Task must preserve its registered agent mandatory model policies.')
+    }
+    if (attenuation !== undefined) {
+      const inherited = this.capabilities.resolve(attenuation.capability.profileId, readonly)
+      if (!preservesMandatoryModelPolicies(inherited.modelPolicies, capabilities.modelPolicies))
+        throw new Error('A nested Task must preserve its parent mandatory model policies.')
+    }
     const selector =
       selectCapabilityModel(capabilities.modelPolicies, input.role, input.model) ?? role.model
     const model = resolveModel(selector, role, ctx, runtime)
