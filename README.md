@@ -32,7 +32,24 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 | [`@nothingrotf/pstack`](packages/pstack)                   | Workflow skills and Pi compatibility helpers                                      |
 | [`@nothingrotf/session-history`](packages/session-history) | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |
 | [`@nothingrotf/subagent`](packages/subagent)               | In-process Task runtime with isolated, persistent Pi child sessions               |
+| [`@nothingrotf/tgrep`](packages/tgrep)                     | Microsoft tgrep search with fresh and opt-in indexed modes                        |
 | [`@nothingrotf/todo`](packages/todo)                       | Structured todo lifecycle with session state and a persistent tree                |
+
+## Content search
+
+The `tgrep` package replaces Pi's native `grep` tool with Microsoft tgrep.
+Install the executable separately with `brew install tgrep` before using the full stack.
+Fresh searches include nonignored hidden files and do not require an index or server.
+Use `pi --tgrep-indexed` to opt into indexes, which can omit hidden files and recent changes.
+The HUD leaves `grep` registration to the search provider and displays its calls through the fallback action rail.
+
+Read the [package documentation](packages/tgrep/README.md) for setup, limits, and compatibility.
+
+## Workflow skills
+
+The `pstack` package provides 50 skills with Pi-specific tools, Task contracts, and model policies.
+The latest upstream sync requires evidence or uncertainty labels alongside claims and checks performed by the agent when possible.
+Read the [synchronization notes](packages/pstack/README.md#upstream-synchronization) for source revisions.
 
 ## Structured compaction
 
@@ -88,7 +105,7 @@ Remove them again:
 bun run pi:remove
 ```
 
-The `subagent` package registers `Task` and `TaskControl`. The `pstack` package registers 48 skills. Remove `npm:pi-subagents` and `git:github.com/nothingrotf/oh-my-pstack` from the global settings before `pi:install`. Otherwise both stacks load at the same time.
+The `subagent` package registers `Task` and `TaskControl`. The `pstack` package provides 50 skills. Remove `npm:pi-subagents` and `git:github.com/nothingrotf/oh-my-pstack` from the global settings before `pi:install`. Otherwise both stacks load at the same time.
 
 Vite+ provides Oxfmt, Oxlint, TypeScript checks, tests, workspace tasks, and staged-file checks.
 The local Oxlint plugins reject unsafe type shortcuts, module mocks, invalid suppressions, and stale tool directives.

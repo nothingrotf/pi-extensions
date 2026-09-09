@@ -168,6 +168,18 @@
         "typebox": "*",
       },
     },
+    "packages/tgrep": {
+      "name": "@nothingrotf/tgrep",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
     "packages/todo": {
       "name": "@nothingrotf/todo",
       "version": "0.1.0",
@@ -406,6 +418,8 @@
     "@nothingrotf/session-history": ["@nothingrotf/session-history@workspace:packages/session-history"],
 
     "@nothingrotf/subagent": ["@nothingrotf/subagent@workspace:packages/subagent"],
+
+    "@nothingrotf/tgrep": ["@nothingrotf/tgrep@workspace:packages/tgrep"],
 
     "@nothingrotf/todo": ["@nothingrotf/todo@workspace:packages/todo"],
 

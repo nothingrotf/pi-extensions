@@ -94,6 +94,7 @@ This port incorporates these upstream changes:
 
 - [cursor/plugins#329](https://github.com/cursor/plugins/pull/329) at `c57a66799701c3e533568b0667bf1560bbd3b503` reduces prose and updates workflows.
 - [cursor/plugins#331](https://github.com/cursor/plugins/pull/331) at `9ed271d798099a9c0c7982a9a8b170f18cb37cd2` adjusts prose punctuation and terminology.
+- [cursor/plugins#341](https://github.com/cursor/plugins/pull/341) at `2336018ca979f8662e804139ecf1b316cb159323` requires evidence or uncertainty labels alongside claims and agent-run verification when possible.
 
 The sync preserves Pi tools, Task contracts, model selection, and stack backends.
 

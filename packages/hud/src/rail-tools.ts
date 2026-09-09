@@ -6,7 +6,6 @@ import {
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
-  createGrepToolDefinition,
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
@@ -456,10 +455,6 @@ function builtInRegistrations(
     },
     {
       create: (cwd) =>
-        pi.registerTool(railTool(createGrepToolDefinition(cwd), storeFor, specFor('grep', cwd))),
-    },
-    {
-      create: (cwd) =>
         pi.registerTool(railTool(createFindToolDefinition(cwd), storeFor, specFor('find', cwd))),
     },
     {
@@ -480,7 +475,6 @@ export function applyRailTools(
     pi.registerTool(createWriteToolDefinition(cwd))
     pi.registerTool(createEditToolDefinition(cwd))
     pi.registerTool(createBashToolDefinition(cwd))
-    pi.registerTool(createGrepToolDefinition(cwd))
     pi.registerTool(createFindToolDefinition(cwd))
     pi.registerTool(createLsToolDefinition(cwd))
     return

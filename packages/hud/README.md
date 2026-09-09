@@ -122,6 +122,10 @@ The `Sound settings` menu controls both sounds, the focus policy, and the sound 
 
 The rail draws a tree of the tool calls in the current turn.
 
+The HUD does not register or replace `grep`, including when the rail toggles on or off.
+Calls from the native tool or `@nothingrotf/tgrep` use the fallback action rail.
+Both packages can load in either order without competing `grep` registrations.
+
 ```
 7 actions ▾
 ├─ ✓ ⧬ Sequenced   ×3 ▸
