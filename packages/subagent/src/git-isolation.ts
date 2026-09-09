@@ -311,6 +311,7 @@ async function copyDirectory(source: string, target: string): Promise<'copy' | '
     await run(dirname(source), command)
     return 'copy-on-write'
   } catch {
+    await rm(target, { recursive: true, force: true })
     await run(dirname(source), ['cp', '-aR', source, target])
     return 'copy'
   }

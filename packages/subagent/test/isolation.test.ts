@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -89,6 +89,32 @@ describe('writer isolation', () => {
       'escapes its workspace root',
     )
   })
+
+  it('retries a partial dependency clone without nesting the source directory', async () => {
+    const directory = await repository()
+    const originalPath = process.env.PATH
+    try {
+      const bin = join(directory, 'bin')
+      await mkdir(bin)
+      await writeFile(
+        join(bin, 'cp'),
+        '#!/bin/sh\nif [ "$1" = "-aR" ]; then exec /bin/cp "$@"; fi\nfor target do :; done\nmkdir -p "$target"\nprintf partial > "$target/dependency.txt"\nexit 1\n',
+      )
+      await chmod(join(bin, 'cp'), 0o755)
+      await mkdir(join(directory, 'node_modules'))
+      await writeFile(join(directory, 'node_modules', 'dependency.txt'), 'dependency\n')
+      process.env.PATH = `${bin}:${originalPath ?? ''}`
+      const isolation = await writer(directory, 'partial-clone')
+      expect(
+        await readFile(join(isolation.rootWorktree, 'node_modules', 'dependency.txt'), 'utf8'),
+      ).toBe('dependency\n')
+      await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
 
   it('captures and applies a task delta over baseline WIP', async () => {
     const directory = await repository()
