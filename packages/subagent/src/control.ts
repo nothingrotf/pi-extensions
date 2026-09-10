@@ -133,18 +133,21 @@ const ReplyInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
-export const TaskControlInputSchema = Type.Union([
-  InboxInputSchema,
-  AcknowledgeInputSchema,
-  ReplyInputSchema,
-  StatusInputSchema,
-  SteerInputSchema,
-  CancelInputSchema,
-  JoinInputSchema,
-  ListInputSchema,
-  WaitInputSchema,
-  JobsInputSchema,
-])
+export const TaskControlInputSchema = Type.Union(
+  [
+    InboxInputSchema,
+    AcknowledgeInputSchema,
+    ReplyInputSchema,
+    StatusInputSchema,
+    SteerInputSchema,
+    CancelInputSchema,
+    JoinInputSchema,
+    ListInputSchema,
+    WaitInputSchema,
+    JobsInputSchema,
+  ],
+  { type: 'object' },
+)
 
 export type TaskControlInput = StaticDecode<typeof TaskControlInputSchema>
 

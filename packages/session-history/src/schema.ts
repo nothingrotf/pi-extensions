@@ -98,13 +98,9 @@ const ContentSchema = Type.Object(
 
 export type ContentReadInput = Static<typeof ContentReadSchema>
 
-export const SessionHistorySchema = Type.Union([
-  ListSchema,
-  SearchSchema,
-  ReadSchema,
-  TimelineSchema,
-  ToolActivitySchema,
-  ContentSchema,
-])
+export const SessionHistorySchema = Type.Union(
+  [ListSchema, SearchSchema, ReadSchema, TimelineSchema, ToolActivitySchema, ContentSchema],
+  { type: 'object' },
+)
 
 export type SessionHistoryInput = Static<typeof SessionHistorySchema>

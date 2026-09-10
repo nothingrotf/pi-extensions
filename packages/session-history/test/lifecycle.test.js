@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { DefaultResourceLoader, getAgentDir, SessionManager } from '@earendil-works/pi-coding-agent'
+import { Value } from 'typebox/value'
 import { describe, expect, it } from 'vite-plus/test'
 
 import sessionHistory from '../src/index.ts'
@@ -168,10 +169,46 @@ describe('session history lifecycle', () => {
     ).rejects.toThrow('cancelled evaluation')
   })
 
+  it.each([
+    { action: 'list', limit: 50 },
+    { action: 'search', query: 'evidence', limit: 50 },
+    { action: 'read', session_id: 'session', limit: 100 },
+    { action: 'timeline', session_id: 'session', limit: 200 },
+    { action: 'tool_activity', session_id: 'session', limit: 200 },
+    { action: 'content', session_id: 'session', entry_id: 'entry', limit: 16_000 },
+  ])('accepts each action through the registered schema: $action', (input) => {
+    expect(Value.Check(harness().parameters, input)).toBe(true)
+  })
+
+  it.each([
+    null,
+    [],
+    {},
+    { action: 'unknown' },
+    { action: 'search' },
+    { action: 'read' },
+    { action: 'timeline' },
+    { action: 'tool_activity' },
+    { action: 'content', session_id: 'session' },
+    { action: 'list', query: 'hybrid' },
+    { action: 'search', query: 'x' },
+    { action: 'list', limit: 51 },
+    { action: 'search', query: 'evidence', limit: 51 },
+    { action: 'read', session_id: 'session', limit: 101 },
+    { action: 'timeline', session_id: 'session', limit: 201 },
+    { action: 'tool_activity', session_id: 'session', limit: 201 },
+    { action: 'content', session_id: 'session', entry_id: 'entry', limit: 16_001 },
+    { action: 'read', session_id: 'session', direction: 'sideways' },
+    { action: 'list', unexpected: true },
+  ])('rejects malformed or cross-action inputs: %j', (input) => {
+    expect(Value.Check(harness().parameters, input)).toBe(false)
+  })
+
   it('registers the real tool name and discriminated schema', () => {
     const tool = harness()
 
     expect(tool.name).toBe('session_history')
+    expect(JSON.parse(JSON.stringify(tool.parameters)).type).toBe('object')
     expect(tool.parameters.anyOf).toHaveLength(6)
     expect(tool.parameters.anyOf.map((schema) => schema.properties.action.const)).toEqual([
       'list',

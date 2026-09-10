@@ -215,7 +215,9 @@ export const BatchTaskInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
-export const TaskInputSchema = Type.Union([SingleTaskInputSchema, BatchTaskInputSchema])
+export const TaskInputSchema = Type.Union([SingleTaskInputSchema, BatchTaskInputSchema], {
+  type: 'object',
+})
 
 export const RunStatusSchema = Type.Union([
   Type.Literal('running'),

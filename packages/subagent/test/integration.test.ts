@@ -1536,6 +1536,22 @@ describe('subagent Task integration', () => {
   it('registers Task and TaskControl and runs a persistent read-only child', async () => {
     const harness = await createHarness()
     try {
+      for (const [name, schema] of Object.entries({
+        Task: TaskInputSchema,
+        TaskControl: TaskControlInputSchema,
+      })) {
+        expect(JSON.parse(JSON.stringify(schema))).toHaveProperty('type', 'object')
+        expect(harness.session.getToolDefinition(name)?.parameters).toEqual(schema)
+      }
+      expect(TaskInputSchema.anyOf).toHaveLength(2)
+      expect(TaskControlInputSchema.anyOf).toHaveLength(10)
+      const batchInput = { tasks: [{ ...baseInput, id: 'child' }] }
+      expect(Value.Check(TaskInputSchema, batchInput)).toBe(true)
+      expect(Value.Check(TaskInputSchema, { ...baseInput, ...batchInput })).toBe(false)
+      expect(Value.Check(TaskInputSchema, { tasks: [] })).toBe(false)
+      expect(Value.Check(TaskControlInputSchema, { action: 'status' })).toBe(false)
+      expect(Value.Check(TaskControlInputSchema, { action: 'unknown' })).toBe(false)
+      expect(Value.Check(TaskControlInputSchema, { action: 'jobs', agent_id: 'child' })).toBe(false)
       expect(Value.Check(TaskInputSchema, baseInput)).toBe(true)
       expect(Value.Check(TaskInputSchema, { ...baseInput, attachments: [] })).toBe(false)
       expect(Value.Check(TaskControlInputSchema, { action: 'status', agent_id: 'child' })).toBe(
