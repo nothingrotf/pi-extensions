@@ -113,9 +113,11 @@ The extension reads `~/.agents/rules/pstack-models.md` at startup, before each r
 
 Configured selectors are mandatory, including effort and fast mode. An explicit `Task.model` outside the configured choices fails before execution. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
 
-Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
+Delivery roles separate technical acceptance from prose. `code review` and `runtime verification` are selector pools for one scoped reviewer or verifier. `publication` is a scalar role for destination Git and PR operations. `judgment and prose` remains for prose and evidence synthesis.
 
-Use `/setup-pstack` to configure the file. For different-family reviews, select a configured entry or update the policy with user approval. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
+Absent review and verification roles inherit `arena cross-judge pool`, then `judgment and prose`. Absent `publication` inherits `judgment and prose`. Explicit settings override these compatibility defaults. Missing files and otherwise absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
+
+Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
 Runtime verifiers use `isolation: { mode: "worktree", integration: "manual" }`.
 Their artifacts remain inspectable, but the runtime rejects `join`.
@@ -125,10 +127,34 @@ Never bypass it through an absolute source-checkout path or push its synthetic h
 
 Read [Task contracts](skills/poteto-mode/references/task-contracts.md) for executable dispatch examples and coordinator decisions.
 
-After updating, reload Pi before new dispatches.
+After updating, reload Pi before new dispatches. Before adding the three new role keys to the global policy, reload every older session that reads it. Older loaded registries reject those keys and block fresh pstack Tasks. Stage the new policy separately when active sessions cannot reload yet. Later edits to recognized role selectors do not require another reload.
 Existing child contracts do not gain tools automatically.
 If a retained capability contract changed, start a fresh child from its saved brief and evidence instead of weakening resume validation.
 Older records without a role remain unlabeled rather than receiving a guessed role.
+
+## Delivery throughput
+
+Bounded work uses an accepted design, one persistent implementer, and one independent reviewer.
+Compatible corrections retain those owners instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools and manual isolation from their first dispatch. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
+New or contested architecture defaults to two candidates and one independent judge.
+A configured model pool does not determine fanout.
+
+Two independent issue lanes form the initial pilot when files, dependencies, and mutable resources are disjoint.
+Early probes exercise risky runtime boundaries before extensive implementation.
+Reusable harnesses and artifact-bound receipts avoid repeated setup without removing required checks.
+
+Read the [delivery contract](skills/poteto-mode/references/delivery-contract.md) for routing, ownership, preflight, and evidence invalidation.
+Read [throughput and pilot](skills/poteto-mode/references/throughput.md) for the measurement format and interpretation limits.
+
+Run the report from the package directory:
+
+```sh
+bun src/throughput-cli.ts /absolute/path/to/measurements.json
+```
+
+The report groups acceptance time by implementation model and complexity.
+It retains unfinished work and rejects unsupported comparisons.
+Synthetic tests validate the reporting tool, not actual savings for a product backlog.
 
 ## Stack backends
 

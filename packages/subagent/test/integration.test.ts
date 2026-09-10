@@ -1180,6 +1180,45 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it.each(['first', 'FAIL'])(
+    'persists attempt timing for %s and resets it on resume',
+    async (prompt) => {
+      const harness = await createHarness()
+      try {
+        await harness.session.bindExtensions({ shutdownHandler: () => undefined })
+        const id = agentId(await runTask(harness, { ...baseInput, prompt }))
+        const before = latestState(harness).records.find((record) => record.agentId === id)?.timing
+        if (before?.executionEndedAt === undefined || before.settledAt === undefined) {
+          throw new Error('The terminal attempt must preserve complete timing.')
+        }
+        expect(before.workspaceSetupMs).toBe(0)
+        expect(before.sessionSetupMs).toBeGreaterThanOrEqual(0)
+        expect(before.executionStartedAt).toBeGreaterThanOrEqual(before.requestedAt)
+        expect(before.executionEndedAt).toBeGreaterThanOrEqual(before.executionStartedAt)
+        expect(before.settledAt).toBeGreaterThanOrEqual(before.executionEndedAt)
+        const sessionFile = harness.session.sessionManager.getSessionFile()
+        if (sessionFile === undefined) throw new Error('The parent transcript is unavailable.')
+        const restored = new SubagentRuntime(harness.pi)
+        restored.restore({ sessionManager: SessionManager.open(sessionFile) })
+        expect(
+          restored.listSnapshots().find((snapshot) => snapshot.agentId === id)?.timing,
+        ).toEqual(before)
+        expect(restored.latestResult(id)?.timing).toEqual(before)
+        expect(await runTaskControl(harness, { action: 'status', agent_id: id })).toContain(
+          '"workspaceSetupMs": 0',
+        )
+        await harness.session.reload()
+        await runTask(harness, { ...baseInput, resume: id, prompt: 'second' })
+        const after = latestState(harness).records.find((record) => record.agentId === id)?.timing
+        expect(after?.requestedAt).toBeGreaterThanOrEqual(before.settledAt)
+        expect(after?.executionStartedAt).toBeGreaterThanOrEqual(after?.requestedAt ?? 0)
+        expect(after?.settledAt).toBeGreaterThanOrEqual(after?.executionEndedAt ?? 0)
+      } finally {
+        await harness.close()
+      }
+    },
+  )
+
   it('preserves per-item role in coordinated batches, blocked results, and reloaded state', async () => {
     const harness = await createHarness()
     try {
@@ -2333,6 +2372,50 @@ describe('subagent Task integration', () => {
     }
   })
 
+  it('rejects another managed workspace before allocating an isolated child', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const candidate = join(harness.dir, '.git', 'pi-subagent', 'worktrees', 'candidate', 'root')
+      await mkdir(candidate, { recursive: true })
+      await execFileAsync('git', ['init', '-q'], { cwd: candidate })
+      const result = await runTask(harness, {
+        ...baseInput,
+        cwd: candidate,
+        isolation: { mode: 'worktree', integration: 'manual' },
+        prompt: 'RETURN_TOOLS',
+        subagent_type: 'generalPurpose',
+      })
+      expect(result).toContain('Task cwd targets Git metadata')
+      expect(harness.runtime.listSnapshots()).toHaveLength(0)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects explicitly requested mutable tools in read-only preflight', async () => {
+    const harness = await createHarness()
+    harness.controller.registerAgents('preflight', [
+      {
+        name: 'preflight-reviewer',
+        description: 'Review the artifact.',
+        systemPrompt: 'Read the artifact.',
+      },
+    ])
+    try {
+      const result = await runTask(harness, {
+        ...baseInput,
+        readonly: true,
+        subagent_type: 'preflight-reviewer',
+        tools: ['read', 'bash'],
+      })
+      expect(result).toContain('Task tool "bash" is not available in read-only mode')
+      expect(harness.runtime.listSnapshots()).toHaveLength(0)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('steers, observes, waits for, and cancels through the controller', async () => {
     const harness = await createHarness()
     try {
@@ -2694,6 +2777,36 @@ describe('subagent Task integration', () => {
       expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
     } finally {
       for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+    }
+  })
+
+  it('preserves execution timestamps after an isolated patch joins', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        ...baseInput,
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+        run_in_background: true,
+      })
+      const id = agentId(started)
+      const handle = harness.runtime.handle(id)
+      if (handle !== undefined) await harness.controller.wait(handle)
+      const before = harness.runtime.listSnapshots().find((snapshot) => snapshot.agentId === id)
+      expect(before?.status).toBe('completed')
+      const destination = await harness.runtime.rootDestination(harness.context())
+      const joined = await harness.runtime.joinStaged(id, destination, harness.session.sessionId)
+      expect(joined.status).toBe('joined')
+      const after = harness.runtime.listSnapshots().find((snapshot) => snapshot.agentId === id)
+      expect(after?.startedAt).toBe(before?.startedAt)
+      expect(after?.endedAt).toBe(before?.endedAt)
+      expect(after?.timing).toEqual(before?.timing)
+      expect(after?.timing?.workspaceSetupMs).toBeGreaterThan(0)
+      expect(after?.timing?.sessionSetupMs).toBeGreaterThan(0)
+      expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+    } finally {
       await harness.close()
     }
   })

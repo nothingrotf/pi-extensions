@@ -8,6 +8,7 @@ interface PstackRole {
   role: string
   panel: boolean
   aliases: readonly string[]
+  fallbackRoles?: readonly string[]
 }
 
 export const pstackRoles: readonly PstackRole[] = [
@@ -17,6 +18,19 @@ export const pstackRoles: readonly PstackRole[] = [
   { role: 'perf-issue', panel: false, aliases: [] },
   { role: 'hillclimb', panel: false, aliases: [] },
   { role: 'judgment and prose', panel: false, aliases: [] },
+  {
+    role: 'code review',
+    panel: true,
+    aliases: [],
+    fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
+  },
+  {
+    role: 'runtime verification',
+    panel: true,
+    aliases: [],
+    fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
+  },
+  { role: 'publication', panel: false, aliases: [], fallbackRoles: ['judgment and prose'] },
   { role: 'hardest tasks', panel: false, aliases: [] },
   { role: 'how explorer', panel: false, aliases: [] },
   { role: 'how explainer', panel: false, aliases: [] },
@@ -91,9 +105,15 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
       configured.set(role.role, selectors)
     }
   }
-  const roles: RoleModelPolicyEntry[] = pstackRoles.map(({ role }) => ({
+  const roles: RoleModelPolicyEntry[] = pstackRoles.map(({ role, fallbackRoles = [] }) => ({
     role,
-    selectors: configured.get(role) ?? [],
+    selectors: [
+      ...(configured.get(role) ??
+        fallbackRoles
+          .map((fallback) => configured.get(fallback))
+          .find((value) => value !== undefined) ??
+        []),
+    ],
   }))
   return { status: 'valid', enforcement: 'configured', roles }
 }
@@ -121,6 +141,9 @@ export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
     'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
     'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
     'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
+    'Use code review for independent technical review, runtime verification for executable proof, publication for destination Git/PR operations, and judgment and prose only for prose or evidence synthesis.',
+    'Code review and runtime verification are selector pools, not fanout. Choose one permitted model explicitly for each scoped reviewer or verifier. Use a different family from the implementation for independent review when required.',
+    'When new delivery roles are absent, code review and runtime verification inherit arena cross-judge pool, then judgment and prose. Publication inherits judgment and prose. Explicit role settings override these compatibility defaults.',
     'The extension reads ~/.agents/rules/pstack-models.md automatically before each root prompt and root Task call. No manual read or alwaysApply support is required. Invalid policies block fresh pstack dispatches. Resume preserves its stored model.',
   ]
   if (policy.status === 'invalid')

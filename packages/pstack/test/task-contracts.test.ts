@@ -29,13 +29,13 @@ describe('pstack executable Task contracts', () => {
     expect(examples[1]).toMatchObject({
       isolation: { integration: 'manual', mode: 'worktree' },
       readonly: false,
-      role: 'judgment and prose',
+      role: 'runtime verification',
       run_in_background: true,
     })
     expect(examples[2]).toMatchObject({
       capability_profile: 'pstack-leaf',
       readonly: true,
-      role: 'why synthesizer',
+      role: 'code review',
       subagent_type: 'generalPurpose',
     })
   })

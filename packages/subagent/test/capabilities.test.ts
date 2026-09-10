@@ -76,6 +76,28 @@ describe('capability attenuation', () => {
 
 describe('capability profiles', () => {
   it.each([
+    Type.String(),
+    Type.Array(Type.String()),
+    Type.Union([
+      Type.Object({ action: Type.Literal('read') }),
+      Type.Object({ action: Type.Literal('list') }),
+    ]),
+  ])('rejects tool schemas without an explicit object root before publication', (parameters) => {
+    const registry = new CapabilityRegistry()
+    const registration = {
+      extensions: [],
+      id: 'invalid-root',
+      tools: [tool('planning', parameters)],
+      version: '1',
+    }
+    registry.registerProfile({ id: 'profile', registrations: [registration.id] })
+    expect(() => registry.registerCapability(registration)).toThrow('must declare type "object"')
+    expect(() => registry.resolve('profile')).toThrow('does not exist')
+    registry.registerCapability({ ...registration, tools: [tool()] })
+    expect(registry.resolve('profile').tools).toEqual(['planning'])
+  })
+
+  it.each([
     'Task',
     'TaskControl',
     'ask_parent',

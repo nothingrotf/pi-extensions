@@ -12,6 +12,7 @@ import { Value } from 'typebox/value'
 
 import { defaultHudPalette, type HudPalette } from './colors.ts'
 import { type FileResolver, linkifyMarkdown } from './prose-links.ts'
+import { renderMermaid } from './prose-mermaid.ts'
 import { stabilizeMarkdown } from './prose-stream.ts'
 import {
   mergeStyle,
@@ -254,15 +255,29 @@ function trailingGap(next: string | undefined, ...quiet: string[]): string[] {
   return next !== undefined && next !== 'space' && !quiet.includes(next) ? [''] : []
 }
 
+function hasClosingFence(token: Tokens.Code): boolean {
+  const opening = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/u.exec(token.raw)?.[1]
+  if (opening === undefined) return false
+  const lastLine = token.raw.trimEnd().split('\n').at(-1)
+  if (lastLine === undefined) return false
+  const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(lastLine)?.[1]
+  return closing !== undefined && closing[0] === opening[0] && closing.length >= opening.length
+}
+
 function renderCode(token: Tokens.Code, width: number, context: BlockContext): string[] {
   const border = paint('\u2502 ', context.styles.codeBorder)
   const inner = Math.max(1, width - 2)
   const lang = token.lang === undefined || token.lang.length === 0 ? undefined : token.lang
-  const highlighted = context.highlight?.(token.text, lang)
+  const mermaid =
+    lang?.trim().toLowerCase() === 'mermaid' && hasClosingFence(token)
+      ? renderMermaid(token.text, inner, context.styles)
+      : undefined
+  const highlighted = mermaid === undefined ? context.highlight?.(token.text, lang) : undefined
   const codeLines =
-    highlighted === undefined
+    mermaid ??
+    (highlighted === undefined
       ? token.text.split('\n').map((line) => paint(line, context.styles.text))
-      : highlighted
+      : highlighted)
   const lines: string[] = []
   for (const line of codeLines) {
     if (line.length === 0) {

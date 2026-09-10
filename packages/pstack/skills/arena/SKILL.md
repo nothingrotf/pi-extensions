@@ -27,7 +27,7 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. If the role is absent, use four inherited runners. Spawn more when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. The configured pool is availability for selection, never a dispatch count. If the role is absent, inherit the parent model for each candidate the arena needs. Spawn more than the minimum only when the arena covers multiple distinct design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
 4. Assign isolated outputs. For repository writers, give each candidate `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, assign a distinct output directory to each candidate. N candidates must never write to the same path, per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out

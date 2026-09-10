@@ -22,13 +22,18 @@ describe('interrogate', () => {
     )
   })
 
-  it('uses exact Task selectors and inherited fallbacks', () => {
+  it('selects two reviewer perspectives without list-size fanout', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
+    expect(skill).toContain('TWO distinct, independently executed reviewer perspectives by default')
+    expect(skill).toContain('availability pool')
+    expect(skill).toContain('Never launch one reviewer per list entry')
+    expect(skill).toContain('There is no four-reviewer inherited fallback')
+    expect(skill).toContain('explicit count')
+    expect(skill).toContain('concrete coverage justification')
+    expect(skill).toContain('Never invent or substitute an unconfigured selector')
+    expect(skill).toContain('wait for explicit user approval before any fix work')
     expect(skill).toContain('provider/model-id:effort [fast]')
-    expect(skill).toContain('parsed `interrogate reviewers` runtime policy')
-    expect(skill.match(/\| Reviewer [A-D] \| `inherit-parent` \|/g)).toHaveLength(4)
-    expect(skill).toContain('including an explicit `auto` or `inherit-parent` alias')
-    expect(skill).toContain('mark that reviewer `BLOCKED`')
+    expect(skill).toContain('mark that perspective `BLOCKED`')
     expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 

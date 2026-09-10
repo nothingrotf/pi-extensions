@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 Design before implementing. Sketch types, function signatures, class shapes, and module boundaries with `not implemented` bodies and pseudocode. Synthesize across multiple model perspectives, then fill in code against the chosen sketch. If implementation proves the sketch wrong, throw it out and redesign.
 
+Run Architect when the contract, ownership, state model, or security boundary is genuinely new or contested. Crossing a function boundary is not a trigger by itself. Implementation against an accepted design inherits that design's grounding and does not rerun Architect or the **how** skill.
+
 ## Start
 
 Use `todo_write` to create one item per phase before starting.
@@ -30,7 +32,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt. Each candidate produces a design package shaped per `references/rationale-template.md`.
 
-Use the parsed `architect runners` runtime policy in context for this arena invocation. Pass `role: "architect runners"` to each runner. The architect owner needs `pstack-nested`; non-delegating runners use `pstack-leaf`. If delegation is unavailable, return a blocker instead of replacing Arena with a silent single-model sketch. Concrete entries use `provider/model-id:effort [fast]`. For distinct panel choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. Omit only when unconfigured or all choices are identical. If the role is absent, use four inherited runners.
+Use the parsed `architect runners` runtime policy in context for this arena invocation. Pass `role: "architect runners"` to each runner. The architect owner needs `pstack-nested`; non-delegating runners use `pstack-leaf`. If delegation is unavailable, return a blocker instead of replacing Arena with a silent single-model sketch. Concrete entries use `provider/model-id:effort [fast]`. For distinct panel choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. Omit only when unconfigured or all choices are identical. The configured pool is availability for selection, never a dispatch count. If the role is absent, inherit the parent model for each candidate the design space needs, still at least two.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 

@@ -6,9 +6,9 @@ disable-model-invocation: true
 
 # Interrogate
 
-Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
+Run TWO distinct, independently executed reviewer perspectives by default. Each reviewer gets the same prompt and rubric. Prefer distinct configured models so the adversarial signal comes from model diversity, not assigned personas.
 
-The deliverable is a synthesized verdict. Do NOT auto-apply changes.
+The deliverable is a synthesized verdict. Do NOT auto-apply changes. After presenting it, wait for explicit user approval before any fix work.
 
 ## Step 1, Determine Scope
 
@@ -33,16 +33,11 @@ Write one clear paragraph. If you're unsure about the intent, ask the user befor
 
 ## Step 3, Spawn Reviewers
 
-Launch all reviewers in a single message using the Task tool. Use the parsed `interrogate reviewers` runtime policy in context when configured. Use one reviewer per entry, and extend or shrink the Reviewer A/B/C/D labels to match. If the role is absent, use the inherited fallbacks below.
+Launch the two reviewers in a single message using the Task tool. Use the parsed `interrogate reviewers` runtime policy as an availability pool. The skill owns the count. Never launch one reviewer per list entry.
 
-Concrete configured models use `provider/model-id:effort [fast]`.
+Use more than two reviewers only when the user gives an explicit count or when you state a concrete coverage justification before dispatch. Select the smallest justified set. If the role is absent, run exactly two inherited reviewer perspectives, Reviewer A and Reviewer B. There is no four-reviewer inherited fallback.
 
-| Subagent | Fallback model |
-|----------|----------------|
-| Reviewer A | `inherit-parent` |
-| Reviewer B | `inherit-parent` |
-| Reviewer C | `inherit-parent` |
-| Reviewer D | `inherit-parent` |
+Concrete configured models use `provider/model-id:effort [fast]`. Prefer two distinct configured entries. If the configured pool cannot supply the requested model diversity, report that limitation and use only configured choices. Never invent or substitute an unconfigured selector.
 
 Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
@@ -50,10 +45,10 @@ For each reviewer:
 - `role`: `interrogate reviewers`
 - `capability_profile`: `pstack-leaf`
 - `subagent_type`: `generalPurpose`
-- `model`: the selected `interrogate reviewers` entry, including an explicit `auto` or `inherit-parent` alias. Omit only when unconfigured or all choices are identical
+- `model`: the explicitly selected `interrogate reviewers` entry, including `auto` or `inherit-parent`; omit only when the role is unconfigured or all configured choices are identical
 - `readonly`: `true`
 
-If Pi rejects a concrete model selector, mark that reviewer `BLOCKED` and report the invalid configuration. Continue with the remaining reviewers. Do not substitute a different model. For distinct panel choices, pass inherited entries explicitly as `model: "inherit-parent"` or `model: "auto"`. Never treat those aliases as invalid selectors.
+If Pi rejects a selected concrete model, mark that perspective `BLOCKED` and report the invalid configuration. Continue with the remaining reviewer. Do not substitute a different model. Explicitly pass inherited selections as `model: "inherit-parent"` or `model: "auto"` when the pool contains distinct choices. Never treat those aliases as invalid selectors.
 
 Read `references/reviewer-prompt.md` and fill in the template with:
 1. The stated intent

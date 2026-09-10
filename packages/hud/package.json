@@ -32,6 +32,9 @@
     "check": "vp check",
     "test": "vp test run"
   },
+  "dependencies": {
+    "grok-mermaid": "0.2.2"
+  },
   "devDependencies": {
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",

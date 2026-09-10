@@ -13,10 +13,10 @@ The Principles section below grounds every trigger. In your reply, name each pri
 
 Remaining triggers:
 
-- Nontrivial change, architecture decision, or "are we sure?" → the **how** skill.
+- Nontrivial change, architecture decision, or "are we sure?" → the **how** skill. An accepted design carries its grounding, so implementing against one does not rerun `how` or `architect`.
 - About to use `AskQuestion` on a "which approach", "how should I", or "what should this do" fork → classify it before you ask. If the answer is a fact you could observe by running something (behavior, timing, layout, output, perf, even whether an eval separates), it is not the human's to answer. Sketch it via the Prototype playbook (`playbooks/prototype.md`) and let the result decide. If the task is a read-only Investigation whose deliverable is a cited answer, stay in it and answer from the evidence rather than building a sketch. Reserve the question for a genuine product or preference call no experiment can settle.
 - Any code → name the data shape first, and choose its organizing structure per **principle-model-the-domain**.
-- Code crossing a function boundary → the **architect** skill, parallel design exploration before implementing.
+- Route genuinely new or contested contracts, ownership, state, or security design to the **architect** skill, parallel design exploration before implementing. Crossing a function is not a design trigger by itself.
 - Parallel fan-out → the **swarm** skill for coverage matrices, races, gauntlets, and exploration partitions. Use **arena** for design or code bakeoffs with base selection and grafting.
 - Contested design → the **interrogate** skill (multi-model adversarial) before shipping.
 - Nontrivial multi-step → write the throughput checkpoint (Feature step 3).
@@ -97,6 +97,20 @@ The extension supplies the parsed runtime model policy in root and nested contex
 
 You own every subagent's work. Review each diff and write your own summary. Use a fresh subagent with consolidated scope when directives changed materially. A second opinion uses the same prompt against another configured model. Agreement is high-signal.
 
+## Delivery contract
+
+Read [Delivery contract](references/delivery-contract.md) before dispatching issue work. One persistent implementer owns the issue, and one independent reviewer that never wrote the code owns the review. Use `code review` for static-only acceptance. If executable checks are expected, start the reviewer with `runtime verification`, shell access, and manual isolation. Select one permitted model from the required family. Combine static, no-comments, deslop, and runtime findings in one complete verdict without extra cleanup agents. Corrections resume the same implementer while the accepted design stays compatible. Return incompatible design to the coordinator.
+
+Implementation against an accepted design inherits its grounding. It does not rerun `how` or `architect`, and it needs no owner with `pstack-nested`.
+
+Two independent issue lanes are the default when issues are disjoint in files and dependencies. Lane count follows disjoint workstreams, never the size of a configured model pool.
+
+Recheck only the affected behavior after a change, then run the full required gates before commit. Run an early executable probe before implementation when the change touches security, concurrency, a real database role, or the actual configured runtime. Pin a reusable harness to the actual artifact and configuration.
+
+Follow [Throughput and pilot](references/throughput.md) to record time-to-acceptance, first-review findings, and corrective work for two candidate issues. Report incomplete work and comparison limits without promising measured savings. The root owns runtime preflight, telemetry, and evaluation utility.
+
+Pass the per-issue fields in the Task prompt, never as invented Task schema parameters. Publication uses `publication` and stays separately scoped and foreground. It includes commit and PR text without a separate preparation owner. Reserve `judgment and prose` for prose or evidence synthesis. Nothing here weakens capabilities, required review, user gates, manual isolation, model policy, or the no-deploy and no-merge boundaries.
+
 ## Writing the reply
 
 Write the reply clean as you draft it. A cleanup pass after drafting does not remove these patterns.
@@ -137,7 +151,7 @@ A large or cross-cutting effort (a migration across many call sites, an ambitiou
 - **Shipping.** The half after Babysit. Independently verifying a green stack, then landing the contiguous verified run through its selected stack backend. `playbooks/shipping.md`.
 - **Autonomous run.** A long task to drive to completion without stopping ("run until done", "/loop until X"). `playbooks/autonomous-run.md`.
 - **Orchestrate.** A standing project handed to one coordinator chat: multi-day, many stacked PRs, dozens to hundreds of subagents, minimal human turns ("run this whole project", "own this migration until it lands"). Distinct from Autonomous run, which drives one task to a predicate. Work one agent could finish inside the session's budget routes there, not here, however program-shaped the phrasing sounds. `playbooks/orchestrate.md`.
-- **Autopilot-full.** A queue of independent PRs run to merged with full autonomy. One owner per PR carries build through merge, and the root swarm-verifies each merge-ready head before its owner merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs). `playbooks/autopilot-full.md`.
+- **Autopilot-full.** A queue of independent PRs run to merged with full autonomy. One implementer per issue carries build through merge, and the root independently verifies each merge-ready head before an authorized landing Task merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs). `playbooks/autopilot-full.md`.
 - **Autopilot-stack.** A queue of changes built and verified with full autonomy, delivered as one linear reviewed stack the operator lands herself ("autopilot-stack", "stack them, don't ship", "build the stack, I'll land it"). `playbooks/autopilot-stack.md`.
 - **Session pickup.** Resuming or taking over a prior agent's in-flight work from a transcript, retained run reference, or pushed branch. `playbooks/session-pickup.md`.
 - **Pause safely.** Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, a Pi restart, or imminent context compaction. The complement to Session pickup. Full steps: `playbooks/pause-safely.md`.

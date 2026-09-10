@@ -178,6 +178,10 @@ export async function syntheticBaseline(
 }
 
 async function submodulePaths(repoRoot: string): Promise<Set<string>> {
+  const index = await git(repoRoot, ['ls-files', '--stage', '-z']).catch(() => undefined)
+  if (index !== undefined && !index.split('\0').some((entry) => entry.startsWith('160000 '))) {
+    return new Set<string>()
+  }
   const output = await git(repoRoot, ['submodule', 'status', '--recursive']).catch(() => '')
   const paths = new Set<string>()
   for (const line of output.split('\n')) {

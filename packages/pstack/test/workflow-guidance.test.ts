@@ -7,15 +7,17 @@ function skill(path: string): string {
 }
 
 describe('standalone pstack worker contracts', () => {
-  it.each(['recall', 'automate-me', 'maintain-verification-skill', 'show-me-your-work'])(
-    '%s supplies planning capabilities and an explicit review role',
-    (name) => {
-      const source = skill(`${name}/SKILL.md`)
-      expect(source).toContain('capability_profile: "pstack-leaf"')
-      expect(source).toContain('role: "judgment and prose"')
-      expect(source).toContain('subagent_type: "generalPurpose"')
-    },
-  )
+  it.each([
+    ['recall', 'judgment and prose'],
+    ['automate-me', 'judgment and prose'],
+    ['maintain-verification-skill', 'judgment and prose'],
+    ['show-me-your-work', 'code review'],
+  ])('%s supplies planning capabilities and its scoped role', (name, role) => {
+    const source = skill(`${name}/SKILL.md`)
+    expect(source).toContain('capability_profile: "pstack-leaf"')
+    expect(source).toContain(`role: "${role}"`)
+    expect(source).toContain('subagent_type: "generalPurpose"')
+  })
 
   it('keeps autonomous wakeups in the actual loop session', () => {
     const source = skill('poteto-mode/playbooks/autonomous-run.md')

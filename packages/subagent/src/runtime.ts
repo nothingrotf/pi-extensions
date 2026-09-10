@@ -89,6 +89,7 @@ import type {
   RetryFailure,
   RetryState,
   RunRecord,
+  RunTiming,
   RunUsage,
   StructuredOutput,
   TaskInput,
@@ -155,6 +156,7 @@ interface ActiveRun {
   scope: DescendantScope
   session: AgentSession
   startedAt: number
+  timing: RunTiming
   workspace: WriterWorkspace | undefined
   workspaceContext: WorkspaceContext
 }
@@ -186,6 +188,7 @@ export interface SubagentSnapshot {
   running: boolean
   sessionFile: string
   startedAt: number
+  timing?: RunTiming | undefined
   status: RunRecord['status']
   subagentType: RunRecord['subagentType']
   usage: RunUsage
@@ -276,6 +279,7 @@ export interface SubagentResult {
   status: Exclude<RunRecord['status'], 'running'>
   structuredOutput: StructuredOutput | undefined
   transcriptPath: string
+  timing?: RunTiming | undefined
   usage: RunUsage
 }
 
@@ -355,6 +359,7 @@ export interface RuntimeCompletedDetails {
   taskId: string
   toolCallCount: number
   transcriptPath: string
+  timing?: RunTiming | undefined
   usage: RunUsage
 }
 
@@ -392,6 +397,7 @@ export interface RuntimeFailedDetails {
   status: 'error'
   structuredOutput?: StructuredOutput
   taskId?: string
+  timing?: RunTiming | undefined
 }
 
 export interface RuntimeFailedResult {
@@ -743,7 +749,10 @@ export class SubagentRuntime {
       contextState,
       description: record.description,
       effort: record.effort,
-      endedAt: active === undefined && record.status !== 'running' ? record.updatedAt : undefined,
+      endedAt:
+        active === undefined && record.status !== 'running'
+          ? (record.timing?.settledAt ?? record.updatedAt)
+          : undefined,
       error: record.error,
       intercomUsage: active?.intercomUsage ?? record.intercomUsage ?? emptyUsage(0),
       isolation: active?.isolationReceipt ?? record.isolation,
@@ -757,7 +766,8 @@ export class SubagentRuntime {
       retryState: active?.retryState,
       running: active !== undefined,
       sessionFile: record.sessionFile,
-      startedAt: active?.startedAt ?? terminalStartedAt,
+      startedAt: active?.startedAt ?? record.timing?.executionStartedAt ?? terminalStartedAt,
+      timing: record.timing === undefined ? undefined : { ...record.timing },
       status: active === undefined ? record.status : 'running',
       subagentType: record.subagentType,
       usage:
@@ -1254,7 +1264,13 @@ export class SubagentRuntime {
     if (!isolated) return ''
     const root = await this.resolveRootWorkspaceContext(ctx)
     const repoRoot = (await repositoryRoot(root.physicalRoot)) ?? root.physicalRoot
-    return relativeCwdWithin(repoRoot, logicalCwd)
+    const relativeCwd = relativeCwdWithin(repoRoot, logicalCwd)
+    if (relativeCwd.split(/[/\\]/).includes('.git')) {
+      throw new Error(
+        'Task cwd targets Git metadata, which writer snapshots exclude. Integrate the accepted patch into the destination workspace before dispatching an isolated verifier.',
+      )
+    }
+    return relativeCwd
   }
 
   private async isolationDestination(context: WorkspaceContext): Promise<IsolationDestination> {
@@ -1335,6 +1351,9 @@ export class SubagentRuntime {
     const policies: boolean[] = []
     for (const input of inputs) {
       const execution = await this.resolveExecution(ctx, input, undefined, runtime, undefined)
+      if (!execution.contract.readonly) {
+        await this.rootRelativeCwd(ctx, execution.contract.logicalCwd, true)
+      }
       policies.push(execution.contract.readonly)
     }
     return policies
@@ -1419,6 +1438,7 @@ export class SubagentRuntime {
   }
 
   private async start(options: StartOptions): Promise<RuntimeResult> {
+    const requestedAt = Date.now()
     if (!this.accepting) throw new Error('The subagent owner is shutting down.')
     if (options.skipOwnerCheck !== true) {
       this.ensureOwner(options.ctx)
@@ -1444,7 +1464,7 @@ export class SubagentRuntime {
     if (prompt.length === 0) throw new Error('The Task prompt is empty.')
     const prior = input.resume === undefined ? undefined : this.resolveResume(input)
     if (prior === undefined)
-      return this.startSession(options, description, prompt, undefined, ownerFence)
+      return this.startSession(options, description, prompt, undefined, ownerFence, requestedAt)
     if (options.skipOwnerCheck === true) {
       if (
         prior.parentAgentId !== options.parentAgentId ||
@@ -1458,7 +1478,7 @@ export class SubagentRuntime {
 
     this.leases.add(prior.agentId)
     try {
-      return await this.startSession(options, description, prompt, prior, ownerFence)
+      return await this.startSession(options, description, prompt, prior, ownerFence, requestedAt)
     } catch (error) {
       this.leases.delete(prior.agentId)
       throw error
@@ -1471,6 +1491,7 @@ export class SubagentRuntime {
     prompt: string,
     prior: RunRecord | undefined,
     ownerFence: OwnerFence,
+    requestedAt: number,
   ): Promise<RuntimeResult> {
     const input = options.input
     const runtime = await this.getModelRuntime(options.ctx)
@@ -1520,6 +1541,7 @@ export class SubagentRuntime {
     let session: AgentSession | undefined
     let record: RunRecord | undefined
     let active: ActiveRun
+    let workspaceSetupMs = 0
     const parentScopeCompletion =
       parentActive === undefined ? undefined : Promise.withResolvers<RuntimeTerminalResult>()
     const requestedCwd = contract.logicalCwd
@@ -1534,6 +1556,7 @@ export class SubagentRuntime {
             ? requestedPhysicalCwd
             : joinEffectiveCwd(parentContext.physicalRoot, contract.relativeCwd)
       } else {
+        const workspaceStartedAt = performance.now()
         const destination = await this.isolationDestination(parentContext)
         isolation = await createIsolation({
           destination,
@@ -1544,11 +1567,13 @@ export class SubagentRuntime {
           writerId,
         })
         this.registerWorkspace(isolation)
+        workspaceSetupMs = performance.now() - workspaceStartedAt
         effectiveCwd = joinEffectiveCwd(
           isolation.context.physicalRoot,
           isolation.context.relativeCwd,
         )
       }
+      await resolveInvocationCwd(effectiveCwd, undefined)
       const capability = contract.capability
       const nestedPolicy = capability?.nested
       const nestedExtension =
@@ -1569,6 +1594,7 @@ export class SubagentRuntime {
       if (nestedExtension !== undefined)
         extensions.push(nestedExtension, this.scopeBoundTaskControlExtension())
 
+      const sessionStartedAt = performance.now()
       session = await createChildSession({
         ctx: options.ctx,
         cwd: effectiveCwd,
@@ -1616,6 +1642,7 @@ export class SubagentRuntime {
             ? contract.tools
             : [...contract.tools, 'Task', 'TaskControl'],
       })
+      const sessionSetupMs = performance.now() - sessionStartedAt
       this.assertOwnerFence(ownerFence)
       if (parentActive?.abortReason !== undefined) throw new Error(parentActive.abortReason)
       const sessionFile = session.sessionFile
@@ -1641,7 +1668,13 @@ export class SubagentRuntime {
       else if (options.parentAgentId !== undefined)
         contract.lineage.parentAgentId = options.parentAgentId
 
-      const now = Date.now()
+      const now = Math.max(requestedAt, Date.now())
+      const timing: RunTiming = {
+        requestedAt,
+        executionStartedAt: now,
+        workspaceSetupMs,
+        sessionSetupMs,
+      }
       this.assertOwnerFence(ownerFence)
       this.runGeneration += 1
       record = {
@@ -1665,6 +1698,7 @@ export class SubagentRuntime {
         sessionFile,
         status: 'running',
         subagentType: input.subagent_type,
+        timing,
         updatedAt: now,
       }
       if (contract.role !== undefined) record.role = contract.role
@@ -1721,7 +1755,8 @@ export class SubagentRuntime {
           else this.state.unpin(agentId)
         }),
         session,
-        startedAt: Date.now(),
+        startedAt: timing.executionStartedAt,
+        timing,
         workspace: isolation,
         workspaceContext: isolation?.context ?? parentContext,
       }
@@ -2534,6 +2569,7 @@ export class SubagentRuntime {
         active.session.prompt(prompt, { expandPromptTemplates: false }),
         timeoutPromise,
       ])
+      active.timing.executionEndedAt = Math.max(active.startedAt, Date.now())
       if (active.abortReason !== undefined) throw new Error(active.abortReason)
 
       const text = finalText(active.messages)
@@ -2685,8 +2721,10 @@ export class SubagentRuntime {
       if (active.isolationReceipt !== undefined) {
         this.assignIsolationReceipt(record, active.isolationReceipt)
       }
+      active.timing.settledAt = Math.max(active.timing.executionEndedAt, Date.now())
       const completedRecord: RunRecord = {
         ...record,
+        timing: { ...active.timing },
         artifact,
         durationMs,
         gateResults,
@@ -2720,6 +2758,7 @@ export class SubagentRuntime {
           status: 'completed',
           toolCallCount: active.metrics.toolCalls,
           transcriptPath: record.sessionFile,
+          timing: { ...active.timing },
           structuredOutput,
           taskId: record.itemId ?? 'task',
           usage,
@@ -2727,6 +2766,7 @@ export class SubagentRuntime {
         kind: 'completed',
       }
     } catch (error) {
+      active.timing.executionEndedAt ??= Math.max(active.startedAt, Date.now())
       if (active.abortPromise !== undefined) await active.abortPromise
       const fullOutput = finalText(active.messages, active.partialMessage)
       const output = truncateOutput(fullOutput)
@@ -2853,6 +2893,7 @@ export class SubagentRuntime {
           ? undefined
           : structuredClone(record.structuredOutput),
       transcriptPath: record.sessionFile,
+      timing: record.timing === undefined ? undefined : { ...record.timing },
       usage: { ...(record.usage ?? emptyUsage(record.durationMs ?? 0)) },
     }
   }
@@ -2888,8 +2929,11 @@ export class SubagentRuntime {
     if (active.isolationReceipt !== undefined) {
       this.assignIsolationReceipt(record, active.isolationReceipt)
     }
+    active.timing.executionEndedAt ??= Math.max(active.startedAt, Date.now())
+    active.timing.settledAt = Math.max(active.timing.executionEndedAt, Date.now())
     let failedRecord: RunRecord = {
       ...record,
+      timing: { ...active.timing },
       durationMs,
       error,
       intercomUsage: active.intercomUsage,
@@ -2927,6 +2971,7 @@ export class SubagentRuntime {
       runId: record.runId ?? record.agentId,
       status: 'error',
       taskId: record.itemId ?? 'task',
+      timing: { ...active.timing },
     }
     if (outputState !== undefined) {
       details.artifact = outputState.artifact

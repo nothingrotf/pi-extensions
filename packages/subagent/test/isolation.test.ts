@@ -10,6 +10,7 @@ import {
   commitTree,
   commonDirectory,
   git,
+  nestedRepositories,
   promoteCommit,
   repositoryRoot,
 } from '../src/git-isolation.ts'
@@ -496,6 +497,40 @@ describe('writer isolation', () => {
       await cleanupWorkspaceArtifacts(parent)
     } finally {
       await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('distinguishes indexed submodules from independent nested repositories', async () => {
+    const directory = await repository()
+    const upstream = await repository()
+    try {
+      await git(directory, [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        upstream,
+        'vendor/submodule',
+      ])
+      await git(directory, ['commit', '-qm', 'submodule'])
+      const independent = join(directory, 'vendor', 'independent')
+      await git(directory, ['clone', '-q', upstream, independent])
+      expect(await nestedRepositories(directory)).toEqual(['vendor/independent'])
+      const isolation = await writer(directory, 'writer-submodule-discovery')
+      expect(isolation.repositories.map((entry) => entry.relativePath)).toEqual([
+        '',
+        'vendor/independent',
+      ])
+      const receipt = await captureIsolation(isolation)
+      expect(receipt.captureStatus).toBe('captured')
+      expect(receipt.repositories.map((entry) => entry.relativePath)).toEqual([
+        '',
+        'vendor/independent',
+      ])
+      await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+      await rm(upstream, { force: true, recursive: true })
     }
   }, 180_000)
 

@@ -38,8 +38,15 @@ describe('Task capability tool selection', () => {
     expect(() => resolveTools(agent, undefined, false, ['todo_read', 'todo_read'])).toThrow(
       /conflicts/,
     )
-    expect(resolveTools(agent, ['bash', 'write', 'todo_read'], true, planning)).toEqual([
-      'todo_read',
+    expect(() => resolveTools(agent, ['bash', 'write', 'todo_read'], true, planning)).toThrow(
+      'not available in read-only mode',
+    )
+    expect(resolveTools(agent, undefined, true, planning)).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      ...planning,
     ])
   })
 })

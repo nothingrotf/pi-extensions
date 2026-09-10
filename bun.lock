@@ -75,6 +75,9 @@
     "packages/hud": {
       "name": "@nothingrotf/hud",
       "version": "0.1.0",
+      "dependencies": {
+        "grok-mermaid": "0.2.2",
+      },
       "devDependencies": {
         "@earendil-works/pi-ai": "catalog:",
         "@earendil-works/pi-coding-agent": "catalog:",

@@ -27,7 +27,9 @@ describe('architect', () => {
     expect(skill).toContain('parsed `architect runners` runtime policy')
     expect(skill).toContain('provider/model-id:effort [fast]')
     expect(skill).toContain('pass each selected `Task.model` explicitly')
-    expect(skill).toContain('use four inherited runners')
+    expect(skill).toContain('availability for selection, never a dispatch count')
+    expect(skill).toContain('at least two structurally distinct candidates')
+    expect(skill).not.toContain('use four inherited runners')
     expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 

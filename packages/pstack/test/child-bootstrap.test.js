@@ -552,6 +552,52 @@ function policyInput(overrides = {}) {
 }
 
 describe('pstack runtime model policy', () => {
+  it.each(['code review', 'runtime verification', 'publication'])(
+    'selects and retains the %s model through a read-only Task policy probe',
+    async (role) => {
+      const plans = new Map()
+      const h = await harness(
+        true,
+        plans,
+        [
+          'judgment and prose: pstack-test/model:off',
+          'arena cross-judge pool: pstack-test/configured:high, openai-codex/gpt-5.4:low',
+        ].join('\n'),
+      )
+      try {
+        const input = policyInput({ role })
+        if (role !== 'publication') input.model = 'pstack-test/configured:high'
+        const result = await invoke(h, plans, 'delivery-role', 'Task', input)
+        expect(result.status).toBe('completed')
+        expect(h.runtime.listSnapshots()).toHaveLength(1)
+        expect(h.runtime.getRecord(result.agentId)).toMatchObject({
+          role,
+          model: role === 'publication' ? 'pstack-test/model' : 'pstack-test/configured',
+          execution: { role, readonly: true },
+        })
+        expect(h.inventories.find((entry) => entry.action === 'read:policy').tools).not.toContain(
+          'Task',
+        )
+        expect(h.inventories.find((entry) => entry.action === 'read:policy').tools).not.toContain(
+          'bash',
+        )
+        const resumed = await invoke(h, plans, 'resume-delivery', 'Task', {
+          description: 'Continue the same scoped delivery role',
+          prompt: 'read:delivery-resumed',
+          subagent_type: 'generalPurpose',
+          resume: result.agentId,
+          run_in_background: false,
+        })
+        expect(resumed.status).toBe('completed')
+        expect(resumed.agentId).toBe(result.agentId)
+        expect(h.runtime.getRecord(result.agentId).role).toBe(role)
+        expect(h.runtime.listSnapshots()).toHaveLength(1)
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
   it('captures missing live policy evidence and dispatches through the SDK', async () => {
     const h = await harness(true)
     try {
@@ -1080,8 +1126,10 @@ function workflowInput(scenario, graph = false) {
     ],
   }
   if (!graph)
-    input.run_in_background = scenario.kind !== 'static' || scenario.id.startsWith('swarm-')
-  if (scenario.kind !== 'static') {
+    input.run_in_background =
+      (scenario.kind !== 'static' && scenario.kind !== 'publication') ||
+      scenario.id.startsWith('swarm-')
+  if (scenario.kind !== 'static' && scenario.kind !== 'publication') {
     input.isolation = {
       mode: 'worktree',
       integration: scenario.kind === 'verifier' ? 'manual' : (scenario.integration ?? 'apply'),
@@ -1169,6 +1217,15 @@ describe('individual pstack workflow SDK contracts with scripted model decisions
         await initializeRepository(h)
         const root = (await loadPstackBootstrap()).root
         plans.set(`read:${scenario.id}`, workflowSteps(scenario, root))
+        if (scenario.id === 'shipping-runtime') {
+          await writeFile(
+            join(h.dir, 'verify.mjs'),
+            'import { readFileSync } from "node:fs"; console.log(readFileSync("input.txt", "utf8").trim())\n',
+          )
+          plans
+            .get(`read:${scenario.id}`)
+            .push({ name: 'bash', arguments: { command: 'bun verify.mjs' } })
+        }
         plans.set(`read:nested-${scenario.id}`, [
           { name: 'read', arguments: { path: 'input.txt' } },
         ])
@@ -1223,7 +1280,11 @@ describe('individual pstack workflow SDK contracts with scripted model decisions
         expect(completed.tools.includes('bash')).toBe(scenario.kind !== 'static')
         expect(completed.tools).not.toContain('session_history')
         expect(completed.tools).not.toContain('mcp')
-        if (scenario.kind !== 'static') {
+        if (scenario.kind === 'publication') {
+          expect(started.status).toBe('completed')
+          expect(record.isolation).toBeUndefined()
+          expect(await readFile(join(h.dir, 'output.txt'), 'utf8')).toBe(scenario.id)
+        } else if (scenario.kind !== 'static') {
           await expect(readFile(join(h.dir, 'output.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
           const receipt = await invoke(h, plans, `join-${scenario.id}`, 'TaskControl', {
             action: 'join',
@@ -1236,6 +1297,32 @@ describe('individual pstack workflow SDK contracts with scripted model decisions
             expect(receipt.outcome).toBe('joined')
             expect(await readFile(join(h.dir, 'output.txt'), 'utf8')).toBe(scenario.id)
           }
+        }
+        if (scenario.id === 'shipping-runtime') {
+          const attempt = record.isolation.attemptId
+          plans.set('read:verification-followup', [
+            { name: 'bash', arguments: { command: 'bun verify.mjs' } },
+          ])
+          const resumed = await invoke(h, plans, 'resume-verifier', 'Task', {
+            description: 'Complete the retained verification verdict',
+            prompt: 'read:verification-followup',
+            subagent_type: scenario.type,
+            role: scenario.role,
+            resume: started.agentId,
+            run_in_background: false,
+          })
+          expect(resumed.agentId).toBe(started.agentId)
+          expect(resumed.role).toBe('runtime verification')
+          expect(resumed.status).toBe('completed')
+          const retained = h.runtime.getRecord(started.agentId)
+          expect(retained.isolation.integration).toBe('manual')
+          expect(retained.isolationAttempts.some((entry) => entry.attemptId === attempt)).toBe(true)
+          const followup = h.inventories.findLast(
+            (entry) => entry.action === 'read:verification-followup',
+          )
+          expect(JSON.stringify(followup.results)).toContain('WORKFLOW_SOURCE_SENTINEL')
+          expect(followup.results.every((result) => !result.isError)).toBe(true)
+          await expect(readFile(join(h.dir, 'output.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
         }
         if (scenario.id === 'why-followup') {
           plans.set('read:followup', [{ name: 'read', arguments: { path: 'input.txt' } }])

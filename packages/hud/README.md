@@ -78,6 +78,8 @@ Assistant messages render Markdown with these rules:
 - Bare project paths and single-backtick paths become `file://` links after the path exists on disk. Line and column suffixes stay visible in the label.
 - Headings hide their `#` markers. Level one and two use the primary color. Deeper levels use the secondary color.
 - Code blocks use a brand-colored left border instead of fences. Highlighting uses the active Pi syntax theme when the language is known.
+- Complete `mermaid` fences render as Unicode diagrams. `graph` and `flowchart` support `TD`/`TB`, `BT`, `LR`, and `RL` directions, node shapes, branches, solid, dotted, and labeled edges, subgraphs, and `<br/>` labels. `sequenceDiagram` supports participants, messages, self-messages, notes, `loop`/`alt`/`opt` sections, and autonumbering.
+- Unsupported, malformed, or partially parsed Mermaid syntax remains visible as its original code. Mermaid fences still streaming are not rendered until their real closing fence arrives. A diagram wider than the code block also falls back to the original code instead of wrapping and damaging the diagram.
 - Tables use rounded borders and one header rule.
 - List markers use the warning color. Task markers use success and dim colors.
 - Quotes use a faint border with muted italic text.

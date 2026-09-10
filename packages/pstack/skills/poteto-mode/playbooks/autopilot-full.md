@@ -1,13 +1,78 @@
 ### Autopilot-full
 
-**You own the verdicts, never the PRs. One owner runs each PR from build to merge, and nothing merges without your clean swarm verdict.** For "autopilot this queue", "full autopilot", and one-owner-per-PR programs. Orchestrate runs a standing program whose coordinator lands verified work itself and whose workers never merge. Here each PR's owner carries the whole lifecycle through the merge, and the root keeps only verification, countersigns, and audits.
+Keep one persistent implementer per issue through build and compatible corrections.
+The root owns independent verification, countersigns, and audits.
+This playbook requires explicit autonomy and landing authority for the queue.
 
-1. **Mark the operator's items and honor state-then-wait.** Items the operator names stay hers. She reviews and she clicks, and no owner merges one. When she asks for the protocol or the plan to be stated, deliver the statement and stop. Execution starts only on her explicit go. On that go, arm a `/goal` with the full program objective. The goal continues across turns until the queue is done.
-2. **Spawn one owner per PR with the full lifecycle and a durable trail.** One `Task` owner in a managed worktree owns each PR build, pull request registration, self-proof on the real artifact (the **prove-it-works** principle skill), skeptical Bugbot triage per `../references/bugbot-triage.md`, a `/deslop` pass, `/no-comments` (the **no-comments** skill), a rebase onto current trunk, the babysit loop to green (`playbooks/babysit.md`), and the merge itself. Every owner starts an uncommitted `decisions.tsv` and returns verified changes with its report. Pass `capability_profile: "pstack-nested"` and an exact implementation role, `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb`. Separately scoped publication Tasks pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. The root reviews the accepted patch before a separately scoped foreground Task commits, pushes, and opens the destination PR. Never publish synthetic snapshot history. Keep external evidence collection and Loop scheduling at the root. Apply this publication boundary to later rebases and merge operations too. The PR URL, decisions, and checks form a recoverable trail if the owner stops. The rebase always precedes babysit and never waits for drift or conflicts. The merge is the one step an owner may not take alone. Step 4 gates it.
-3. **Run owners in true parallel and never stack.** Many owners at once when PRs are self-contained: one writer per branch, disjoint files, cross-PR drift absorbed by rebase. Only genuinely overlapping work serializes. Self-contained PRs branch straight off main, and sequenced work is merge-then-branch. Register independent PRs with Graphite when it is selected. Otherwise use `gh pr create`. One exception: an owner that must split a genuinely dependent change can hold a short private stack through `../references/stack-backends.md`.
-4. **Swarm-verify every merge-ready head before its merge.** At the owner's merge-ready head SHA, fan out parallel independent verifiers per the **swarm** skill and aggregate to one verdict. The lanes re-run the gates at that SHA, prove the load-bearing behavior live on the real surface, and audit the receipts and diff. Use `control-cli` or `control-ui` for the live surface. Run the same load-bearing scenario on current trunk as the regression lane. If trunk lacks the feature, record that fact and verify the behavior that the diff adds plus the final state that the user waits for. The live lane is the floor, and a verdict without it is not clean. No merge without the root's clean verdict. Findings go back to the owner for fix-forward, and the new head gets a fresh swarm and a fresh verdict.
-5. **On a clean verdict the owner merges and takes the next item.** The owner merges only from a head freshly rebased onto trunk. The merge-ready report records the base SHA, head SHA, and stable patch-id of the base-to-head diff. If trunk moves again, the patch rule in `playbooks/shipping.md` governs re-verification. A changed patch voids the verdict. An unchanged patch keeps the code verdict, but mergeability and CI must pass at the current head. The owner squash-merges its own PR and picks up its next self-contained item from the queue. The operator's full-autonomy grant plus the root's clean verdict is the merge authorization that babysitting alone never has. Operator-named items stop at merge-ready and wait for her click.
-6. **Run the root layer.** A genuinely new raise of a pinned gate or budget value (a limit CI only lets tighten) needs your fresh countersign, granted only after verifier proof. Absorbing values that already landed on main is drift, not a raise. Run an audit tick over all owners roughly every 30 minutes. Arm each tick with the installed `loop` skill. Use a watcher when an event exists and a 30-minute heartbeat fallback. Never leave the cadence to memory or lossy completion notifications. At each tick, re-read this bundled playbook, then re-read the armed `/goal`. Audit the operation against both. Fix drift during that tick. Probe each owner with a generic liveness or status check, and collect the decision trails. Count only side effects as progress: commits, pushes, PR or check deltas, and store reports. Treat a lane that passes its expected runtime without a side effect as stuck. Stand it down and dispatch a replacement at once. Do not wait for a polite return. When merges batch, run a retro pass and a post-merge bot-comment sweep.
-7. **Stand down instantly on the operator's stop.** Her hold or stand-down reaches every owner as a zero-writes order immediately. Owners hold their briefs until she releases them.
+1. **Honor operator gates.**
+   Keep operator-named items under operator review and landing control.
+   If the operator requests a plan, state it and wait for an explicit go.
+   After that go, arm a `/goal` with the full queue objective.
 
-**Reply:** the queue with each PR's owner, state, and head SHA. Each verdict and the swarm that produced it. What merged and what each owner took next. Countersigns granted and why. Open operator gates. Where the collected decision trails live.
+2. **Create durable issue lanes.**
+   Pass the per-issue fields from `../references/delivery-contract.md` inside each Task prompt.
+   Keep the accepted design, artifact identities, acceptance criteria, and verification owner attached through corrections.
+   Start an uncommitted `decisions.tsv` and retain checks, findings, and the PR URL.
+   Resume the same implementer while its contract remains compatible.
+   Use the exact implementation role and `pstack-leaf` for a bounded implementer.
+   If the owner must delegate, use `pstack-nested` within its depth limit.
+   Keep external evidence collection, runtime preflight, telemetry, and evaluation utility at the root.
+
+3. **Start two independent lanes.**
+   Verify disjoint files, dependencies, branches, and mutable resources before parallel dispatch.
+   Lane count follows verified independence, never the size of a configured model pool.
+   Serialize overlapping work and shared topology changes.
+   Branch self-contained issues from main and use merge-then-branch for sequenced work.
+   If a genuinely dependent split needs a private stack, follow `../references/stack-backends.md`.
+   Record the first two issues as the time-to-acceptance pilot through `../references/throughput.md`.
+   Review the pilot before increasing concurrency.
+
+4. **Build and verify the accepted artifact.**
+   Run early risk probes and reuse the pinned harness through corrections.
+   Apply self-proof, skeptical Bugbot triage, deslop, and comment cleanup through the delivery contract.
+   Assign one independent reviewer that never wrote the implementation.
+   For combined static and live checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
+    For static-only review, use `role: "code review"` with read-only tools.
+    Select one permitted model from the required family, not every pool entry.
+    Preserve that role and contract on compatible corrections, and require one complete verdict.
+   Before landing, verify load-bearing behavior, required gates, receipts, and the diff at the merge-ready head.
+   Use `control-cli` or `control-ui` for the actual surface.
+   Run the load-bearing regression on current trunk when that behavior exists.
+   If trunk lacks the feature, record that limit and verify the added behavior and final user-visible state.
+   For distinct high-risk boundaries or an explicit swarm requirement, partition verification through the **swarm** skill.
+   Do not start duplicate verifiers for the same proof merely because a model pool is large.
+   Return findings to the same implementer and affected evidence to the same reviewer.
+   Invalidate changed evidence according to the delivery contract, without rerunning unchanged passing checks unnecessarily.
+
+5. **Separate publication and landing.**
+   Send the accepted patch to a separately scoped foreground publication Task for destination commit, push, and PR creation.
+   Pass `role: "publication"` and `capability_profile: "pstack-leaf"` to publication.
+    Include commit and PR text in that operation without a separate prose-preparation Task.
+   Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
+   Rebase onto current trunk before babysit through `playbooks/babysit.md`.
+   Apply the same foreground destination boundary to later rebases and landing operations.
+   Record the base SHA, head SHA, and stable patch-id with the root verdict.
+   If trunk moves, apply the patch rule from `playbooks/shipping.md`.
+   A changed patch voids the code verdict, while an unchanged patch still requires current mergeability and CI.
+   Dispatch landing only with explicit queue landing authority and the root's clean independent verdict.
+   Squash-merge only the accepted PR, then assign the next independent issue to its owner.
+   Operator-named items remain merge-ready until the operator acts.
+
+6. **Audit the root layer.**
+   Require a fresh root countersign for a genuinely new increase in a pinned gate or budget.
+   Absorbing a value already on main is drift, not an increase.
+   Arm an audit with the installed `loop` skill, an event watcher when available, and a 30-minute heartbeat fallback.
+   At each audit, reread this playbook and the armed goal.
+   Inspect Task status, decision trails, real checks, commits, pushes, and PR changes.
+   Do not infer progress or failure solely from token output or silence.
+   If a lane exceeds its expected runtime without evidence, diagnose it before replacing the owner.
+   Cancel a genuinely stuck writer before replacing it from retained scope and evidence.
+   After a merge batch, review outcomes and inspect new bot comments.
+
+7. **Honor an immediate stop.**
+   Cancel isolated writers for a zero-write order and stop publication or landing dispatches.
+   Steering alone does not stop an in-flight write.
+   Keep retained briefs and evidence until the operator releases the hold.
+
+**Reply:** Report each issue's implementer, state, head SHA, and independent verdict.
+List landed work, next assignments, countersigns, operator gates, pilot limits, and retained evidence locations.

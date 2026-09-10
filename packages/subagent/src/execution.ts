@@ -60,6 +60,9 @@ export function resolveTools(
     if (!allowed.includes(name)) {
       throw new Error(`Task tool "${name}" is not permitted by agent "${role.name}".`)
     }
+    if (requested !== undefined && readonly && MUTABLE_TOOLS.has(name)) {
+      throw new Error(`Task tool "${name}" is not available in read-only mode.`)
+    }
   }
   return selected.filter((name) => !readonly || !MUTABLE_TOOLS.has(name))
 }

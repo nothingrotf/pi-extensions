@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
+Run `how` when the model is missing or the design is contested. An accepted design for an issue carries its grounding, and implementing against one does not rerun this skill.
+
 Pass `capability_profile: "pstack-leaf"` for every worker below. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
 
 Use the parsed pstack runtime policy in context. Omit `Task.model` for explorer and explainer roles to select their configured model. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.

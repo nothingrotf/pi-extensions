@@ -163,6 +163,7 @@ interface TaskStatusSummary {
   started_at: number
   state: SubagentSnapshot['status']
   subagent_type: SubagentSnapshot['subagentType']
+  timing?: SubagentSnapshot['timing']
   usage: SubagentSnapshot['usage']
 }
 
@@ -283,6 +284,7 @@ function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
     started_at: snapshot.startedAt,
     state: snapshot.status,
     subagent_type: snapshot.subagentType,
+    timing: snapshot.timing,
     usage: snapshot.usage,
   }
 }

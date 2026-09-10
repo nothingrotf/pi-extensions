@@ -1,16 +1,85 @@
 ### Autopilot-stack
 
-**You own the stack, never the landing. Build and verify the queue with full autonomy, then hand the operator one linear stack she reviews and lands herself.** The sibling of **Autopilot-full**. Select one backend through `../references/stack-backends.md` before the first stack mutation.
+Build and verify the queue, then deliver one linear reviewed stack for the operator to land.
+Select a backend through `../references/stack-backends.md` before the first topology mutation.
+This playbook grants no merge authority.
 
-1. **Run the owner loop with a durable trail.** One `Task` owner in a managed worktree owns each PR end to end: build, registration through the selected backend, self-proof (gates, CI, receipts), skeptical Bugbot triage per `../references/bugbot-triage.md`, a `/deslop` pass, `/no-comments` (the **no-comments** skill), and babysit to green per `playbooks/babysit.md`. Owners parallelize when the work is self-contained. Every owner starts an uncommitted `decisions.tsv` and returns verified changes with its report. Pass `capability_profile: "pstack-nested"` and an exact implementation role, `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb`. Separately scoped publication Tasks pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. The root reviews the accepted patch before a separately scoped foreground Task commits and pushes the destination branch. Never publish synthetic snapshot history. Keep external evidence collection and Loop scheduling at the root. Open the destination PR ready when its intended base exists. Otherwise the root opens it immediately after attachment to the stack topology. Return the PR URL and decision trail in the owner report.
-2. **Audit on the wake chain.** The root runs an audit tick roughly every 30 minutes. Arm each tick with the installed `loop` skill. Use a watcher when an event exists and a 30-minute heartbeat fallback. Never leave the cadence to memory or lossy completion notifications. At each tick, re-read this bundled playbook, then re-read the armed `/goal`. Audit the operation against both. Fix drift during that tick. Probe each owner with a generic liveness or status check. Count only side effects as progress: commits, pushes, PR or check deltas, and store reports. Treat a lane that passes its expected runtime without a side effect as stuck. Stand it down and dispatch a replacement at once. Do not wait for a polite return.
-3. **Hold the operator gates.** State-then-wait, so a request to state the plan is not a go. On her explicit go, arm a `/goal` with the full program objective. The goal continues across turns until the chain is done. On her stop, every owner takes an immediate zero-writes hold.
-4. **Verify at STACK-READY.** The owner reports STACK-READY with the base SHA, head SHA, and stable patch-id. The root swarm-verifies that head, fan-out per the **swarm** skill: parallel independent verifiers re-run the gates, the live behavior, and the trunk regression lane. Another lane audits the receipts and diff and distrusts the PR body. The swarm aggregates one verdict. Findings go back to the owner, and nothing enters the stack unverified.
-5. **Append on a clean verdict, never ship.** No owner merges, arms auto-merge, or closes. A clean verdict appends the PR to one ordered stack plan, in verified order or an order the operator specified.
-6. **Single writer on topology, parallel writers on builds.** Separately scoped publication Tasks push only their assigned destination branches. They report each branch tip, current base, and intended parent. The root is the only topology writer. Before each topology mutation, fetch the intended parent and verify the remote child tip with `git ls-remote`. Use `--force-with-lease` for a rewritten child branch. With Graphite, the root runs `gt track -p <current-tip>` and `gt submit --no-interactive --stack`. With GitHub, the root adopts the complete ordered branch chain with `gh stack init --base <trunk> <branches...>`, then runs `gh stack submit --auto --open`. Never mix backend metadata in one run.
-7. **Absorb drift at the root, then re-verify what moved.** The root uses `gt restack` and `gt sync` for Graphite. It uses `gh stack rebase` and `gh stack sync` for GitHub. When a rebase surfaces conflicts in an owner's files, that owner fixes its own slice and the root pushes the result. Compare `git patch-id --stable` for each old and new base-to-head diff. A changed patch returns to step 4. An unchanged patch keeps the code verdict, but mergeability and CI must pass at the current head. Re-run the live regression lane when parent or trunk drift changes load-bearing behavior. The countersign rule is unchanged from Autopilot-full. A genuinely new pin raises a stop for the root's fresh countersign. Absorbing drift of landed values is not a raise.
-8. **Deliver the chain.** The deliverable is one linear chain of verified PRs, reviewable bottom-up in the selected backend's UI, every link carrying its verifier verdict in the PR body or a comment. The operator reviews and lands it through that backend.
+1. **Keep durable issue owners.**
+   Assign one persistent implementer per issue and one independent reviewer that never wrote its code.
+   Pass the per-issue fields from `../references/delivery-contract.md` inside the Task prompt.
+   Retain the accepted design, artifact identities, verification owner, acceptance criteria, and an uncommitted `decisions.tsv`.
+   Resume the same implementer for compatible corrections.
+   Use the exact implementation role and `pstack-leaf` for a bounded implementer.
+   If the owner must delegate, use `pstack-nested` within its depth limit.
+   Keep external evidence collection, runtime preflight, telemetry, and evaluation utility at the root.
+   Apply early probes, self-proof, skeptical Bugbot triage, deslop, and comment cleanup through the delivery contract.
+   Run babysit through `playbooks/babysit.md` when its lifecycle requires it.
 
-**Choosing between the autopilots.** Autopilot-full when the PRs are independent and landing authority is granted. Autopilot-stack when the operator wants review before landing, the work is sequenced or coupled, or merge authority is withheld.
+2. **Start two independent lanes.**
+   Verify disjoint files, dependencies, branches, and mutable resources before parallel dispatch.
+   Lane count follows verified independence, never the size of a configured model pool.
+   Serialize dependent changes and shared topology writes.
+   Measure the first two issues through the time-to-acceptance procedure in `../references/throughput.md`.
+   Review the pilot before increasing concurrency.
 
-**Reply:** links to the stack root and tip, a one-line verdict summary per link, and anything parked or excluded with the reason.
+3. **Honor operator gates and audit wakeups.**
+   If the operator requests a plan, state it and wait for an explicit go.
+   After that go, arm a `/goal` with the full stack objective.
+   Arm audits with the installed `loop` skill, event watchers when available, and a 30-minute heartbeat fallback.
+   At each audit, reread this playbook and the goal.
+   Inspect Task status, evidence, checks, branch changes, and decision trails.
+   Diagnose a lane that exceeds its expected runtime without evidence before replacing its owner.
+   Cancel a stuck writer before replacing it from retained scope and evidence.
+   On an operator stop, cancel isolated writers and stop publication dispatches.
+   Steering alone cannot enforce an immediate zero-write hold.
+
+4. **Verify STACK-READY independently.**
+   Require the base SHA, head SHA, stable patch-id, and acceptance evidence.
+   Verify required gates, live behavior, trunk regression, receipts, and the diff at that head.
+   If trunk lacks the feature, record that limit and verify the added behavior and final user-visible state.
+   For combined static and runtime checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
+    For static-only review, use `role: "code review"` with read-only tools.
+    Select one permitted model from the required family, not every pool entry.
+    Preserve that role and contract on compatible corrections, and require one complete verdict.
+   Reuse the pinned harness, not an unverified surrogate artifact.
+   For distinct high-risk boundaries or an explicit swarm requirement, partition verification through the **swarm** skill.
+   Return findings to the same implementer and affected evidence to the same reviewer.
+   Apply the delivery contract's evidence invalidation rules after corrections.
+   Keep unresolved or unavailable proofs blocked, not clean.
+
+5. **Publish accepted patches separately.**
+   Accept the patch before a separately scoped foreground Task commits and pushes the destination branch.
+   Pass `role: "publication"` and `capability_profile: "pstack-leaf"` to publication.
+    Include commit and PR text in that operation without a separate prose-preparation Task.
+   Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
+   Open the PR ready when its intended base exists.
+   Otherwise, open it immediately after attaching it to the stack topology.
+   Append only accepted patches in verified order or the operator's specified order.
+   No implementer or publication Task merges, arms auto-merge, or closes the PR.
+
+6. **Keep one topology writer.**
+   Publication Tasks push only their assigned branches and report their tips, current bases, and intended parents.
+   Keep all topology writes at the root.
+   Before each topology change, fetch the intended parent and verify the remote child tip with `git ls-remote`.
+   Use `--force-with-lease` only for an authorized rewritten child branch.
+   For Graphite, run `gt track -p <current-tip>` and `gt submit --no-interactive --stack`.
+   For GitHub, run `gh stack init --base <trunk> <branches...>` and `gh stack submit --auto --open`.
+   Never mix backend metadata within one run.
+
+7. **Reverify affected drift.**
+   For Graphite, use `gt restack` and `gt sync`.
+   For GitHub, use `gh stack rebase` and `gh stack sync`.
+   Return conflicts to the implementer that owns the affected files, then push through the root publication boundary.
+   Compare each old and new base-to-head diff with `git patch-id --stable`.
+   A changed patch returns to verification.
+   An unchanged patch retains its code verdict but still requires current mergeability and CI.
+   Recheck live behavior when parent, trunk, configuration, or runtime changes invalidate its evidence.
+   Require a fresh root countersign for a genuinely new increase in a pinned gate or budget.
+
+8. **Deliver without landing.**
+   Return the ordered PR chain, owners, head identities, independent verdicts, pilot limits, and evidence locations.
+   Include each verifier verdict in the PR body or a comment through the authorized publication boundary.
+   The operator reviews and lands the stack through the selected backend.
+
+Use **Autopilot-full** only when the queue is independent and landing authority is explicit.
+Use **Autopilot-stack** when the operator retains landing control or the work requires a dependent chain.

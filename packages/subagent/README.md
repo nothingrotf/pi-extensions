@@ -73,7 +73,8 @@ A relative `cwd` resolves from the parent directory. The resolved path must exis
 
 The runtime permits absolute paths and parent traversal. Trusted adapters must apply a narrower policy when their boundary requires one.
 
-The effective tools equal the intersection of the runtime, agent, and call policies. Read-only policy then removes mutable tools.
+The effective tools equal the intersection of the runtime, agent, and call policies.
+Read-only policy removes default mutable tools and rejects explicitly requested mutable tools before session creation.
 
 Private intercom tools enter after policy validation. A call cannot request or remove them.
 
@@ -97,6 +98,14 @@ TaskControl({
 ```
 
 The result includes activity, state, usage, isolation evidence, and a terminal result when one exists.
+
+New attempts also expose `timing` with request, execution-start, execution-end, and terminal-settlement timestamps.
+`workspaceSetupMs` and `sessionSetupMs` measure preparation components.
+`executionStartedAt - requestedAt` measures total preparation, including preflight.
+Execution-end and settlement timestamps remain absent until their boundaries occur.
+Join preserves the original attempt timestamps, while resume records a new attempt.
+Legacy records omit exact timing because those preparation boundaries were not recorded.
+Task settlement does not establish delivery acceptance or independent review approval.
 
 List a bounded set of Tasks:
 
@@ -279,6 +288,10 @@ Task({
 
 The runtime requires a Git repository. Born and unborn repositories are supported.
 
+An isolated Task cannot target Git metadata or another managed workspace beneath `.git`.
+Integrate the accepted patch into its destination before dispatching an isolated verifier from that destination.
+The runtime checks the effective child directory before session construction.
+
 It creates a private workspace from a synthetic baseline commit.
 
 The synthetic baseline includes tracked, staged, unstaged, untracked, mode, and symbolic-link state.
@@ -383,6 +396,10 @@ runtime.registerCapabilityProfile({
 ```
 
 Set `capability_profile` on a Task call to select an approved profile.
+
+Capability tool parameter schemas must declare `type: 'object'` at the root.
+The registry rejects primitive roots, array roots, and bare unions before publication.
+Represent action variants within an explicit object-root schema.
 
 Registrations can include an optional typed `modelPolicy` through the same registration API or capability-publication event:
 

@@ -1,4 +1,4 @@
-import { setCapabilities, stripTerminalSequences } from '@earendil-works/pi-tui'
+import { setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { afterEach, describe, expect, test } from 'vite-plus/test'
 
 import { ansiForeground, hudBrand, hudBrandAlt, hudTextDim, hudTextPrimary } from '../src/colors.ts'
@@ -95,6 +95,134 @@ describe('prose markdown blocks', () => {
       'alpha beta',
       'gamma delta',
     ])
+  })
+})
+
+describe('Mermaid code blocks', () => {
+  test('renders the complete IAM flowchart as Unicode art', () => {
+    const source = [
+      '```mermaid',
+      'flowchart TD',
+      'A["Fluxo IAM<br/>recuperação, verificação ou convite"]',
+      'T["Transação PostgreSQL<br/>mudança IAM + intenção de e-mail"]',
+      'O[("Outbox durável")]',
+      'D["Worker de envio"]',
+      'P["Cloudflare Email Sending"]',
+      'R["Worker de reconciliação"]',
+      'S[("Estado da entrega")]',
+      'A -. "integração pendente" .-> T',
+      'T --> O',
+      'O --> D',
+      'D --> P',
+      'D --> S',
+      'P -. "evidências via Analytics" .-> R',
+      'R --> S',
+      '```',
+    ].join('\n')
+    const lines = plain(renderProseMarkdown(source, 100))
+
+    expect(lines).toContain('│  │ Fluxo IAM recuperação, │')
+    expect(lines.slice(0, 4).map((line) => visibleWidth(line))).toEqual([29, 29, 29, 29])
+    expect(lines).toContain('│               ▼integração pendente')
+    expect(lines).toContain('│      │ Outbox durável │')
+    expect(lines).toContain('│               ▼evidências via Analytics  │')
+    expect(lines).toContain('│     │ Estado da entrega │◄───────────────┘')
+    expect(lines).not.toContain('│ flowchart TD')
+  })
+
+  test('renders every documented flowchart direction', () => {
+    for (const direction of ['TD', 'TB', 'BT', 'LR', 'RL']) {
+      const source = `\`\`\`mermaid\nflowchart ${direction}\nA[Start] --> B[Done]\n\`\`\``
+      expect(plain(renderProseMarkdown(source, 100))).not.toContain(`│ flowchart ${direction}`)
+    }
+  })
+
+  test('renders sequence participants and messages', () => {
+    const source = [
+      '```mermaid',
+      'sequenceDiagram',
+      'participant A as Alice',
+      'participant B as Bob',
+      'A->>B: Hello',
+      'B-->>A: World',
+      '```',
+    ].join('\n')
+
+    expect(plain(renderProseMarkdown(source, 80))).toEqual([
+      '│ ┌───────┐  ┌─────┐',
+      '│ │ Alice │  │ Bob │',
+      '│ └───┬───┘  └──┬──┘',
+      '│     │         │',
+      '│     │  Hello  │',
+      '│     ├────────▶│',
+      '│     │         │',
+      '│     │  World  │',
+      '│     │◄╌╌╌╌╌╌╌╌┤',
+      '│     │         │',
+      '│ ┌───┴───┐  ┌──┴──┐',
+      '│ │ Alice │  │ Bob │',
+      '│ └───────┘  └─────┘',
+    ])
+  })
+
+  test('falls back to original code for unsupported syntax and narrow widths', () => {
+    expect(plain(renderProseMarkdown('```mermaid\npie\n"A" : 1\n```', 80))).toEqual([
+      '│ pie',
+      '│ "A" : 1',
+    ])
+    expect(
+      plain(renderProseMarkdown('```mermaid\nflowchart TD\nA --> B\ngarbage???\n```', 80)),
+    ).toEqual(['│ flowchart TD', '│ A --> B', '│ garbage???'])
+    expect(
+      plain(
+        renderProseMarkdown(
+          '```mermaid\nflowchart LR\nA[An exceptionally wide starting node] --> B[Done]\n```',
+          24,
+        ),
+      )[0],
+    ).toBe('│ flowchart LR')
+  })
+
+  test('falls back when parallel routing or label placement loses content', () => {
+    const parallel = '```mermaid\nflowchart TD\nA -->|yes| B\nA -->|no| B\n```'
+    const collision = [
+      '```mermaid',
+      'flowchart TD',
+      'A --> B',
+      'C --> D',
+      'A -->|long collision label| D',
+      'C -->|other label| B',
+      '```',
+    ].join('\n')
+
+    expect(plain(renderProseMarkdown(parallel, 100))).toEqual([
+      '│ flowchart TD',
+      '│ A -->|yes| B',
+      '│ A -->|no| B',
+    ])
+    expect(plain(renderProseMarkdown(collision, 100))).toContain('│ C -->|other label| B')
+  })
+
+  test('falls back for grapheme widths that differ from Pi', () => {
+    const thai = '```mermaid\nflowchart TD\nA["กำ"] --> B[Done]\n```'
+    const indic = '```mermaid\nflowchart TD\nA["कर्म"] --> B[Done]\n```'
+
+    expect(plain(renderProseMarkdown(thai, 100))[0]).toBe('│ flowchart TD')
+    expect(plain(renderProseMarkdown(indic, 100))[0]).toBe('│ flowchart TD')
+  })
+
+  test('does not render a synthetically closed streaming fence', () => {
+    const options = {
+      cwd: () => '/repo',
+      resolve: () => undefined,
+      revision: () => 0,
+      streaming: () => true,
+    }
+    const incomplete = new ProseMarkdown('```mermaid\nflowchart LR\nA --> B', options)
+    const complete = new ProseMarkdown('```mermaid\nflowchart LR\nA --> B\n```', options)
+
+    expect(plain(incomplete.render(80))).toEqual(['│ flowchart LR', '│ A --> B'])
+    expect(plain(complete.render(80))).not.toContain('│ flowchart LR')
   })
 })
 

@@ -344,6 +344,9 @@ export class CapabilityRegistry {
     }
     const names = new Set<string>()
     for (const tool of registration.tools) {
+      if (tool.parameters.type !== 'object') {
+        throw new Error(`Capability tool "${tool.name}" parameters must declare type "object".`)
+      }
       if (PRIVATE_TOOLS.has(tool.name) || tool.name.startsWith('subagent_')) {
         throw new Error(`Capability tool "${tool.name}" uses a reserved name.`)
       }

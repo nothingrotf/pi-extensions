@@ -2,13 +2,17 @@
 
 Read this contract before dispatching pstack work. Preserve it across single calls, graph nodes, and resumes.
 
+## Delivery contract
+
+Read the [Delivery contract](delivery-contract.md) for per-issue fields, phases, lanes, and ownership. Pass those fields inside the `prompt` string as plain text. They are prompt content, not Task input fields, so never turn them into invented Task call parameters.
+
 ## Identity and model selection
 
 Set `Task.role` to the role whose model policy selected this worker. Keep `subagent_type` as the executable agent definition.
 
 Use the labels from `setup-pstack`, including `feature`, `refactoring`, `how explorer`, and `why synthesizer`. Split grouped configuration labels into the active role.
 
-For an ad-hoc reviewer, evidence reducer, or verifier, use `judgment and prose`. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
+Use `code review` for independent technical review and `runtime verification` for executable acceptance evidence. Use `publication` for destination Git and PR operations. Reserve `judgment and prose` for prose and evidence synthesis. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
 
 Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
@@ -16,9 +20,9 @@ The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a par
 
 For a panel or pool with distinct choices, pass the selected entry explicitly, including `model: "inherit-parent"` or `model: "auto"` for an inherited entry. Never silently use the first entry. Identical choices may omit `model`. The skill determines counts; the runtime never creates a panel or fans out.
 
-Missing files and unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
+Absent delivery roles inherit existing choices for compatibility. `code review` and `runtime verification` inherit `arena cross-judge pool`, then `judgment and prose`. `publication` inherits `judgment and prose`. Explicit role settings override these defaults. Missing files and otherwise unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
 
-For different-family reviews, choose a configured entry or ask the user to update the policy. Unconfigured roles allow explicit models before the agent default and parent fallback. Unavailable models and unsupported effort or fast settings fail selection.
+For different-family reviews, choose a configured entry from another family than the implementation model. Independent context alone does not provide model-family diversity. If no permitted model meets the requirement, return `BLOCKED` and request a policy update. Review and verification pools supply availability, not fanout. Select one reviewer for bounded work. Unconfigured roles allow explicit models before the agent default and parent fallback. Unavailable models and unsupported effort or fast settings fail selection.
 
 The extension refreshes the policy before each root prompt and root `Task` call without reload. New dispatches use the latest published policy. Resume preserves the stored model even when the policy changes.
 
@@ -26,7 +30,7 @@ Task batches preflight every entry before starting children. An invalid role, un
 
 A role never grants permissions. The runtime never infers it from a model or prompt.
 
-Preserve the role on resume. Start a fresh agent when the role or required capabilities change.
+Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and manual isolation. Static review alone uses `code review` with read-only tools. Resume compatible owners for corrections and missing report details, rather than creating a context for each pass. Start a fresh agent only when the role, model family, required capabilities, or artifact access must change. Carry the saved brief, harness, and evidence into that replacement. Never weaken resume validation.
 
 Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to single Task calls, not graph nodes. The graph scheduler owns node execution.
 
@@ -81,13 +85,15 @@ A runtime verifier needs shell access but must never integrate incidental files.
   "description": "Verify the exact accepted artifact",
   "prompt": "Run the scoped runtime checks in the effective workspace. Do not modify product code. Return evidence and findings.",
   "subagent_type": "poteto-agent",
-  "role": "judgment and prose",
+  "role": "runtime verification",
   "capability_profile": "pstack-leaf",
   "readonly": false,
   "run_in_background": true,
   "isolation": { "mode": "worktree", "integration": "manual" }
 }
 ```
+
+For a distinct selector pool, add `model` with one permitted entry from the current runtime policy to each review example. Select another model family when independent cross-family review is required.
 
 The runtime retains artifacts and rejects `join` for manual isolation. External reports may use an explicitly authorized path.
 
@@ -97,10 +103,10 @@ Use a disposable exact-head clone when verification requires pristine Git proven
 
 ```json
 {
-  "description": "Synthesize the collected decision evidence",
-  "prompt": "Read the bounded evidence bundle and return a cited explanation. Do not query external systems.",
+  "description": "Review the accepted patch independently",
+  "prompt": "Read the accepted patch and bounded evidence. Return one complete verdict with findings, evidence, and blockers.",
   "subagent_type": "generalPurpose",
-  "role": "why synthesizer",
+  "role": "code review",
   "capability_profile": "pstack-leaf",
   "readonly": true
 }

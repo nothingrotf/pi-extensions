@@ -42,7 +42,14 @@ export function stabilizeMarkdown(text: string): string {
   let body = trailing.length > 0 ? text.slice(0, -trailing.length) : text
   const fences = [...body.matchAll(fenceLinePattern)]
   if (fences.length % 2 === 1) {
-    const marker = fences.at(-1)?.[1]?.[0] ?? '`'
+    const open = fences.at(-1)
+    const marker = open?.[1]?.[0] ?? '`'
+    const lineEnd = open === undefined ? -1 : body.indexOf('\n', open.index)
+    const openingLine =
+      open === undefined ? '' : body.slice(open.index, lineEnd < 0 ? body.length : lineEnd)
+    if (/^[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*mermaid[ \t]*$/iu.test(openingLine)) {
+      return body + trailing
+    }
     return `${body}${trailing}\n${marker.repeat(3)}`
   }
   const partialFence = partialFencePattern.exec(body)

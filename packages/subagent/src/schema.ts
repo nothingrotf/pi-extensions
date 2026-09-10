@@ -237,6 +237,15 @@ export const RunUsageSchema = Type.Object({
   turns: Type.Number({ minimum: 0 }),
 })
 
+export const RunTimingSchema = Type.Object({
+  requestedAt: Type.Number({ minimum: 0 }),
+  executionStartedAt: Type.Number({ minimum: 0 }),
+  executionEndedAt: Type.Optional(Type.Number({ minimum: 0 })),
+  settledAt: Type.Optional(Type.Number({ minimum: 0 })),
+  workspaceSetupMs: Type.Number({ minimum: 0 }),
+  sessionSetupMs: Type.Number({ minimum: 0 }),
+})
+
 export const ContextStateSchema = Type.Object({
   contextWindow: Type.Number({ minimum: 0 }),
   percent: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
@@ -535,6 +544,7 @@ const RunRecordFields = {
   status: RunStatusSchema,
   structuredOutput: Type.Optional(StructuredOutputSchema),
   subagentType: SubagentTypeSchema,
+  timing: Type.Optional(RunTimingSchema),
   updatedAt: Type.Number({ minimum: 0 }),
   usage: Type.Optional(RunUsageSchema),
 }
@@ -694,6 +704,7 @@ export type RunRecord = StaticDecode<typeof RunRecordSchema>
 export type RunRecordV3 = StaticDecode<typeof RunRecordV3Schema>
 export type RunStatus = StaticDecode<typeof RunStatusSchema>
 export type RunUsage = StaticDecode<typeof RunUsageSchema>
+export type RunTiming = StaticDecode<typeof RunTimingSchema>
 export type RuntimeState = StaticDecode<typeof RuntimeStateSchema>
 export type SchemaMode = StaticDecode<typeof SchemaModeSchema>
 export type SingleTaskInput = StaticDecode<typeof SingleTaskInputSchema>
