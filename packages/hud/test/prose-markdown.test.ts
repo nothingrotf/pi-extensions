@@ -137,6 +137,26 @@ describe('Mermaid code blocks', () => {
     }
   })
 
+  test('renders chained edges with visual class directives', () => {
+    const source = [
+      '```mermaid',
+      'flowchart TD',
+      'A[One]',
+      'B[Two]',
+      'C[Three]',
+      'A --> B --> C',
+      'classDef support fill:#f1f5f9,stroke:#64748b,stroke-dasharray:5 5,color:#334155',
+      'class B support',
+      '```',
+    ].join('\n')
+    const lines = plain(renderProseMarkdown(source, 80))
+
+    expect(lines).not.toContain('│ flowchart TD')
+    expect(lines.some((line) => line.includes('│ One │'))).toBe(true)
+    expect(lines.some((line) => line.includes('│ Two │'))).toBe(true)
+    expect(lines.some((line) => line.includes('│ Three │'))).toBe(true)
+  })
+
   test('renders sequence participants and messages', () => {
     const source = [
       '```mermaid',

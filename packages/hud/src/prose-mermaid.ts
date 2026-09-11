@@ -70,7 +70,9 @@ function sourceEdgeLabels(source: string): string[] {
     const label = match[1]?.trim()
     if (label !== undefined && label.length > 0) labels.push(label)
   }
-  for (const match of source.matchAll(/[-.=<>]+[ \t]+(?:"([^"\n]+)"|([^|\n]+?))[ \t]+[-.=<>]+/gu)) {
+  for (const match of source.matchAll(
+    /(?:--|==|-\.)[ \t]+(?:"([^"\n]+)"|([^|\n]+?))[ \t]+(?:-->|==>|\.->)/gu,
+  )) {
     const label = (match[1] ?? match[2])?.trim()
     if (label !== undefined && label.length > 0) labels.push(label)
   }
