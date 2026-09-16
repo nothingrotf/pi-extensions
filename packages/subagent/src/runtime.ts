@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 import type { AssistantMessage } from '@earendil-works/pi-ai'
@@ -13,6 +13,8 @@ import { Value } from 'typebox/value'
 
 import { SubagentResolver, type SubagentDefinition } from './agents.ts'
 import {
+  assertRoleToolRequirements,
+  resolveRoleIsolation,
   CapabilityRegistry,
   isCapabilitySubset,
   selectCapabilityModel,
@@ -21,6 +23,7 @@ import {
   type CapabilityProfile,
   type CapabilityRegistration,
   type ResolvedCapabilities,
+  type TerminalValidationInput,
 } from './capabilities.ts'
 import {
   ChildSessionError,
@@ -43,7 +46,12 @@ import { ParentDecisions } from './decisions.ts'
 import { DeliveryJournal, type DeliveryRecord } from './delivery.ts'
 import { resolveInvocationCwd, resolveTools } from './execution.ts'
 import { activitySnippet, describeCall, oneLineLabel } from './format.ts'
-import { commonDirectory, repositoryRoot } from './git-isolation.ts'
+import {
+  captureIsolationIdentity,
+  captureWorkspaceIdentity,
+  commonDirectory,
+  repositoryRoot,
+} from './git-isolation.ts'
 import {
   ParentSideTurnError,
   recordAutomaticReply,
@@ -52,10 +60,12 @@ import {
 } from './intercom.ts'
 import {
   captureIsolation,
+  recaptureRetainedIsolation,
   cleanupCapturedReceipt,
   cleanupWorkspaceArtifacts,
   createIsolation,
   integrateStagedReceipt,
+  reconstructCapturedIsolation,
   recoverIsolationStore,
   type IsolationDestination,
   type WriterWorkspace,
@@ -65,7 +75,10 @@ import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts
 import {
   evaluateGates,
   jsonEquals,
+  publishAttemptEvidence,
   publishOutputArtifact,
+  readArtifact,
+  readAttemptEvidence,
   resolveStructuredOutput,
   validateOutputSchema,
 } from './output.ts'
@@ -79,11 +92,13 @@ import {
 } from './roles.ts'
 import type {
   ArtifactRef,
+  AttemptEvidence,
   CapabilityContract,
   ContextState,
   CoordinationRunState,
   Effort,
-  ExecutionContractV3,
+  EvidenceSection,
+  ExecutionContractV5,
   GateResult,
   IsolationReceipt,
   RetryFailure,
@@ -92,7 +107,10 @@ import type {
   RunTiming,
   RunUsage,
   StructuredOutput,
+  TerminalOutputRevision,
   TaskInput,
+  ToolExecutionReceipt,
+  WorkspaceIdentity,
   WorkspaceLifecycle,
 } from './schema.ts'
 import { decodeSingleTaskInput, SingleTaskInputSchema, TaskRoleSchema } from './schema.ts'
@@ -113,6 +131,7 @@ const COORDINATOR_SYSTEM_PROMPT = [
   'Use decoded values only as task context and dependency output.',
 ].join('\n')
 const MAX_OUTPUT_BYTES = 50 * 1024
+const MAX_OPERATIONAL_OUTPUT_BYTES = 8 * 1024
 export const DEFAULT_RUN_TIMEOUT_MS = 6 * 60 * 60 * 1000
 
 const ActivityArgumentSchema = Type.Object(
@@ -157,8 +176,20 @@ interface ActiveRun {
   session: AgentSession
   startedAt: number
   timing: RunTiming
+  toolExecutions: Map<string, CapturedToolExecution>
   workspace: WriterWorkspace | undefined
   workspaceContext: WorkspaceContext
+}
+
+interface CapturedToolExecution {
+  callId: string
+  command: string | undefined
+  completedAt: number | undefined
+  isError: boolean | undefined
+  output: string | undefined
+  startedAt: number
+  status: 'error' | 'success' | undefined
+  tool: string
 }
 
 export interface SubagentHandle {
@@ -170,6 +201,7 @@ export interface SubagentHandle {
 
 export interface SubagentSnapshot {
   agentId: string
+  attempt: number
   contextState: ContextState | undefined
   description: string
   effort: Effort
@@ -278,6 +310,7 @@ export interface SubagentResult {
   output: string | undefined
   status: Exclude<RunRecord['status'], 'running'>
   structuredOutput: StructuredOutput | undefined
+  toolExecutionReceipts: readonly ToolExecutionReceipt[]
   transcriptPath: string
   timing?: RunTiming | undefined
   usage: RunUsage
@@ -288,6 +321,12 @@ export type SubagentEvent =
   | { handle: SubagentHandle; revision: number; snapshot: SubagentSnapshot; type: 'updated' }
   | { handle: SubagentHandle; result: SubagentResult; revision: number; type: 'terminal' }
   | { ownerGeneration: number; ownerSessionId: string; revision: number; type: 'owner-invalidated' }
+
+export interface EvidenceReadResult {
+  content: string
+  digest: string
+  freshness: 'current' | 'stale'
+}
 
 export interface SubagentInvocation {
   ctx: ExtensionContext
@@ -336,7 +375,7 @@ interface OwnerFence {
 
 interface ResolvedExecution {
   capabilities: ResolvedCapabilities
-  contract: ExecutionContractV3
+  contract: ExecutionContractV5
   model: ResolvedModel
   role: RoleDefinition
 }
@@ -358,6 +397,7 @@ export interface RuntimeCompletedDetails {
   structuredOutput: StructuredOutput | undefined
   taskId: string
   toolCallCount: number
+  toolExecutionReceipts: ToolExecutionReceipt[]
   transcriptPath: string
   timing?: RunTiming | undefined
   usage: RunUsage
@@ -387,6 +427,7 @@ export interface RuntimeCompletedResult {
 export interface RuntimeFailedDetails {
   role?: string | undefined
   model?: string | undefined
+  attemptStarted?: boolean
   agentId?: string
   artifact?: ArtifactRef
   error: string
@@ -440,13 +481,84 @@ interface RunMetrics {
   turns: number
 }
 
-function validateOutputPolicy(contract: ExecutionContractV3): void {
+function validateOutputPolicy(
+  contract: Pick<ExecutionContractV5, 'gates' | 'outputSchema'>,
+  allowInheritedSchema = false,
+): void {
   if (contract.outputSchema !== undefined) validateOutputSchema(contract.outputSchema)
   for (const gate of contract.gates) {
-    if (gate.type === 'json-pointer' && gate.path !== '' && !gate.path.startsWith('/')) {
+    if (
+      !allowInheritedSchema &&
+      (gate.type === 'schema-valid' || gate.type === 'json-pointer') &&
+      contract.outputSchema === undefined
+    ) {
+      throw new Error(`The ${gate.type} gate requires outputSchema.`)
+    }
+    if (
+      gate.type === 'artifact-present' &&
+      gate.mediaType !== undefined &&
+      gate.mediaType !== 'text/markdown'
+    ) {
+      throw new Error(
+        `The artifact-present gate mediaType "${gate.mediaType}" cannot match the native text/markdown Task artifact.`,
+      )
+    }
+    if (
+      gate.type === 'json-pointer' &&
+      ((gate.path !== '' && !gate.path.startsWith('/')) || /~(?:[^01]|$)/.test(gate.path))
+    ) {
       throw new Error(`JSON Pointer gate path "${gate.path}" is invalid.`)
     }
   }
+}
+
+function validateTaskOutputPolicy(input: TaskInput): void {
+  const policy: Pick<ExecutionContractV5, 'gates' | 'outputSchema'> = {
+    gates: input.gates ?? [],
+  }
+  if (input.outputSchema !== undefined) policy.outputSchema = input.outputSchema
+  validateOutputPolicy(policy, input.resume !== undefined && input.outputSchema === undefined)
+}
+
+function validateResumeOutputPolicy(input: TaskInput, prior: RunRecord): void {
+  const execution = prior.execution
+  const policy: Pick<ExecutionContractV5, 'gates' | 'outputSchema'> = {
+    gates:
+      input.gates ?? (execution === undefined || execution.version === 1 ? [] : execution.gates),
+  }
+  const outputSchema =
+    input.outputSchema ??
+    (execution === undefined || execution.version === 1 ? undefined : execution.outputSchema)
+  if (outputSchema !== undefined) policy.outputSchema = outputSchema
+  validateOutputPolicy(policy)
+}
+
+function executionContext(contract: ExecutionContractV5): string {
+  const schema =
+    contract.outputSchema === undefined ? 'none' : JSON.stringify(contract.outputSchema)
+  const gates = contract.gates.length === 0 ? 'none' : JSON.stringify(contract.gates)
+  const lines = [
+    '# Execution contract',
+    `Mode: ${contract.schemaMode}.`,
+    `Delivery binding: ${contract.delivery === undefined ? 'unspecified' : JSON.stringify(contract.delivery)}.`,
+    `Effective tools: ${contract.tools.join(', ') || 'none'}.`,
+    `Output schema: ${schema}.`,
+    `Output gates: ${gates}.`,
+  ]
+  const identity = contract.workspaceIdentity
+  if (identity !== undefined) {
+    lines.push(
+      '# Workspace identity',
+      `Product head: ${identity.productHead ?? 'unborn'}.`,
+      `Synthetic baseline commit: ${identity.baselineCommit}.`,
+      `Synthetic baseline tree: ${identity.baselineTree}.`,
+      `Expected tree: ${identity.expectedTree}.`,
+      `Captured patch SHA-256: ${identity.patch.sha256}.`,
+      `Captured patch readable path: ${identity.patch.path ?? identity.patch.uri}.`,
+      'The baseline is synthetic and an isolated workspace can be clean by design. Do not infer a missing patch from a branch label or clean status. Compare the expected tree and captured patch instead.',
+    )
+  }
+  return lines.join('\n')
 }
 
 function emptyUsage(durationMs: number): RunUsage {
@@ -529,6 +641,15 @@ function addUsage(left: RunUsage, right: RunUsage): RunUsage {
     toolCalls: left.toolCalls + right.toolCalls,
     turns: left.turns + right.turns,
   }
+}
+
+function truncateOperationalOutput(output: string): string {
+  const encoded = new TextEncoder().encode(output)
+  if (encoded.byteLength <= MAX_OPERATIONAL_OUTPUT_BYTES) return output
+  const suffix = '\n\n[Operational output truncated. Use TaskControl evidence for full content.]'
+  let end = MAX_OPERATIONAL_OUTPUT_BYTES - Buffer.byteLength(suffix)
+  while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end -= 1
+  return `${new TextDecoder().decode(encoded.slice(0, end))}${suffix}`
 }
 
 export function truncateOutput(output: string): string {
@@ -724,6 +845,10 @@ export class SubagentRuntime {
     await this.transitionWorkspace(workspace, lifecycleState, rootVisibility ?? 'pending')
   }
 
+  ensureContext(ctx: ExtensionContext): void {
+    this.ensureOwner(ctx)
+  }
+
   getRecord(agentId: string | undefined): RunRecord | undefined {
     return agentId === undefined ? undefined : this.state.get(agentId)
   }
@@ -746,6 +871,7 @@ export class SubagentRuntime {
         : Math.max(record.createdAt, record.updatedAt - record.durationMs)
     return {
       agentId: record.agentId,
+      attempt: record.runGeneration ?? 1,
       contextState,
       description: record.description,
       effort: record.effort,
@@ -822,6 +948,73 @@ export class SubagentRuntime {
     const record = this.state.get(agentId)
     if (record === undefined || record.status === 'running') return undefined
     return this.recordResult(record)
+  }
+
+  async readEvidence(
+    agentId: string,
+    attempt: number,
+    section: EvidenceSection,
+    digest?: string,
+  ): Promise<EvidenceReadResult | undefined> {
+    const record = this.state.get(agentId)
+    if (record === undefined) return undefined
+    const attemptReferences = (record.evidenceArtifacts ?? []).filter(
+      (artifact) => artifact.attempt === attempt,
+    )
+    const reference = attemptReferences
+      .filter((artifact) => digest === undefined || artifact.sha256 === digest)
+      .at(-1)
+    const currentEvidence =
+      (record.runGeneration ?? 1) === attempt && record.status !== 'running'
+        ? this.recordEvidence(record)
+        : undefined
+    let evidence: AttemptEvidence | undefined
+    let evidenceDigest: string
+    if (reference !== undefined) {
+      evidence = await readAttemptEvidence(reference)
+      evidenceDigest = reference.sha256
+    } else if (attemptReferences.length === 0 && currentEvidence !== undefined) {
+      const synthesizedDigest = createHash('sha256')
+        .update(JSON.stringify(currentEvidence))
+        .digest('hex')
+      if (digest !== undefined && digest !== synthesizedDigest) return undefined
+      evidence = currentEvidence
+      evidenceDigest = synthesizedDigest
+    } else return undefined
+    if (evidence.agentId !== agentId || evidence.attempt !== attempt) return undefined
+    const content = await this.evidenceSection(evidence, section)
+    const sameOutputArtifact =
+      section === 'output' &&
+      evidence.artifact?.uri === currentEvidence?.artifact?.uri &&
+      evidence.artifact?.sha256 === currentEvidence?.artifact?.sha256
+    const current =
+      currentEvidence === undefined
+        ? undefined
+        : evidence === currentEvidence || sameOutputArtifact
+          ? content
+          : await this.evidenceSection(currentEvidence, section)
+    return {
+      content,
+      digest: evidenceDigest,
+      freshness: current === undefined || current !== content ? 'stale' : 'current',
+    }
+  }
+
+  private async evidenceSection(
+    evidence: AttemptEvidence,
+    section: EvidenceSection,
+  ): Promise<string> {
+    if (section === 'output') {
+      return evidence.artifact === undefined ? '' : readArtifact(evidence.artifact)
+    }
+    if (section === 'isolation') return JSON.stringify(evidence.isolation ?? null, null, 2)
+    if (section === 'structured-output') {
+      return JSON.stringify(evidence.structuredOutput ?? null, null, 2)
+    }
+    if (section === 'tool-receipts') {
+      return JSON.stringify(evidence.toolExecutionReceipts, null, 2)
+    }
+    return JSON.stringify(evidence.gateResults, null, 2)
   }
 
   async waitFor(handle: SubagentHandle, signal?: AbortSignal): Promise<SubagentResult> {
@@ -948,7 +1141,7 @@ export class SubagentRuntime {
         throw new Error('The joined attempt changed.')
     })
     if (updated.status === 'integrated') {
-      updated = await this.cleanupJoinedReceipt(updated)
+      updated = await this.cleanupReceipt(updated)
     }
     if (this.state.get(agentId)?.runGeneration !== record.runGeneration)
       throw new Error('The joined attempt changed.')
@@ -965,7 +1158,7 @@ export class SubagentRuntime {
     return { receipt: updated, reason: undefined, revision: this.currentRevision, status: 'joined' }
   }
 
-  private async cleanupJoinedReceipt(receipt: IsolationReceipt): Promise<IsolationReceipt> {
+  private async cleanupReceipt(receipt: IsolationReceipt): Promise<IsolationReceipt> {
     const cleanupDebt = await cleanupCapturedReceipt(receipt)
     if (receipt.workspaceId !== undefined) {
       const workspace = this.state.getWorkspace(receipt.workspaceId)
@@ -998,8 +1191,13 @@ export class SubagentRuntime {
     return this.joinStaged(agentId, destination, this.state.owner)
   }
 
-  async rootDestination(ctx: ExtensionContext): Promise<IsolationDestination> {
-    const context = await this.resolveRootWorkspaceContext(ctx)
+  async rootDestination(ctx: ExtensionContext, agentId?: string): Promise<IsolationDestination> {
+    const record = agentId === undefined ? undefined : this.state.get(agentId)
+    const context =
+      (record?.execution?.version === 4 || record?.execution?.version === 5) &&
+      record.ownerSessionId === this.state.owner
+        ? await this.taskWorkspaceContext(ctx, record.execution.logicalCwd)
+        : await this.resolveRootWorkspaceContext(ctx)
     return {
       destinationPhysicalRoot: context.physicalRoot,
       destinationWorkspaceId: context.workspaceId,
@@ -1133,8 +1331,18 @@ export class SubagentRuntime {
             const result = await this.run(startOptions)
             if (result.kind === 'failed') {
               return {
-                content: [{ text: `Nested Task failed: ${result.details.error}`, type: 'text' }],
-                details: result.details,
+                content: [
+                  {
+                    text: truncateOperationalOutput(`Nested Task failed: ${result.details.error}`),
+                    type: 'text',
+                  },
+                ],
+                details: {
+                  agentId: result.details.agentId,
+                  attempt: result.details.artifact?.attempt ?? 1,
+                  error: result.details.error,
+                  status: 'error',
+                },
                 isError: true,
               }
             }
@@ -1152,11 +1360,22 @@ export class SubagentRuntime {
             return {
               content: [
                 {
-                  text: `Agent ID: ${result.details.agentId}\n\n${result.content}`,
+                  text: truncateOperationalOutput(
+                    `Agent ID: ${result.details.agentId}\n\n${result.content}`,
+                  ),
                   type: 'text',
                 },
               ],
-              details: result.details,
+              details: {
+                agentId: result.details.agentId,
+                artifact: result.details.artifact,
+                attempt: result.details.artifact.attempt,
+                durationMs: result.details.durationMs,
+                model: result.details.model,
+                role: result.details.role,
+                status: 'completed',
+                usage: result.details.usage,
+              },
             }
           },
           label: 'Task',
@@ -1256,21 +1475,26 @@ export class SubagentRuntime {
     return resolveInvocationCwd(ctx.cwd, cwd)
   }
 
+  private async taskWorkspaceContext(
+    ctx: ExtensionContext,
+    logicalCwd: string,
+  ): Promise<WorkspaceContext> {
+    const root = await this.resolveRootWorkspaceContext(ctx)
+    const sessionRelativeCwd = relativeCwdWithin(root.physicalRoot, logicalCwd)
+    if (sessionRelativeCwd.split(/[/\\]/).includes('.git')) {
+      throw new Error(
+        'Task cwd targets Git metadata, which writer snapshots exclude. Integrate the accepted patch into the destination workspace before dispatching an isolated verifier.',
+      )
+    }
+    return createRootWorkspaceContext(logicalCwd, root.scopeId, this.state.owner)
+  }
+
   private async rootRelativeCwd(
     ctx: ExtensionContext,
     logicalCwd: string,
     isolated: boolean,
   ): Promise<string> {
-    if (!isolated) return ''
-    const root = await this.resolveRootWorkspaceContext(ctx)
-    const repoRoot = (await repositoryRoot(root.physicalRoot)) ?? root.physicalRoot
-    const relativeCwd = relativeCwdWithin(repoRoot, logicalCwd)
-    if (relativeCwd.split(/[/\\]/).includes('.git')) {
-      throw new Error(
-        'Task cwd targets Git metadata, which writer snapshots exclude. Integrate the accepted patch into the destination workspace before dispatching an isolated verifier.',
-      )
-    }
-    return relativeCwd
+    return isolated ? (await this.taskWorkspaceContext(ctx, logicalCwd)).relativeCwd : ''
   }
 
   private async isolationDestination(context: WorkspaceContext): Promise<IsolationDestination> {
@@ -1345,16 +1569,26 @@ export class SubagentRuntime {
     await this.recoveryPromise
   }
 
-  async preflight(ctx: ExtensionContext, inputs: readonly TaskInput[]): Promise<boolean[]> {
+  async preflight(
+    ctx: ExtensionContext,
+    inputs: readonly TaskInput[],
+  ): Promise<Array<Pick<ExecutionContractV5, 'readonly' | 'isolation' | 'logicalCwd'>>> {
+    for (const input of inputs) validateTaskOutputPolicy(input)
     await this.ensureRecovery(ctx)
     const runtime = await this.getModelRuntime(ctx)
-    const policies: boolean[] = []
+    const policies: Array<Pick<ExecutionContractV5, 'readonly' | 'isolation' | 'logicalCwd'>> = []
     for (const input of inputs) {
       const execution = await this.resolveExecution(ctx, input, undefined, runtime, undefined)
       if (!execution.contract.readonly) {
         await this.rootRelativeCwd(ctx, execution.contract.logicalCwd, true)
       }
-      policies.push(execution.contract.readonly)
+      const policy: Pick<ExecutionContractV5, 'readonly' | 'isolation' | 'logicalCwd'> = {
+        logicalCwd: execution.contract.logicalCwd,
+        readonly: execution.contract.readonly,
+      }
+      if (execution.contract.isolation !== undefined)
+        policy.isolation = execution.contract.isolation
+      policies.push(policy)
     }
     return policies
   }
@@ -1387,6 +1621,7 @@ export class SubagentRuntime {
         return {
           details: {
             agentId: error.agentId,
+            attemptStarted: false,
             error: error.message,
             role: options.input.role,
             status: 'error',
@@ -1401,6 +1636,7 @@ export class SubagentRuntime {
         return {
           details: {
             agentId: record.agentId,
+            attemptStarted: false,
             error: errorMessage(error),
             model: record.model,
             role: record.role,
@@ -1411,7 +1647,12 @@ export class SubagentRuntime {
         }
       }
       return {
-        details: { error: errorMessage(error), role: options.input.role, status: 'error' },
+        details: {
+          attemptStarted: false,
+          error: errorMessage(error),
+          role: options.input.role,
+          status: 'error',
+        },
         kind: 'failed',
         outcome: 'failed',
       }
@@ -1439,6 +1680,7 @@ export class SubagentRuntime {
 
   private async start(options: StartOptions): Promise<RuntimeResult> {
     const requestedAt = Date.now()
+    validateTaskOutputPolicy(options.input)
     if (!this.accepting) throw new Error('The subagent owner is shutting down.')
     if (options.skipOwnerCheck !== true) {
       this.ensureOwner(options.ctx)
@@ -1465,6 +1707,7 @@ export class SubagentRuntime {
     const prior = input.resume === undefined ? undefined : this.resolveResume(input)
     if (prior === undefined)
       return this.startSession(options, description, prompt, undefined, ownerFence, requestedAt)
+    validateResumeOutputPolicy(input, prior)
     if (options.skipOwnerCheck === true) {
       if (
         prior.parentAgentId !== options.parentAgentId ||
@@ -1483,6 +1726,81 @@ export class SubagentRuntime {
       this.leases.delete(prior.agentId)
       throw error
     }
+  }
+
+  private continuationError(reason: string, receipt: IsolationReceipt): Error {
+    const references = receipt.repositories.map(
+      (repository) =>
+        `${repository.relativePath || '.'}: ${repository.patch.uri} (sha256 ${repository.patch.sha256}, ref ${repository.durableRef ?? 'unavailable'})`,
+    )
+    return new Error(
+      `${reason} Retained WIP: ${references.join('; ') || receipt.manifestUri}. Reconcile the retained artifact in a fresh authorized isolation. Do not discard it or reset the source workspace.`,
+    )
+  }
+
+  private async resumeReconstruction(
+    prior: RunRecord,
+    ctx: ExtensionContext,
+    ownerFence: OwnerFence,
+  ): Promise<{ identity: WorkspaceIdentity; receipt: IsolationReceipt } | undefined> {
+    let receipt = prior.isolation
+    if (
+      receipt === undefined ||
+      receipt.integrationStatus === 'integrated' ||
+      receipt.status === 'integrated'
+    ) {
+      return undefined
+    }
+    const execution = prior.execution
+    const identity =
+      execution?.version === 4 || execution?.version === 5 ? execution.workspaceIdentity : undefined
+    if (
+      receipt.captureStatus === 'failed' &&
+      identity !== undefined &&
+      (execution?.version === 4 || execution?.version === 5)
+    ) {
+      try {
+        const context = await this.taskWorkspaceContext(ctx, execution.logicalCwd)
+        const recovered = await recaptureRetainedIsolation({
+          receipt,
+          identity,
+          ownerSessionId: this.state.owner,
+          writerId: prior.agentId,
+          durableCommonDir: await this.durableCommonDirFor(context),
+        })
+        this.assertOwnerFence(ownerFence)
+        if (recovered.captureStatus === 'captured') {
+          recovered.cleanupDebt = (await this.cleanupReceipt(recovered)).cleanupDebt
+          this.assertOwnerFence(ownerFence)
+          if (this.state.get(prior.agentId)?.runGeneration !== prior.runGeneration)
+            throw new Error('The retained attempt changed during recovery.')
+          receipt = recovered
+          this.assignIsolationReceipt(prior, recovered)
+          this.state.update({ ...prior, updatedAt: Date.now() })
+        }
+      } catch (error) {
+        throw this.continuationError(errorMessage(error), receipt)
+      }
+    }
+    if (receipt.captureStatus !== 'captured') {
+      throw this.continuationError(
+        'The previous isolated attempt has no captured durable artifact to reconstruct.',
+        receipt,
+      )
+    }
+    if (receipt.status !== 'captured') {
+      throw this.continuationError(
+        'The previous isolated attempt is conflicted and cannot be reconstructed.',
+        receipt,
+      )
+    }
+    if (identity === undefined) {
+      throw this.continuationError(
+        'The previous isolated attempt has no workspace identity to reconstruct safely.',
+        receipt,
+      )
+    }
+    return { identity, receipt }
   }
 
   private async startSession(
@@ -1507,6 +1825,11 @@ export class SubagentRuntime {
     const model = execution.model
     const contract = execution.contract
     const requestedPhysicalCwd = contract.logicalCwd
+    const reconstruction =
+      prior === undefined
+        ? undefined
+        : await this.resumeReconstruction(prior, options.ctx, ownerFence)
+    this.assertOwnerFence(ownerFence)
     const background =
       input.run_in_background ?? prior?.background ?? contract.backgroundDefault ?? false
     if (
@@ -1522,9 +1845,11 @@ export class SubagentRuntime {
     }
     if (options.parentWorkspace !== undefined) {
       const relativeCwd =
-        options.parentAgentId === undefined || prior !== undefined
-          ? contract.relativeCwd
-          : relativeCwdWithin(options.parentWorkspace.physicalRoot, requestedPhysicalCwd)
+        options.parentAgentId === undefined
+          ? relativeCwdWithin(options.parentWorkspace.logicalCwd, requestedPhysicalCwd)
+          : prior !== undefined
+            ? contract.relativeCwd
+            : relativeCwdWithin(options.parentWorkspace.physicalRoot, requestedPhysicalCwd)
       contract.logicalCwd = joinEffectiveCwd(options.parentWorkspace.logicalCwd, relativeCwd)
       contract.relativeCwd = relativeCwd
     }
@@ -1534,7 +1859,14 @@ export class SubagentRuntime {
     const depth = prior?.depth ?? options.depth ?? 1
     const runId = prior?.runId ?? options.runId ?? randomUUID()
     const parentContext =
-      options.parentWorkspace ?? (await this.resolveRootWorkspaceContext(options.ctx))
+      options.parentWorkspace ??
+      (contract.isolation === undefined
+        ? await this.resolveRootWorkspaceContext(options.ctx)
+        : await this.taskWorkspaceContext(options.ctx, requestedPhysicalCwd))
+    const identityCwd =
+      options.parentWorkspace === undefined
+        ? requestedPhysicalCwd
+        : joinEffectiveCwd(parentContext.physicalRoot, contract.relativeCwd)
     const parentActive =
       options.parentAgentId === undefined ? undefined : this.active.get(options.parentAgentId)
     let isolation: WriterWorkspace | undefined
@@ -1551,6 +1883,9 @@ export class SubagentRuntime {
     try {
       let effectiveCwd: string
       if (contract.isolation === undefined) {
+        const identity = await captureWorkspaceIdentity(identityCwd)
+        if (identity === undefined) delete contract.workspaceIdentity
+        else contract.workspaceIdentity = identity
         effectiveCwd =
           options.parentWorkspace === undefined
             ? requestedPhysicalCwd
@@ -1567,6 +1902,18 @@ export class SubagentRuntime {
           writerId,
         })
         this.registerWorkspace(isolation)
+        contract.workspaceIdentity = await captureIsolationIdentity(isolation)
+        if (reconstruction !== undefined) {
+          try {
+            await reconstructCapturedIsolation({
+              identity: reconstruction.identity,
+              receipt: reconstruction.receipt,
+              workspace: isolation,
+            })
+          } catch (error) {
+            throw this.continuationError(errorMessage(error), reconstruction.receipt)
+          }
+        }
         workspaceSetupMs = performance.now() - workspaceStartedAt
         effectiveCwd = joinEffectiveCwd(
           isolation.context.physicalRoot,
@@ -1600,6 +1947,7 @@ export class SubagentRuntime {
         cwd: effectiveCwd,
         sourceCwd: contract.logicalCwd,
         description,
+        executionContext: executionContext(contract),
         extensions,
         intercom: {
           askParent: (agentId, question) =>
@@ -1708,6 +2056,9 @@ export class SubagentRuntime {
       if (prior?.isolationAttempts !== undefined) {
         record.isolationAttempts = [...prior.isolationAttempts]
       }
+      if (prior?.evidenceArtifacts !== undefined) {
+        record.evidenceArtifacts = [...prior.evidenceArtifacts]
+      }
 
       if (parentActive !== undefined && parentScopeCompletion !== undefined) {
         parentActive.scope.register(writerId, parentScopeCompletion.promise, spawnOrdinal)
@@ -1756,6 +2107,7 @@ export class SubagentRuntime {
         }),
         session,
         startedAt: timing.executionStartedAt,
+        toolExecutions: new Map(),
         timing,
         workspace: isolation,
         workspaceContext: isolation?.context ?? parentContext,
@@ -1781,6 +2133,7 @@ export class SubagentRuntime {
         model,
         prompt,
         active,
+        execution.capabilities,
         background && options.retainBackgroundSignal !== true ? undefined : options.signal,
         options.onStarted,
       ),
@@ -1847,7 +2200,7 @@ export class SubagentRuntime {
     if (input.role !== undefined) Value.Decode(TaskRoleSchema, input.role)
     if (prior?.execution !== undefined) {
       const priorExecution = prior.execution
-      const contract: ExecutionContractV3 =
+      const contract: ExecutionContractV5 =
         priorExecution.version === 1
           ? {
               ...priorExecution,
@@ -1855,7 +2208,7 @@ export class SubagentRuntime {
               logicalCwd: priorExecution.cwd,
               relativeCwd: '',
               schemaMode: 'permissive',
-              version: 3,
+              version: 5,
             }
           : priorExecution.version === 2
             ? {
@@ -1866,12 +2219,20 @@ export class SubagentRuntime {
                   await this.verifiedLogicalCwd(ctx, priorExecution.cwd),
                   priorExecution.isolation !== undefined,
                 ),
-                version: 3,
+                version: 5,
               }
-            : { ...priorExecution }
+            : priorExecution.version === 3 || priorExecution.version === 4
+              ? { ...priorExecution, version: 5 }
+              : { ...priorExecution }
+      if (contract.delivery === undefined && input.delivery !== undefined) {
+        contract.delivery = input.delivery
+      }
       if (prior.role !== undefined) contract.role = prior.role
       if (input.role !== undefined && input.role !== contract.role) {
         throw new Error('A resumed Task must preserve the original role.')
+      }
+      if (input.delivery !== undefined && !jsonEquals(input.delivery, contract.delivery ?? null)) {
+        throw new Error('A resumed Task must preserve the original delivery binding.')
       }
       validateOutputPolicy(contract)
       if (attenuation !== undefined) {
@@ -1972,6 +2333,11 @@ export class SubagentRuntime {
         name: contract.agentName,
         tools: contract.tools,
       }
+      assertRoleToolRequirements(capabilities.roleToolRequirements, contract.role, contract.tools)
+      const isolation = resolveRoleIsolation(capabilities.roleToolRequirements, contract)
+      if (!jsonEquals(isolation ?? null, contract.isolation ?? null)) {
+        throw new Error('The persisted Task does not preserve its required isolation policy.')
+      }
       const model =
         input.model === undefined
           ? resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
@@ -2026,9 +2392,6 @@ export class SubagentRuntime {
       if (!preservesMandatoryModelPolicies(inherited.modelPolicies, capabilities.modelPolicies))
         throw new Error('A nested Task must preserve its parent mandatory model policies.')
     }
-    const selector =
-      selectCapabilityModel(capabilities.modelPolicies, input.role, input.model) ?? role.model
-    const model = resolveModel(selector, role, ctx, runtime)
     if (
       attenuation !== undefined &&
       !isCapabilitySubset(capabilities.contract, attenuation.capability)
@@ -2050,7 +2413,15 @@ export class SubagentRuntime {
       }
       tools = tools.filter((tool) => allowedTools.has(tool))
     }
-    const contract: ExecutionContractV3 = {
+    assertRoleToolRequirements(capabilities.roleToolRequirements, input.role, tools)
+    const isolation = resolveRoleIsolation(capabilities.roleToolRequirements, {
+      ...input,
+      readonly,
+    })
+    const selector =
+      selectCapabilityModel(capabilities.modelPolicies, input.role, input.model) ?? role.model
+    const model = resolveModel(selector, role, ctx, runtime)
+    const contract: ExecutionContractV5 = {
       agentDescription: discovered?.description ?? input.subagent_type,
       agentName: discovered?.name ?? input.subagent_type,
       agentSource: discovered?.source ?? { kind: 'bundled' },
@@ -2063,19 +2434,20 @@ export class SubagentRuntime {
       model: model.modelRef,
       modelSelector: model.selector,
       readonly,
-      relativeCwd: await this.rootRelativeCwd(ctx, cwd, input.isolation !== undefined),
+      relativeCwd: await this.rootRelativeCwd(ctx, cwd, isolation !== undefined),
       schemaMode: input.schemaMode ?? 'permissive',
       systemPrompt,
       tools,
-      version: 3,
+      version: 5,
     }
-    if (input.isolation !== undefined) {
+    if (isolation !== undefined) {
       contract.isolation = {
-        integration: input.isolation.integration ?? 'apply',
+        integration: isolation.integration ?? 'apply',
         mode: 'worktree',
       }
     }
     if (input.role !== undefined) contract.role = input.role
+    if (input.delivery !== undefined) contract.delivery = input.delivery
     if (input.outputSchema !== undefined) contract.outputSchema = input.outputSchema
     validateOutputPolicy(contract)
     return { capabilities, contract, model, role }
@@ -2315,65 +2687,81 @@ export class SubagentRuntime {
     )
   }
 
-  private async closeDescendantScope(
+  private async prepareDescendantScope(
     record: RunRecord,
     active: ActiveRun,
-    mode: 'abort' | 'success',
-  ): Promise<string | undefined> {
+  ): Promise<{
+    conflict?: string
+    integrations: { agentId: string; receipt: IsolationReceipt }[]
+  }> {
     active.scope.markClosing()
-    if (mode === 'abort') {
-      for (const entry of active.scope.list()) this.requestCancel(entry.agentId)
-    }
     await Promise.all(active.scope.list().map((entry) => entry.completion.catch(() => undefined)))
-    if (mode === 'success') this.assertRunContinuing(active)
-    let conflict: string | undefined
-    const entries = active.scope.list()
-    if (mode === 'success' && entries.length > 0) {
-      const staged: { agentId: string; receipt: IsolationReceipt }[] = []
-      for (const entry of entries) {
-        const childRecord = this.state.get(entry.agentId)
-        if (childRecord === undefined || childRecord.status !== 'completed') {
-          conflict = `The descendant Task "${entry.agentId}" did not complete successfully.`
-          continue
-        }
-        const receipt = childRecord.isolation
-        if (receipt?.integrationStatus === 'staged') {
-          staged.push({ agentId: entry.agentId, receipt })
-          continue
-        }
-        if (receipt?.integration === 'apply' && receipt.integrationStatus !== 'integrated') {
-          conflict = `The descendant Task "${entry.agentId}" has no integrated result.`
+    this.assertRunContinuing(active)
+    const staged: { agentId: string; receipt: IsolationReceipt }[] = []
+    for (const entry of active.scope.list()) {
+      const childRecord = this.state.get(entry.agentId)
+      if (childRecord === undefined || childRecord.status !== 'completed') {
+        return {
+          conflict: `The descendant Task "${entry.agentId}" did not complete successfully.`,
+          integrations: [],
         }
       }
-      if (conflict !== undefined) {
-        active.scope.markClosed()
-        return conflict
+      const receipt = childRecord.isolation
+      if (receipt?.integrationStatus === 'staged') {
+        staged.push({ agentId: entry.agentId, receipt })
+        continue
       }
-      if (staged.length > 0) {
-        const destination: IsolationDestination = {
-          destinationPhysicalRoot: active.workspaceContext.physicalRoot,
-          destinationWorkspaceId: active.workspaceContext.workspaceId,
-          durableCommonDir: await this.durableCommonDirFor(active.workspaceContext),
-        }
-        for (const child of staged) {
-          let updated = await integrateStagedReceipt(
-            child.receipt,
-            destination,
-            record.agentId,
-            () => this.assertRunContinuing(active),
-          )
-          if (updated.status === 'integrated') {
-            updated = await this.cleanupJoinedReceipt(updated)
-          }
-          this.applyReceiptToRecord(child.agentId, updated)
-          if (updated.status !== 'integrated') {
-            conflict = `The staged Task "${child.agentId}" could not be integrated.`
-          }
+      if (receipt?.integration === 'apply' && receipt.integrationStatus !== 'integrated') {
+        return {
+          conflict: `The descendant Task "${entry.agentId}" has no integrated result.`,
+          integrations: [],
         }
       }
+    }
+    if (staged.length === 0) return { integrations: [] }
+    if (active.workspace === undefined) {
+      return {
+        conflict: 'Staged descendants require an isolated parent workspace for validation.',
+        integrations: [],
+      }
+    }
+    const destination: IsolationDestination = {
+      destinationPhysicalRoot: active.workspaceContext.physicalRoot,
+      destinationWorkspaceId: active.workspaceContext.workspaceId,
+      durableCommonDir: await this.durableCommonDirFor(active.workspaceContext),
+    }
+    const integrations: { agentId: string; receipt: IsolationReceipt }[] = []
+    for (const child of staged) {
+      const receipt = await integrateStagedReceipt(child.receipt, destination, record.agentId, () =>
+        this.assertRunContinuing(active),
+      )
+      integrations.push({ agentId: child.agentId, receipt })
+      if (receipt.status !== 'integrated') {
+        return {
+          conflict: `The staged Task "${child.agentId}" could not be integrated.`,
+          integrations,
+        }
+      }
+    }
+    return { integrations }
+  }
+
+  private async acceptDescendantScope(
+    active: ActiveRun,
+    integrations: readonly { agentId: string; receipt: IsolationReceipt }[],
+  ): Promise<void> {
+    for (const integration of integrations) {
+      const receipt = await this.cleanupReceipt(integration.receipt)
+      this.applyReceiptToRecord(integration.agentId, receipt)
     }
     active.scope.markClosed()
-    return conflict
+  }
+
+  private async abortDescendantScope(active: ActiveRun): Promise<void> {
+    active.scope.markClosing()
+    for (const entry of active.scope.list()) this.requestCancel(entry.agentId)
+    await Promise.all(active.scope.list().map((entry) => entry.completion.catch(() => undefined)))
+    active.scope.markClosed()
   }
 
   private applyReceiptToRecord(agentId: string, receipt: IsolationReceipt): void {
@@ -2457,6 +2845,50 @@ export class SubagentRuntime {
     return { artifact, gateResults, structuredOutput }
   }
 
+  private async publishToolExecutionReceipts(
+    record: RunRecord,
+    active: ActiveRun,
+  ): Promise<ToolExecutionReceipt[]> {
+    const executions = [...active.toolExecutions.values()].sort(
+      (left, right) => left.startedAt - right.startedAt,
+    )
+    return Promise.all(
+      executions.map(async (execution) => {
+        const output = await publishOutputArtifact({
+          attempt: record.runGeneration ?? 1,
+          output: truncateOutput(redactSensitiveText(execution.output ?? '')),
+          runId: record.runId ?? record.agentId,
+          sessionFile: record.sessionFile,
+          taskId: `${record.itemId ?? 'task'}-tool-${execution.callId}`,
+        })
+        const receipt: ToolExecutionReceipt = {
+          callId: execution.callId,
+          completedAt: execution.completedAt ?? Date.now(),
+          isError: execution.isError ?? true,
+          output,
+          startedAt: execution.startedAt,
+          status: execution.status ?? 'error',
+          tool: execution.tool,
+        }
+        if (execution.command !== undefined)
+          receipt.command = truncateOutput(redactSensitiveText(execution.command))
+        return receipt
+      }),
+    )
+  }
+
+  private async persistAttemptEvidence(
+    record: RunRecord,
+    evidence: AttemptEvidence,
+  ): Promise<ArtifactRef> {
+    return publishAttemptEvidence({
+      evidence,
+      runId: record.runId ?? record.agentId,
+      sessionFile: record.sessionFile,
+      taskId: record.itemId ?? 'task',
+    })
+  }
+
   private assertRunContinuing(active: ActiveRun): void {
     if (active.integrationStarted) return
     if (active.abortReason !== undefined) throw new Error(active.abortReason)
@@ -2471,6 +2903,7 @@ export class SubagentRuntime {
     model: ResolvedModel,
     prompt: string,
     active: ActiveRun,
+    capabilities: ResolvedCapabilities,
     signal: AbortSignal | undefined,
     onStarted: ((agentId: string) => void) | undefined,
   ): Promise<RuntimeTerminalResult> {
@@ -2501,6 +2934,19 @@ export class SubagentRuntime {
       }
       if (event.type === 'tool_execution_start') {
         active.metrics.toolCalls += 1
+        const command = Value.Check(ActivityArgumentSchema, event.args)
+          ? Value.Decode(ActivityArgumentSchema, event.args).command
+          : undefined
+        active.toolExecutions.set(event.toolCallId, {
+          callId: event.toolCallId,
+          command,
+          completedAt: undefined,
+          isError: undefined,
+          output: undefined,
+          startedAt: Date.now(),
+          status: undefined,
+          tool: event.toolName,
+        })
         active.lastActivity = Value.Check(ActivityArgumentSchema, event.args)
           ? describeCall(
               event.toolName,
@@ -2518,6 +2964,13 @@ export class SubagentRuntime {
         })
       }
       if (event.type === 'tool_execution_end') {
+        const execution = active.toolExecutions.get(event.toolCallId)
+        if (execution !== undefined) {
+          execution.completedAt = Date.now()
+          execution.isError = event.isError
+          execution.output = toolResultText(event.result)
+          execution.status = event.isError ? 'error' : 'success'
+        }
         this.emitChildTool({
           agentId: record.agentId,
           cwd: active.cwd,
@@ -2572,9 +3025,9 @@ export class SubagentRuntime {
       active.timing.executionEndedAt = Math.max(active.startedAt, Date.now())
       if (active.abortReason !== undefined) throw new Error(active.abortReason)
 
-      const text = finalText(active.messages)
-      const fullOutput = text.length === 0 ? 'The child produced no text output.' : text
-      const output = truncateOutput(fullOutput)
+      let text = finalText(active.messages)
+      let fullOutput = text.length === 0 ? 'The child produced no text output.' : text
+      let output = truncateOutput(fullOutput)
       const failure = stopError(active.messages.at(-1))
       const terminalStatus =
         failure === undefined
@@ -2584,14 +3037,15 @@ export class SubagentRuntime {
             : 'failed'
       const background = record.background
       outputState = await this.createOutputState(record, fullOutput, terminalStatus)
-      const { artifact, gateResults, structuredOutput } = outputState
-      const durationMs = Date.now() - active.startedAt
-      const usage = collectUsage(active.messages, active.metrics, durationMs)
+      const toolExecutionReceipts = await this.publishToolExecutionReceipts(record, active)
+      const terminalValidation = capabilities.terminalValidation
       if (failure !== undefined) {
-        await this.closeDescendantScope(record, active, 'abort')
+        const durationMs = Date.now() - active.startedAt
+        const usage = collectUsage(active.messages, active.metrics, durationMs)
+        await this.abortDescendantScope(active)
         await this.captureRunIsolation(active, record)
         const failureStatus = terminalStatus === 'completed' ? 'failed' : terminalStatus
-        return this.finishFailure(
+        return await this.finishFailure(
           record,
           failure,
           failureStatus,
@@ -2600,47 +3054,162 @@ export class SubagentRuntime {
           output,
           active,
           outputState,
+          toolExecutionReceipts,
         )
       }
+      const initialAcceptanceError = outputState.gateResults.some((gate) => !gate.passed)
+        ? 'A deterministic output gate failed.'
+        : terminalValidation === undefined &&
+            outputState.structuredOutput !== undefined &&
+            outputState.structuredOutput.mode === 'strict' &&
+            outputState.structuredOutput.status !== 'valid'
+          ? (outputState.structuredOutput.error ?? 'The structured output is invalid.')
+          : undefined
+      if (initialAcceptanceError !== undefined) {
+        const durationMs = Date.now() - active.startedAt
+        const usage = collectUsage(active.messages, active.metrics, durationMs)
+        await this.abortDescendantScope(active)
+        await this.captureRunIsolation(active, record)
+        return await this.finishFailure(
+          record,
+          initialAcceptanceError,
+          'failed',
+          durationMs,
+          usage,
+          output,
+          active,
+          outputState,
+          toolExecutionReceipts,
+        )
+      }
+      this.assertRunContinuing(active)
+      const terminalOutputRevisions: TerminalOutputRevision[] = []
+      let terminalValidationError: string | undefined
+      let terminalValidationReportFailure = false
+      let terminalStopFailure: { error: string; status: 'failed' | 'aborted' } | undefined
+      const descendantPreparation = await this.prepareDescendantScope(record, active)
+      this.assertRunContinuing(active)
+      const isolationReceipt = await this.captureRunIsolation(active, record)
+      this.assertRunContinuing(active)
+      if (terminalValidation !== undefined && descendantPreparation.conflict === undefined) {
+        for (let correction = 0; correction <= terminalValidation.maxCorrections; correction += 1) {
+          const validationInput: TerminalValidationInput = {
+            agentId: record.agentId,
+            artifact: outputState.artifact,
+            attempt: record.runGeneration ?? 1,
+            output: fullOutput,
+            previousOutputs: terminalOutputRevisions,
+            prompt,
+            readonly: record.readonly,
+            toolExecutionReceipts,
+          }
+          if (isolationReceipt !== undefined) validationInput.isolation = isolationReceipt
+          if (record.role !== undefined) validationInput.role = record.role
+          if (outputState.structuredOutput !== undefined) {
+            validationInput.structuredOutput = outputState.structuredOutput
+          }
+          if (
+            (record.execution?.version === 4 || record.execution?.version === 5) &&
+            record.execution.workspaceIdentity !== undefined
+          ) {
+            validationInput.workspaceIdentity = record.execution.workspaceIdentity
+          }
+          const validation = await terminalValidation.validate(validationInput)
+          const revision: TerminalOutputRevision = {
+            artifact: outputState.artifact,
+            correction,
+          }
+          if (outputState.structuredOutput !== undefined) {
+            revision.structuredOutput = outputState.structuredOutput
+          }
+          if (validation.status === 'accepted') {
+            terminalOutputRevisions.push(revision)
+            terminalValidationError = undefined
+            terminalValidationReportFailure = false
+            break
+          }
+          revision.validationError = validation.error
+          terminalOutputRevisions.push(revision)
+          terminalValidationError = validation.error
+          terminalValidationReportFailure = validation.correctionAllowed !== false
+          if (
+            validation.correctionAllowed === false ||
+            correction === terminalValidation.maxCorrections
+          )
+            break
+          const correctionTools = active.session.agent.state.tools
+          active.session.agent.state.tools = []
+          try {
+            await Promise.race([
+              active.session.prompt(validation.correctionPrompt, { expandPromptTemplates: false }),
+              timeoutPromise,
+            ])
+          } finally {
+            active.session.agent.state.tools = correctionTools
+          }
+          this.assertRunContinuing(active)
+          const correctionFailure = stopError(active.messages.at(-1))
+          if (correctionFailure !== undefined) {
+            terminalStopFailure = {
+              error: correctionFailure,
+              status: active.messages.at(-1)?.stopReason === 'aborted' ? 'aborted' : 'failed',
+            }
+          }
+          text = finalText(active.messages)
+          fullOutput = text.length === 0 ? 'The child produced no text output.' : text
+          output = truncateOutput(fullOutput)
+          outputState = await this.createOutputState(
+            record,
+            fullOutput,
+            terminalStopFailure?.status ?? 'completed',
+          )
+          if (terminalStopFailure !== undefined) break
+        }
+      }
+      active.timing.executionEndedAt = Math.max(active.startedAt, Date.now())
+      const durationMs = Date.now() - active.startedAt
+      const usage = collectUsage(active.messages, active.metrics, durationMs)
+      const { artifact, gateResults, structuredOutput } = outputState
       const acceptanceError =
-        structuredOutput !== undefined &&
+        descendantPreparation.conflict ??
+        terminalStopFailure?.error ??
+        terminalValidationError ??
+        (structuredOutput !== undefined &&
         structuredOutput.mode === 'strict' &&
         structuredOutput.status !== 'valid'
           ? (structuredOutput.error ?? 'The structured output is invalid.')
           : gateResults.some((gate) => !gate.passed)
             ? 'A deterministic output gate failed.'
-            : undefined
+            : undefined)
       if (acceptanceError !== undefined) {
-        await this.closeDescendantScope(record, active, 'abort')
+        await this.abortDescendantScope(active)
         await this.captureRunIsolation(active, record)
-        return this.finishFailure(
-          record,
+        const failedRecord: RunRecord = {
+          ...record,
+          terminalOutputRevisions,
+        }
+        if (
+          terminalValidationReportFailure &&
+          terminalValidationError !== undefined &&
+          terminalStopFailure === undefined
+        ) {
+          failedRecord.terminalFailureKind = 'report-contract'
+        }
+        return await this.finishFailure(
+          failedRecord,
           acceptanceError,
-          'failed',
+          terminalStopFailure?.status ?? 'failed',
           durationMs,
           usage,
           output,
           active,
           outputState,
+          toolExecutionReceipts,
         )
       }
       this.assertRunContinuing(active)
-      const scopeConflict = await this.closeDescendantScope(record, active, 'success')
+      await this.acceptDescendantScope(active, descendantPreparation.integrations)
       this.assertRunContinuing(active)
-      const isolationReceipt = await this.captureRunIsolation(active, record)
-      this.assertRunContinuing(active)
-      if (scopeConflict !== undefined) {
-        return this.finishFailure(
-          record,
-          scopeConflict,
-          'failed',
-          durationMs,
-          usage,
-          output,
-          active,
-          outputState,
-        )
-      }
       if (
         isolationReceipt?.captureStatus === 'captured' &&
         isolationReceipt.integration === 'apply' &&
@@ -2706,7 +3275,7 @@ export class SubagentRuntime {
             ? 'The isolated changes could not be integrated without a conflict.'
             : undefined
       if (integrationError !== undefined) {
-        return this.finishFailure(
+        return await this.finishFailure(
           record,
           integrationError,
           'failed',
@@ -2715,6 +3284,7 @@ export class SubagentRuntime {
           output,
           active,
           outputState,
+          toolExecutionReceipts,
         )
       }
 
@@ -2722,15 +3292,33 @@ export class SubagentRuntime {
         this.assignIsolationReceipt(record, active.isolationReceipt)
       }
       active.timing.settledAt = Math.max(active.timing.executionEndedAt, Date.now())
+      const attemptEvidence: AttemptEvidence = {
+        agentId: record.agentId,
+        artifact,
+        attempt: record.runGeneration ?? 1,
+        gateResults,
+        status: 'completed',
+        toolExecutionReceipts,
+      }
+      if (active.isolationReceipt !== undefined) {
+        attemptEvidence.isolation = active.isolationReceipt
+      }
+      if (structuredOutput !== undefined) attemptEvidence.structuredOutput = structuredOutput
+      if (terminalOutputRevisions.length > 0) {
+        attemptEvidence.terminalOutputRevisions = terminalOutputRevisions
+      }
+      const evidence = await this.persistAttemptEvidence(record, attemptEvidence)
       const completedRecord: RunRecord = {
         ...record,
         timing: { ...active.timing },
         artifact,
+        evidenceArtifacts: [...(record.evidenceArtifacts ?? []), evidence],
         durationMs,
         gateResults,
         intercomUsage: active.intercomUsage,
         output,
         status: 'completed',
+        toolExecutionReceipts,
         updatedAt: Date.now(),
         usage,
       }
@@ -2739,6 +3327,9 @@ export class SubagentRuntime {
       if (active.isolationReceipt !== undefined) completedRecord.isolation = active.isolationReceipt
       if (active.retryFailure !== undefined) completedRecord.retryFailure = active.retryFailure
       if (structuredOutput !== undefined) completedRecord.structuredOutput = structuredOutput
+      if (terminalOutputRevisions.length > 0) {
+        completedRecord.terminalOutputRevisions = terminalOutputRevisions
+      }
       this.state.update(completedRecord)
       return {
         content: output,
@@ -2757,6 +3348,7 @@ export class SubagentRuntime {
           runId: record.runId ?? record.agentId,
           status: 'completed',
           toolCallCount: active.metrics.toolCalls,
+          toolExecutionReceipts,
           transcriptPath: record.sessionFile,
           timing: { ...active.timing },
           structuredOutput,
@@ -2772,9 +3364,10 @@ export class SubagentRuntime {
       const output = truncateOutput(fullOutput)
       const durationMs = Date.now() - active.startedAt
       const usage = collectUsage(active.messages, active.metrics, durationMs)
+      const toolExecutionReceipts = await this.publishToolExecutionReceipts(record, active)
       const status = active.abortReason === undefined ? 'failed' : 'aborted'
       try {
-        await this.closeDescendantScope(record, active, 'abort')
+        await this.abortDescendantScope(active)
       } catch {}
       if (active.isolationReceipt === undefined) {
         try {
@@ -2786,7 +3379,7 @@ export class SubagentRuntime {
           outputState = await this.createOutputState(record, fullOutput, status)
         } catch {}
       }
-      return this.finishFailure(
+      return await this.finishFailure(
         record,
         active.abortReason ?? errorMessage(error),
         status,
@@ -2795,6 +3388,7 @@ export class SubagentRuntime {
         output,
         active,
         outputState,
+        toolExecutionReceipts,
       )
     } finally {
       if (timeout !== undefined) clearTimeout(timeout)
@@ -2875,6 +3469,30 @@ export class SubagentRuntime {
     )
   }
 
+  private recordEvidence(record: RunRecord): AttemptEvidence {
+    if (record.status === 'running') throw new Error('The subagent evidence is not terminal.')
+    const evidence: AttemptEvidence = {
+      agentId: record.agentId,
+      attempt: record.runGeneration ?? 1,
+      gateResults: structuredClone(record.gateResults ?? []),
+      status: record.status,
+      toolExecutionReceipts: structuredClone(record.toolExecutionReceipts ?? []),
+    }
+    if (record.artifact !== undefined) evidence.artifact = { ...record.artifact }
+    if (record.error !== undefined) evidence.error = record.error
+    if (record.isolation !== undefined) evidence.isolation = structuredClone(record.isolation)
+    if (record.structuredOutput !== undefined) {
+      evidence.structuredOutput = structuredClone(record.structuredOutput)
+    }
+    if (record.terminalFailureKind !== undefined) {
+      evidence.terminalFailureKind = record.terminalFailureKind
+    }
+    if (record.terminalOutputRevisions !== undefined) {
+      evidence.terminalOutputRevisions = structuredClone(record.terminalOutputRevisions)
+    }
+    return evidence
+  }
+
   private recordResult(record: RunRecord): SubagentResult {
     if (record.status === 'running') throw new Error('The subagent result is not terminal.')
     return {
@@ -2892,6 +3510,7 @@ export class SubagentRuntime {
         record.structuredOutput === undefined
           ? undefined
           : structuredClone(record.structuredOutput),
+      toolExecutionReceipts: structuredClone(record.toolExecutionReceipts ?? []),
       transcriptPath: record.sessionFile,
       timing: record.timing === undefined ? undefined : { ...record.timing },
       usage: { ...(record.usage ?? emptyUsage(record.durationMs ?? 0)) },
@@ -2915,7 +3534,7 @@ export class SubagentRuntime {
     }
   }
 
-  private finishFailure(
+  private async finishFailure(
     record: RunRecord,
     error: string,
     status: 'failed' | 'aborted',
@@ -2924,7 +3543,8 @@ export class SubagentRuntime {
     output: string,
     active: ActiveRun,
     outputState?: OutputState,
-  ): RuntimeFailedResult {
+    toolExecutionReceipts: ToolExecutionReceipt[] = [],
+  ): Promise<RuntimeFailedResult> {
     this.propagateDescendantVisibility(record, 'blocked')
     if (active.isolationReceipt !== undefined) {
       this.assignIsolationReceipt(record, active.isolationReceipt)
@@ -2938,6 +3558,7 @@ export class SubagentRuntime {
       error,
       intercomUsage: active.intercomUsage,
       status,
+      toolExecutionReceipts,
       updatedAt: Date.now(),
       usage,
     }
@@ -2961,9 +3582,32 @@ export class SubagentRuntime {
       }
     }
     this.state.update(failedRecord)
+    try {
+      const evidence = await this.persistAttemptEvidence(record, this.recordEvidence(failedRecord))
+      failedRecord = {
+        ...failedRecord,
+        evidenceArtifacts: [...(record.evidenceArtifacts ?? []), evidence],
+      }
+      this.state.update(failedRecord)
+    } catch (persistenceError) {
+      const diagnostic = `Task evidence persistence failed: ${errorMessage(persistenceError)}`
+      failedRecord = {
+        ...failedRecord,
+        error: `${error}\n${diagnostic}`,
+        updatedAt: Date.now(),
+      }
+      this.state.update(failedRecord)
+      try {
+        this.pi.appendEntry('pi-subagent-evidence-error', {
+          agentId: record.agentId,
+          attempt: record.runGeneration ?? 1,
+          error: errorMessage(persistenceError),
+        })
+      } catch {}
+    }
     const details: RuntimeFailedDetails = {
       agentId: record.agentId,
-      error,
+      error: failedRecord.error ?? error,
       finalMessage: output,
       isolation: active.isolationReceipt,
       model: record.model,

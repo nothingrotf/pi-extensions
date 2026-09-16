@@ -189,7 +189,7 @@ describe('tool evidence', () => {
     ).rejects.toMatchObject({ code: 'WORK_LIMIT_EXCEEDED' })
   })
 
-  it('evaluates indexed pairing against the legacy scan on unique IDs', async () => {
+  it('pairs 10000 unique IDs with an optional legacy benchmark', async () => {
     const entries: NormalizedEntry[] = []
     for (let index = 0; index < 10000; index += 1) {
       entries.push(
@@ -204,17 +204,20 @@ describe('tool evidence', () => {
     }
     const calls = entries.filter((item) => item.source === 'tool_call')
     const results = entries.filter((item) => item.source === 'tool_result')
-    const legacyStart = performance.now()
-    const legacy = calls.map((call) =>
-      results.find((result) => result.toolCallId === call.toolCallId),
-    )
-    const legacyMs = performance.now() - legacyStart
     const indexedStart = performance.now()
     const paired = await pairToolResults(entries)
     const indexedMs = performance.now() - indexedStart
-    expect(calls.map((call) => paired.get(call)?.results[0])).toEqual(legacy)
+    const actual = calls.map((call) => paired.get(call)?.results[0])
+    expect(actual).toEqual(results)
     expect(paired.size).toBe(10000)
-    if (process.env.SESSION_HISTORY_EVAL === '1')
+    if (process.env.SESSION_HISTORY_EVAL === '1') {
+      const legacyStart = performance.now()
+      const legacy = calls.map((call) =>
+        results.find((result) => result.toolCallId === call.toolCallId),
+      )
+      const legacyMs = performance.now() - legacyStart
+      expect(actual).toEqual(legacy)
       process.stdout.write(`${JSON.stringify({ toolCalls: 10000, legacyMs, indexedMs })}\n`)
+    }
   })
 })

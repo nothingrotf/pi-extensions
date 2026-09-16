@@ -27,11 +27,19 @@ The default scope is the current project directory. The tool resolves symbolic l
 
 Discovery reads regular session files only in the current session store. It does not follow session-file symlinks or scan other stores. New subagent tasks share their parent's store. Resuming a task preserves its original transcript location. Older children in other stores are not discovered automatically.
 
-Cross-directory children must reside within `<git-common-dir>/pi-subagent/worktrees/<workspace>/root` or its subdirectories. Their complete, unambiguous `parentSession` chain must reach a same-project root session or the current live session in this store. A bounded, read-only `git rev-parse` resolves the actual common Git directory. This supports linked worktrees whose `.git` is a file. Cross-directory discovery fails closed if Git cannot resolve that directory.
+Cross-directory children must use a managed execution root or its subdirectories.
+Legacy roots reside within `<git-common-dir>/pi-subagent/worktrees/<workspace>/root`.
+External temporary roots require an exact canonical-path registration in `<git-common-dir>/pi-subagent/execution-roots/<sha256-of-canonical-path>.path`.
+Registrations survive workspace cleanup and do not grant visibility without valid ancestry.
+Their complete, unambiguous `parentSession` chain must reach a same-project root session or the current live session in this store.
+
+A bounded, read-only `git rev-parse` resolves the actual common Git directory.
+This supports linked worktrees whose `.git` is a file.
+Cross-directory discovery fails closed if Git cannot resolve that directory.
 
 The live session anchors its own descendants even when it is itself a child. Sharing the Git common directory does not expose unrelated sibling tasks. Unlinked worktree sessions, unrelated projects claiming a parent, traversal paths, and symlink escapes remain hidden. Existing ancestors are canonicalized even after a worktree is removed, so retained transcripts remain auditable from a surviving repository after cleanup.
 
-This boundary trusts local session-store headers, just as same-project discovery trusts their recorded `cwd`. Header linkage is not cryptographic proof of task execution or authorization. Discovery does not use a private subagent state format.
+This boundary trusts local session-store headers, just as same-project discovery trusts their recorded `cwd`. Header linkage is not cryptographic proof of task execution or authorization. Discovery reads execution-path registrations, not private subagent run state.
 
 The tool excludes the current session and child sessions by default. Set the applicable include fields to `true` when required.
 

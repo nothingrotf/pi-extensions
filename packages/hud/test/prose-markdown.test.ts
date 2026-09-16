@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+
 import { setCapabilities, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui'
 import { afterEach, describe, expect, test } from 'vite-plus/test'
 
@@ -130,6 +132,59 @@ describe('Mermaid code blocks', () => {
     expect(lines).not.toContain('│ flowchart TD')
   })
 
+  test('renders quoted pipe labels without treating their quotes as content', () => {
+    for (const edge of ['-->', '-.->', '==>']) {
+      const source = `\`\`\`mermaid\nflowchart TD\nA ${edge}|"Resposta"| B\n\`\`\``
+      const lines = plain(renderProseMarkdown(source, 80))
+
+      expect(lines).not.toContain('│ flowchart TD')
+      expect(lines.some((line) => line.includes('Resposta'))).toBe(true)
+      expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true)
+    }
+  })
+
+  test('compacts a quoted edge label when Unicode art truncates it', () => {
+    const source = [
+      '```mermaid',
+      'flowchart TD',
+      'A -->|"Credencial ou créditos inválidos"| B',
+      '```',
+    ].join('\n')
+    const lines = plain(renderProseMarkdown(source, 100))
+
+    expect(lines[0]).toBe('│ Flowchart')
+    expect(lines.join(' ')).toContain('Credencial ou créditos inválidos')
+  })
+
+  test('compacts the full captured flowchart without losing labels or relations', async () => {
+    const source = await readFile(
+      new URL('./fixtures/hud-capture-flow.mmd', import.meta.url),
+      'utf8',
+    )
+    const lines = plain(renderProseMarkdown(`\`\`\`mermaid\n${source}\`\`\``, 120))
+    const output = lines
+      .map((line) => line.replace(/^│ ?/u, ''))
+      .join(' ')
+      .replaceAll(/\s+/gu, ' ')
+    const nodeLabels = [...source.matchAll(/(?:\[|\{)"([^"]+)"/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    )
+    const edgeLabels = [...source.matchAll(/\|"([^"]+)"\|/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    )
+    const edgeCount = source.split('\n').filter((line) => line.includes('-->')).length
+    const connections = lines.indexOf('│ Connections')
+
+    expect(lines[0]).toBe('│ Flowchart')
+    expect(connections).toBeGreaterThan(-1)
+    for (const label of nodeLabels) {
+      expect(output).toContain(label.replaceAll(/<br\s*\/?\s*>/giu, ' '))
+    }
+    for (const label of edgeLabels) expect(output).toContain(label)
+    expect(lines.slice(connections + 1)).toHaveLength(edgeCount)
+    expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true)
+  })
+
   test('renders every documented flowchart direction', () => {
     for (const direction of ['TD', 'TB', 'BT', 'LR', 'RL']) {
       const source = `\`\`\`mermaid\nflowchart ${direction}\nA[Start] --> B[Done]\n\`\`\``
@@ -185,7 +240,7 @@ describe('Mermaid code blocks', () => {
     ])
   })
 
-  test('falls back to original code for unsupported syntax and narrow widths', () => {
+  test('falls back to original code for unsupported syntax', () => {
     expect(plain(renderProseMarkdown('```mermaid\npie\n"A" : 1\n```', 80))).toEqual([
       '│ pie',
       '│ "A" : 1',
@@ -193,34 +248,83 @@ describe('Mermaid code blocks', () => {
     expect(
       plain(renderProseMarkdown('```mermaid\nflowchart TD\nA --> B\ngarbage???\n```', 80)),
     ).toEqual(['│ flowchart TD', '│ A --> B', '│ garbage???'])
-    expect(
-      plain(
-        renderProseMarkdown(
-          '```mermaid\nflowchart LR\nA[An exceptionally wide starting node] --> B[Done]\n```',
-          24,
-        ),
-      )[0],
-    ).toBe('│ flowchart LR')
   })
 
-  test('falls back when parallel routing or label placement loses content', () => {
-    const parallel = '```mermaid\nflowchart TD\nA -->|yes| B\nA -->|no| B\n```'
-    const collision = [
+  test('compacts narrow parallel edges with quoted labels', () => {
+    const source = [
       '```mermaid',
       'flowchart TD',
-      'A --> B',
-      'C --> D',
-      'A -->|long collision label| D',
-      'C -->|other label| B',
+      'A[First named node] -->|"first quoted relation"| B[Second named node]',
+      'A -->|"second quoted relation"| B',
       '```',
     ].join('\n')
+    const lines = plain(renderProseMarkdown(source, 24))
+    const output = lines
+      .map((line) => line.replace(/^│ ?/u, ''))
+      .join(' ')
+      .replaceAll(/\s+/gu, ' ')
 
-    expect(plain(renderProseMarkdown(parallel, 100))).toEqual([
-      '│ flowchart TD',
-      '│ A -->|yes| B',
-      '│ A -->|no| B',
-    ])
-    expect(plain(renderProseMarkdown(collision, 100))).toContain('│ C -->|other label| B')
+    expect(lines[0]).toBe('│ Flowchart')
+    expect(output).toContain('First named node')
+    expect(output).toContain('Second named node')
+    expect(output).toContain('first quoted relation')
+    expect(output).toContain('second quoted relation')
+    expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true)
+  })
+
+  test('compacts inline edge labels without turning them into nodes', () => {
+    for (const [edge, operator] of [
+      ['-- yes -->', '-->'],
+      ['== yes ==>', '==>'],
+      ['-. yes .->', '.->'],
+    ]) {
+      const source = [
+        '```mermaid',
+        'flowchart TD',
+        `A[First node deliberately made wide] ${edge} B[Second node deliberately made wide]`,
+        '```',
+      ].join('\n')
+      const lines = plain(renderProseMarkdown(source, 24))
+      const output = lines
+        .map((line) => line.replace(/^│ ?/u, ''))
+        .join(' ')
+        .replaceAll(/\s+/gu, ' ')
+
+      expect(lines[0]).toBe('│ Flowchart')
+      expect(lines).not.toContain('│ 2. yes')
+      expect(output).toContain(`1 ${operator} 2 · yes`)
+    }
+  })
+
+  test('compacts unspaced Mermaid links without phantom node IDs', () => {
+    for (const operator of ['---', '-.->', '-->']) {
+      const source = [
+        '```mermaid',
+        'flowchart TD',
+        `A[First node deliberately made wide]${operator}B[Second node deliberately made wide]`,
+        '```',
+      ].join('\n')
+      const lines = plain(renderProseMarkdown(source, 24))
+      const output = lines
+        .map((line) => line.replace(/^│ ?/u, ''))
+        .join(' ')
+        .replaceAll(/\s+/gu, ' ')
+
+      expect(lines[0]).toBe('│ Flowchart')
+      expect(output).toContain(`1 ${operator} 2`)
+    }
+  })
+
+  test('falls back rather than compacting malformed links or directives', () => {
+    for (const source of [
+      'A[First node deliberately made wide] - B[Second node deliberately made wide]',
+      'A[First node deliberately made wide] ><-- B[Second node deliberately made wide]',
+      'A[First node deliberately made wide] --> B[Second node deliberately made wide]\nend',
+    ]) {
+      const markdown = `\`\`\`mermaid\nflowchart TD\n${source}\n\`\`\``
+
+      expect(plain(renderProseMarkdown(markdown, 24))[0]).toBe('│ flowchart TD')
+    }
   })
 
   test('falls back for grapheme widths that differ from Pi', () => {

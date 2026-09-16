@@ -1,65 +1,51 @@
 ---
 name: how
-description: "Use for \"how does X work\", code walkthroughs before changing something, and placement / ownership / layering questions (\"where should this live\", \"which package owns this\", \"is this the right layer\"). Explains subsystem architecture, runtime flow, onboarding mental models. Use why for motivation."
+description: "Explains runtime behavior, subsystem architecture, and ownership. Use for 'how does X work', code walkthroughs, or placement questions. Use why for motivation."
 disable-model-invocation: true
 ---
 
 # How
 
-Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
+Build the mental model in the agent that needs it.
+Run this skill in the current session by default, including inside a leaf Task.
+Do not create an explainer merely to read code or rewrite findings.
+An accepted design carries its grounding. Revisit only stale, missing, or contested evidence.
 
-Run `how` when the model is missing or the design is contested. An accepted design for an issue carries its grounding, and implementing against one does not rerun this skill.
+## 1. Frame
 
-Pass `capability_profile: "pstack-leaf"` for every worker below. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
+State the question, relevant entrypoints, and unresolved decisions.
+For a narrow question, inspect the smallest relevant surface.
+For a subsystem, identify its independent boundaries before deciding whether delegation helps.
+Keep the existing issue owner through investigation and implementation.
 
-Use the parsed pstack runtime policy in context. Omit `Task.model` for explorer and explainer roles to select their configured model. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
+## 2. Trace
 
-## Step 1. Assess Complexity
+Use `find`, `grep`, and `read` to trace inputs, decisions, state changes, failures, and observable results.
+Run independent tool calls in parallel when their inputs do not depend on each other.
+Keep decisive evidence and rejected explanations with source references, not only a summary.
+If runtime behavior matters, execute the smallest representative probe within the current authorization.
+Read-only investigations do not authorize code changes.
 
-If the scope is ambiguous, state your interpretation and explore. The user can redirect.
+## 3. Delegate only independent work
 
-- **Simple** (a single module, a small utility, a narrow question such as "how does function X work"): no explorers. One explainer explores and explains in a single pass. Go to Step 2b.
-- **Complex** (a subsystem spanning multiple files or services, a cross-cutting feature, a full architectural overview): spawn parallel explorers first, then hand off to the explainer. Go to Step 2a.
+Delegate only when a named independent slice exceeds the owner's practical context or benefits from parallel investigation.
+State the slice, expected evidence, and reason before dispatch.
+A large model pool or multiple source files does not establish that reason.
+Preserve an explicit user request for parallel perspectives.
+If required delegation is unavailable, report the missing capability instead of silently replacing the requested review.
 
-When in doubt, take the simple path.
+Before dispatch, read [Task contracts](../poteto-mode/references/task-contracts.md).
+Use `subagent_type: "generalPurpose"`, `capability_profile: "pstack-leaf"`, `role: "how explorer"`, and `readonly: true` for explorers.
+Omit `Task.model` for the scalar policy. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
+Use `references/explorer-prompt.md` for the bounded question, relevant paths, and evidence requirements.
+The current owner checks the returned evidence and writes the synthesis without another Task.
+The `how explainer` role remains available for explicitly delegated standalone explanations, not automatic synthesis stages.
+Use [Explainer prompt](references/explainer-prompt.md) for that explicit assignment.
 
-## Step 2a. Explore (complex questions only)
+## 4. Explain
 
-Decompose the question into 2 to 4 exploration angles, each a distinct slice of the subsystem. Spawn all explorers in a single message:
-
-- `subagent_type`: `generalPurpose`
-- `role`: `how explorer`
-- `model`: omit to use the configured `how explorer` runtime policy
-- `readonly`: `true`
-
-Each explorer gets the prompt in `references/explorer-prompt.md` with its angle filled in. Then go to Step 3.
-
-## Step 2b. Direct Explain (simple questions)
-
-Spawn one Task subagent that explores and explains in one pass:
-
-- `role`: `how explainer`
-- `subagent_type`: `generalPurpose`
-- `model`: omit to use the configured `how explainer` runtime policy
-- `readonly`: `true`
-
-Build its prompt from `references/explainer-prompt.md` without the explorer-findings section. Go to Step 4.
-
-## Step 3. Synthesize (complex questions only)
-
-Once all explorers have returned, spawn one Task subagent to synthesize their findings into one explanation:
-
-- `role`: `how explainer`
-- `subagent_type`: `generalPurpose`
-- `model`: omit to use the configured `how explainer` runtime policy
-- `readonly`: `true`
-
-Build its prompt from `references/explainer-prompt.md` with every explorer's findings filled in.
-
-## Step 4. Present
-
-Present the explainer's output to the user. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.
-
-## Output Format
-
-The explanation uses the sections defined in `references/explainer-prompt.md`, dropping any that do not apply: Overview, Key Concepts, How It Works, Where Things Live, Gotchas.
+Write Overview, Key Concepts, How It Works, Where Things Live, and Gotchas when those sections help.
+Link claims to source ranges or executed evidence. Distinguish observations from inferences and unresolved questions.
+Use a diagram when it clarifies ownership or data flow.
+Do not dump annotated source or duplicate the complete investigation transcript.
+For a pending change, retain the original question, decisive evidence, constraints, and open questions for the same owner.

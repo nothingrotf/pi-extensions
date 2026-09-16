@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { decodeIntercomDetails, renderIntercomCard } from '../src/cards.ts'
 import {
+  evidencePage,
   renderTaskControlCall,
   renderTaskControlResult,
   serializeTaskControl,
   TaskControlInputSchema,
+  taskStatus,
   type TaskControlRenderState,
   type TaskControlScope,
   waitForJobs,
@@ -35,6 +37,7 @@ function snapshot(agentId: string, running: boolean): SubagentSnapshot {
   }
   return {
     agentId,
+    attempt: 1,
     background: false,
     contextState: undefined,
     description: `${agentId} lane`,
@@ -87,6 +90,7 @@ function fixture(initial: SubagentSnapshot[]) {
   return {
     host: { hasUI: true, ui: { setWorkingMessage: (message?: string) => messages.push(message) } },
     messages,
+    listenerCount: () => listeners.size,
     runtime: {
       subscribe: (listener: () => void) => {
         listeners.add(listener)
@@ -108,6 +112,69 @@ function fixture(initial: SubagentSnapshot[]) {
 }
 
 describe('task control wait', () => {
+  it('keeps evidence pages valid and within the serialized transport budget', () => {
+    const source = '\u0000"\n界🙂\\'.repeat(2_000)
+    let cursor = 0
+    let recovered = ''
+    while (cursor < Buffer.byteLength(source)) {
+      const result = (content: string, nextCursor: number | null, totalBytes: number) => {
+        const details: Parameters<typeof serializeTaskControl>[0] = {
+          action: 'evidence',
+          agent_id: 'agent',
+          attempt: 1,
+          content,
+          cursor,
+          digest: 'a'.repeat(64),
+          freshness: 'current',
+          next_cursor: nextCursor,
+          outcome: 'found',
+          section: 'output',
+          total_bytes: totalBytes,
+        }
+        return {
+          content: [{ text: serializeTaskControl(details), type: 'text' }],
+          details,
+        }
+      }
+      let serializationCalls = 0
+      const page = evidencePage(source, cursor, 8 * 1_024, (content, nextCursor, totalBytes) => {
+        serializationCalls += 1
+        return JSON.stringify(result(content, nextCursor, totalBytes))
+      })
+      if (page === undefined) throw new Error('The evidence cursor became invalid.')
+      const transport = result(page.content, page.nextCursor, page.totalBytes)
+      expect(Buffer.byteLength(JSON.stringify(transport))).toBeLessThanOrEqual(32 * 1_024)
+      expect(Buffer.byteLength(transport.content[0]?.text ?? '')).toBeLessThanOrEqual(32 * 1_024)
+      expect(Buffer.byteLength(JSON.stringify(transport.details))).toBeLessThanOrEqual(32 * 1_024)
+      expect(serializationCalls).toBeLessThanOrEqual(16)
+      recovered += page.content
+      if (page.nextCursor === null) break
+      expect(page.nextCursor).toBeGreaterThan(cursor)
+      cursor = page.nextCursor
+    }
+    expect(recovered).toBe(source)
+  })
+
+  it('bounds status error content and details without changing runtime records', () => {
+    const rawError = '\u0000"界🙂\\'.repeat(10_000)
+    const failed: SubagentSnapshot = {
+      ...snapshot('failed', false),
+      error: rawError,
+      status: 'failed',
+    }
+    const details: Parameters<typeof serializeTaskControl>[0] = {
+      action: 'status',
+      outcome: 'found',
+      task: taskStatus({ latestResult: () => undefined }, failed),
+    }
+    const content = serializeTaskControl(details)
+    expect(failed.error).toBe(rawError)
+    expect(details.task.error).toContain('[Preview truncated.]')
+    expect(Buffer.byteLength(details.task.error ?? '')).toBeLessThanOrEqual(2 * 1_024 + 22)
+    expect(Buffer.byteLength(content)).toBeLessThanOrEqual(32 * 1_024)
+    expect(Buffer.byteLength(JSON.stringify(details))).toBeLessThanOrEqual(32 * 1_024)
+  })
+
   it('validates the wait and jobs inputs', () => {
     expect(Value.Check(TaskControlInputSchema, { action: 'wait' })).toBe(true)
     expect(Value.Check(TaskControlInputSchema, { action: 'wait', agent_ids: [] })).toBe(false)
@@ -123,6 +190,7 @@ describe('task control wait', () => {
     })
     expect(details).toEqual({ action: 'wait', jobs: [], outcome: 'idle', settled: [] })
     expect(state.messages).toEqual([])
+    expect(state.listenerCount()).toBe(0)
   })
 
   it('streams the job tree and returns on the first settled job', async () => {
@@ -146,14 +214,60 @@ describe('task control wait', () => {
     expect(details.settled).toEqual(['b'])
     expect(state.messages.at(-1)).toBeUndefined()
     expect(events.at(-1)).toBeNull()
+    expect(state.listenerCount()).toBe(0)
     expect(serializeTaskControl(details)).toContain('Settled: b.')
     expect(serializeTaskControl(details)).toContain('- a running "a lane"')
+  })
+
+  it('cleans up when subscription reports settlement synchronously', async () => {
+    let current = snapshot('a', true)
+    let subscriptions = 0
+    const scope: TaskControlScope = {
+      allows: () => true,
+      callerId: () => 'root',
+      cancel: () => Promise.reject(new Error('unused')),
+      destination: () => Promise.reject(new Error('unused')),
+      snapshots: () => [current],
+      steer: () => Promise.reject(new Error('unused')),
+    }
+    const details = await waitForJobs(
+      { action: 'wait' },
+      { hasUI: false, ui: { setWorkingMessage: () => undefined } },
+      {
+        subscribe: (listener) => {
+          subscriptions += 1
+          current = snapshot('a', false)
+          listener()
+          return () => {
+            subscriptions -= 1
+          }
+        },
+      },
+      scope,
+      { onUpdate: undefined, signal: undefined },
+    )
+    expect(details.outcome).toBe('settled')
+    expect(subscriptions).toBe(0)
   })
 
   it('returns on timeout and on abort', async () => {
     vi.useFakeTimers()
     try {
       const state = fixture([snapshot('a', true)])
+      const defaultController = new AbortController()
+      let defaultResolved = false
+      const defaultWait = waitForJobs({ action: 'wait' }, state.host, state.runtime, state.scope, {
+        onUpdate: undefined,
+        signal: defaultController.signal,
+      }).then((details) => {
+        defaultResolved = true
+        return details
+      })
+      await vi.advanceTimersByTimeAsync(300_000)
+      expect(defaultResolved).toBe(false)
+      defaultController.abort()
+      expect((await defaultWait).outcome).toBe('aborted')
+      expect(state.listenerCount()).toBe(0)
       const timed = waitForJobs(
         { action: 'wait', timeout_ms: 1_000 },
         state.host,
@@ -170,6 +284,7 @@ describe('task control wait', () => {
       })
       controller.abort()
       expect((await aborted).outcome).toBe('aborted')
+      expect(state.listenerCount()).toBe(0)
     } finally {
       vi.useRealTimers()
     }
@@ -211,7 +326,15 @@ describe('task control wait', () => {
     ).render(80)
     expect(sealed).toEqual(['✔ 1 job settled 1 done', '╰─ • ⟦task⟧ b lane 4.0s'])
     const listing = renderTaskControlResult(
-      { action: 'jobs', jobs },
+      {
+        action: 'jobs',
+        count: 2,
+        cursor: 0,
+        has_more: false,
+        jobs,
+        next_cursor: null,
+        total: 2,
+      },
       '',
       { expanded: false, isPartial: false },
       theme,
@@ -276,6 +399,45 @@ describe('task control wait', () => {
     expect(render({ action: 'status', agent_id: 'a', outcome: 'not-found' })).toEqual([
       '⚠ Task a not found',
     ])
+    const failedTask: SubagentSnapshot = {
+      ...snapshot('failed', false),
+      error: 'failure '.repeat(40),
+      status: 'failed',
+    }
+    const failedStatus = render({
+      action: 'status',
+      outcome: 'found',
+      task: {
+        activity: null,
+        agent_id: failedTask.agentId,
+        artifact: null,
+        attempt: failedTask.attempt,
+        context_state: null,
+        description: failedTask.description,
+        effort: failedTask.effort,
+        ended_at: failedTask.endedAt ?? null,
+        error: failedTask.error ?? null,
+        evidence: [],
+        gate_count: 0,
+        intercom_usage: failedTask.intercomUsage,
+        isolation: null,
+        model: failedTask.model,
+        output_bytes: 0,
+        readonly: failedTask.readonly,
+        retry_failure: null,
+        retry_state: null,
+        running: failedTask.running,
+        started_at: failedTask.startedAt,
+        state: failedTask.status,
+        structured_output_status: null,
+        subagent_type: failedTask.subagentType,
+        tool_receipt_count: 0,
+        usage: failedTask.usage,
+      },
+    })
+    expect(failedStatus).toHaveLength(2)
+    expect(failedStatus[1]).toContain('failure')
+    expect(failedStatus[1]?.length).toBeLessThanOrEqual(84)
     const card = renderIntercomCard(
       { agentId: 'a', kind: 'automatic-reply', question: 'Which branch?', reply: 'Use main.' },
       'a lane',

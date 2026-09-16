@@ -25,6 +25,7 @@ function harness() {
   return {
     api: {
       events,
+      registerTool() {},
       on(event, handler) {
         if (event === 'session_shutdown') shutdownHandlers.push(handler)
       },
@@ -60,7 +61,7 @@ describe('pstack extension', () => {
         },
         {
           description:
-            "Routing target for `/poteto-mode` and any request for poteto's style. Resume an existing `poteto-agent` for the conversation rather than spawning a sibling. Reads the `poteto-mode` skill's `SKILL.md` in full before any work, including its inline Principles index. Substituting `generalPurpose` skips that read and drifts.",
+            'Scoped Poteto issue owner or reviewer. Preserves evidence and conversation across compatible corrections. Loads its worker contract and assigned workflow without the full coordinator catalog.',
           capabilityProfile: 'pstack-leaf',
           is_background: true,
           name: 'poteto-agent',

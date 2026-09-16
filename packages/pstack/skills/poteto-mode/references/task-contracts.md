@@ -4,7 +4,12 @@ Read this contract before dispatching pstack work. Preserve it across single cal
 
 ## Delivery contract
 
-Read the [Delivery contract](delivery-contract.md) for per-issue fields, phases, lanes, and ownership. Pass those fields inside the `prompt` string as plain text. They are prompt content, not Task input fields, so never turn them into invented Task call parameters.
+Read the [Delivery contract](delivery-contract.md) for per-issue context, phases, lanes, and ownership.
+Pass phase, design, evidence, and acceptance context inside `prompt`, never as invented Task input fields.
+Bind managed work with `delivery: { kind: "managed", issue: "<open issue id>" }`.
+Use `delivery: { kind: "independent" }` for unrelated work outside the delivery ledger.
+The structured binding applies to single calls and graph nodes. Resume preserves the original binding.
+When a managed ledger exists, publication cannot opt out through an independent binding.
 
 ## Identity and model selection
 
@@ -13,6 +18,8 @@ Set `Task.role` to the role whose model policy selected this worker. Keep `subag
 Use the labels from `setup-pstack`, including `feature`, `refactoring`, `how explorer`, and `why synthesizer`. Split grouped configuration labels into the active role.
 
 Use `code review` for independent technical review and `runtime verification` for executable acceptance evidence. Use `publication` for destination Git and PR operations. Reserve `judgment and prose` for prose and evidence synthesis. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
+
+Only those five implementation roles can own implementation submissions and candidate artifacts. Architecture, diagnosis, review, verification, publication, synthesis, and investigation roles cannot replace that owner. Record a failed supporting report as non-owning WIP without converting it into another implementation attempt.
 
 Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
@@ -26,11 +33,20 @@ For different-family reviews, choose a configured entry from another family than
 
 The extension refreshes the policy before each root prompt and root `Task` call without reload. New dispatches use the latest published policy. Resume preserves the stored model even when the policy changes.
 
-Task batches preflight every entry before starting children. An invalid role, unavailable selected model, or omitted distinct panel choice rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
+Task batches preflight every entry before starting children. An invalid role, unavailable selected model, omitted distinct panel choice, or missing managed issue binding rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
+
+Prefer the structured `delivery` binding over an `issue: <id>` prompt line.
+Legacy calls can retain one exact issue line or an existing managed resume binding.
+This rule covers implementations, `code review`, `runtime verification`, `publication`, and `hardest tasks` diagnoses.
+Keep legacy prompt bindings consistent with structured bindings.
+Do not infer an issue from prose or choose the first ledger entry.
+Read-only investigations outside these roles and sessions without a ledger remain unaffected.
+Managed implementations, reviews, and diagnoses receive the exact delivery schema, current criteria, and recorded receipt instructions.
+Publication instead requires an accepted checkpoint and explicit foreground execution.
 
 A role never grants permissions. The runtime never infers it from a model or prompt.
 
-Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and manual isolation. Static review alone uses `code review` with read-only tools. Resume compatible owners for corrections and missing report details, rather than creating a context for each pass. Start a fresh agent only when the role, model family, required capabilities, or artifact access must change. Carry the saved brief, harness, and evidence into that replacement. Never weaken resume validation.
+Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and manual isolation. Static review alone uses `code review` with read-only tools. Resume compatible owners for code corrections and missing proof, rather than creating a context for each pass. Use managed report repair for malformed reports backed by retained proof, without another Task or workspace. Start a fresh agent when the role, model family, capabilities, artifact access, or diagnosed context failure requires replacement. Carry the saved brief, harness, and evidence into that replacement. Never weaken resume validation.
 
 Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to single Task calls, not graph nodes. The graph scheduler owns node execution.
 
@@ -40,7 +56,8 @@ Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to 
 
 For routed `generalPurpose` workers, pass `capability_profile: "pstack-leaf"`. This adds planning tools without shell access to read-only workers.
 
-If an owner must execute `how`, `architect`, or another delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
+Run `how` and `why` inside the current owner with `pstack-leaf` by default. Neither workflow requires delegation for ordinary investigation.
+If an owner must execute `architect` or another explicitly delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
 
 Check the remaining depth before composing owners. A three-level budget cannot support an arbitrary chain of owners before its leaf workers. When a routed workflow needs more levels, return that workflow to the root coordinator for a fresh dispatch.
 
@@ -51,6 +68,8 @@ A leaf must not silently skip a required delegation. Return the missing capabili
 Neither profile grants `session_history`, MCP, Loop, or ambient source tools. The root coordinator collects external evidence and supplies bounded bundles before delegation. Owners that need unavailable evidence return a blocker with the required queries. Never impersonate the root through advisory intercom.
 
 Use the canonical skill location supplied by the registered pstack agent. Never search unrelated directories or substitute a discarded skill copy.
+Scoped workers read `worker.md` and their assigned workflow. Full coordinators read `../SKILL.md`.
+Reuse unchanged readings within the same session when policy permits. Preserve explicit requirements to reread.
 
 ## Repository writer
 
@@ -59,6 +78,7 @@ Create the destination branch in the coordinator workspace before dispatch. Use 
 ```json
 {
   "description": "Implement the scoped feature",
+  "delivery": { "kind": "managed", "issue": "<open issue id>" },
   "prompt": "Read the repository brief. Implement and verify the feature in the effective workspace. Return the diff and evidence.",
   "subagent_type": "poteto-agent",
   "role": "feature",
@@ -83,6 +103,7 @@ A runtime verifier needs shell access but must never integrate incidental files.
 ```json
 {
   "description": "Verify the exact accepted artifact",
+  "delivery": { "kind": "managed", "issue": "<open issue id>" },
   "prompt": "Run the scoped runtime checks in the effective workspace. Do not modify product code. Return evidence and findings.",
   "subagent_type": "poteto-agent",
   "role": "runtime verification",
@@ -96,6 +117,9 @@ A runtime verifier needs shell access but must never integrate incidental files.
 For a distinct selector pool, add `model` with one permitted entry from the current runtime policy to each review example. Select another model family when independent cross-family review is required.
 
 The runtime retains artifacts and rejects `join` for manual isolation. External reports may use an explicitly authorized path.
+For runtime verification, omitted isolation or integration defaults to `manual`.
+Explicit `apply`, `branch`, and read-only execution fail before dispatch.
+Managed review and verifier resumes inherit their recorded directory and isolation when omitted. Resume cannot change those policies.
 
 Use a disposable exact-head clone when verification requires pristine Git provenance. Never rewrite the source checkout or its dependencies.
 
@@ -104,6 +128,7 @@ Use a disposable exact-head clone when verification requires pristine Git proven
 ```json
 {
   "description": "Review the accepted patch independently",
+  "delivery": { "kind": "managed", "issue": "<open issue id>" },
   "prompt": "Read the accepted patch and bounded evidence. Return one complete verdict with findings, evidence, and blockers.",
   "subagent_type": "generalPurpose",
   "role": "code review",
@@ -125,6 +150,9 @@ For structured results, use `schema-valid` and `json-pointer` gates. Use `artifa
 A JSON file produced inside a worktree is a separate artifact. Inspect that captured file and its contents before acceptance. A reported path alone does not prove that the file exists or matches its claimed format.
 
 Do not apply an `application/json` media-type gate to the native Markdown artifact. Preserve the intended JSON validation through the structured result and the actual captured file.
+Preflight rejects incompatible native artifact types, invalid JSON Pointer syntax, and structured-result gates without an output schema.
+It also rejects supported schema contradictions before allocating a child, model session, or worktree.
+For a batch, correct every invalid entry before retrying. No valid sibling starts when batch preflight fails.
 
 ## Decisions and completion
 
@@ -134,4 +162,20 @@ Only direct background Tasks can wait for a coordinator decision. Other workers 
 
 Use `TaskControl wait` only when no independent work remains. A `completed` status does not imply acceptance or a passing review.
 
+```json
+{
+  "action": "wait",
+  "agent_ids": ["<agent-id from the dispatch receipt>"],
+  "timeout_ms": 300000
+}
+```
+
+Use `agent_ids`, not `agent_id`, for wait.
+Keep numbers, booleans, arrays, and isolation objects typed, not JSON-encoded strings.
+The wait returns on a watched completion, decision request, timeout, or abort, not after all children finish.
+On a decision request, inspect `inbox` and reply using its returned `request_id`.
+On timeout, inspect bounded status once and wait again if no other work is ready.
+Never replace wait with shell `sleep` or repeated status polling.
+
+Follow [Delivery operations](delivery-operations.md) for checkpoints, stalled corrections, artifact reconstruction, and browser preflight.
 Preserve failed, blocked, and interrupted outcomes. Correct tool or environment failures before redispatch instead of weakening verification requirements.

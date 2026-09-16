@@ -25,6 +25,7 @@ import type {
   BatchTaskInput,
   CoordinationRunState,
   CoordinationTaskState,
+  ExecutionContractV5,
   GateResult,
   IsolationReceipt,
   StructuredOutput,
@@ -39,6 +40,7 @@ export interface BatchItemResult {
   model?: string | undefined
   role?: string | undefined
   agentId: string | undefined
+  attemptStarted?: boolean
   artifact: ArtifactRef | undefined
   error: string | undefined
   gateResults: readonly GateResult[]
@@ -65,6 +67,7 @@ function taskInput(node: TaskNodeInput, prompt: string): TaskInput {
   }
   if (node.capability_profile !== undefined) input.capability_profile = node.capability_profile
   if (node.cwd !== undefined) input.cwd = node.cwd
+  if (node.delivery !== undefined) input.delivery = node.delivery
   if (node.gates !== undefined) input.gates = node.gates
   if (node.isolation !== undefined) input.isolation = node.isolation
   if (node.model !== undefined) input.model = node.model
@@ -133,6 +136,7 @@ function failedResult(node: TaskNodeInput, result: RuntimeResult): BatchItemResu
   return {
     agentId: result.details.agentId,
     artifact: result.details.artifact,
+    attemptStarted: result.details.attemptStarted ?? true,
     error: result.details.error,
     gateResults: result.details.gateResults ?? [],
     isolation: result.details.isolation,
@@ -160,6 +164,35 @@ interface BatchOptions {
   onStarted?: (agentId: string) => void
   runtime: SubagentRuntime
   signal: AbortSignal | undefined
+}
+
+type BatchPreflight = Pick<ExecutionContractV5, 'isolation' | 'logicalCwd' | 'readonly'>
+
+type TaskIsolation = NonNullable<TaskInput['isolation']>
+
+interface PreparedNode {
+  cwd: string
+  id: string
+  isolation: TaskIsolation | undefined
+  targetRoot: string | undefined
+}
+
+interface AggregatePlan {
+  readonly nodeIds: Set<string>
+  readonly rootContext: WorkspaceContext
+  readonly rootDestination: IsolationDestination
+  workspace: WriterWorkspace | undefined
+}
+
+function resolvedIsolation(policy: BatchPreflight): TaskIsolation | undefined {
+  if (policy.isolation !== undefined) {
+    return {
+      integration: policy.isolation.integration ?? 'apply',
+      mode: policy.isolation.mode,
+    }
+  }
+  if (policy.readonly === false) return { integration: 'apply', mode: 'worktree' }
+  return undefined
 }
 
 export async function runBatch(options: BatchOptions): Promise<BatchResult> {
@@ -204,53 +237,105 @@ async function executeBatch(
 ): Promise<BatchResult> {
   const graph = buildTaskGraph(options.input.tasks)
   const runId = randomUUID()
-  const rootContext = await createRootWorkspaceContext(
-    options.ctx.cwd,
-    `scope-coordination-${runId}`,
-    options.ctx.sessionManager.getSessionId(),
-  )
   const baseInputs = graph.nodes.map((node) => taskInput(node, node.prompt))
-  const readonlyPolicies = await options.runtime.preflight(options.ctx, baseInputs)
+  const preflight = await options.runtime.preflight(options.ctx, baseInputs)
   lifecycle.assertContinuing()
-  const mutableTaskIds = new Set(
-    graph.nodes.filter((_node, index) => readonlyPolicies[index] === false).map((node) => node.id),
-  )
-  const needsAggregate = mutableTaskIds.size > 0
-  let aggregate: WriterWorkspace | undefined
-  let rootDestination: IsolationDestination | undefined
-  if (needsAggregate) {
-    const repoRoot = await repositoryRoot(rootContext.physicalRoot)
-    if (repoRoot === undefined) {
-      throw new Error(`Git repository not found from ${rootContext.physicalRoot}.`)
+  if (preflight.length !== graph.nodes.length) {
+    throw new Error('The runtime preflight returned an unexpected number of Task policies.')
+  }
+  const preparedNodes: PreparedNode[] = []
+  const targetRoots = new Map<string, string>()
+  const aggregateRoots = new Set<string>()
+  for (const [index, node] of graph.nodes.entries()) {
+    const policy = preflight[index]
+    if (policy === undefined) {
+      throw new Error(`The runtime preflight omitted Task "${node.id}".`)
     }
-    rootDestination = {
-      destinationPhysicalRoot: rootContext.physicalRoot,
-      destinationWorkspaceId: rootContext.workspaceId,
-      durableCommonDir: await commonDirectory(repoRoot),
+    const cwd = policy.logicalCwd
+    const isolation = resolvedIsolation(policy)
+    const targetRoot = await repositoryRoot(cwd)
+    if (!policy.readonly && targetRoot === undefined) {
+      throw new Error(`Git repository not found from ${cwd}.`)
+    }
+    if (isolation !== undefined && targetRoot === undefined) {
+      throw new Error(`Git repository not found from ${cwd}.`)
+    }
+    preparedNodes.push({
+      cwd,
+      id: node.id,
+      isolation,
+      targetRoot,
+    })
+    if (targetRoot !== undefined) targetRoots.set(node.id, targetRoot)
+    if (!policy.readonly && isolation?.integration === 'apply' && targetRoot !== undefined) {
+      aggregateRoots.add(targetRoot)
     }
   }
-  const ensureAggregate = async (): Promise<WorkspaceContext> => {
-    if (aggregate !== undefined) return aggregate.context
-    if (rootDestination === undefined)
-      throw new Error('The aggregate workspace root is unavailable.')
+  const aggregatePlans = new Map<string, AggregatePlan>()
+  for (const targetRoot of aggregateRoots) {
+    const rootContext = await createRootWorkspaceContext(
+      targetRoot,
+      `scope-coordination-${runId}`,
+      options.ctx.sessionManager.getSessionId(),
+    )
+    aggregatePlans.set(targetRoot, {
+      nodeIds: new Set(),
+      rootContext,
+      rootDestination: {
+        destinationPhysicalRoot: rootContext.physicalRoot,
+        destinationWorkspaceId: rootContext.workspaceId,
+        durableCommonDir: await commonDirectory(rootContext.physicalRoot),
+      },
+      workspace: undefined,
+    })
+  }
+  for (const [taskId, targetRoot] of targetRoots) {
+    aggregatePlans.get(targetRoot)?.nodeIds.add(taskId)
+  }
+  const ensureAggregate = async (plan: AggregatePlan): Promise<WorkspaceContext> => {
+    if (plan.workspace !== undefined) return plan.workspace.context
     lifecycle.assertContinuing()
-    aggregate = await createIsolation({
-      destination: rootDestination,
+    plan.workspace = await createIsolation({
+      destination: plan.rootDestination,
       integration: 'apply',
-      parent: rootContext,
+      parent: plan.rootContext,
       relativeCwd: '',
       spawnOrdinal: 0,
       writerId: `coordination-${runId}`,
     })
-    options.runtime.registerWorkspace(aggregate)
-    return aggregate.context
+    options.runtime.registerWorkspace(plan.workspace)
+    return plan.workspace.context
   }
-  for (const [index, input] of baseInputs.entries()) {
-    if (readonlyPolicies[index] === false && input.isolation === undefined) {
-      input.isolation = { integration: 'apply', mode: 'worktree' }
+  const needsAggregate = aggregatePlans.size > 0
+  const aggregateByTaskId = new Map<string, AggregatePlan>()
+  for (const prepared of preparedNodes) {
+    if (prepared.isolation?.integration !== 'apply' || prepared.targetRoot === undefined) continue
+    const plan = aggregatePlans.get(prepared.targetRoot)
+    if (plan !== undefined) aggregateByTaskId.set(prepared.id, plan)
+  }
+  const preparedByTaskId = new Map(preparedNodes.map((prepared) => [prepared.id, prepared]))
+  const candidateByTaskId = new Map(aggregateByTaskId)
+  for (const wave of graph.waves) {
+    for (const node of wave) {
+      const prepared = preparedByTaskId.get(node.id)
+      if (prepared === undefined) {
+        throw new Error(`The Task preparation for "${node.id}" is missing.`)
+      }
+      const dependencyPlans = (node.needs ?? [])
+        .map((taskId) => candidateByTaskId.get(taskId))
+        .filter((plan): plan is AggregatePlan => plan !== undefined)
+      if (dependencyPlans.length === 0) continue
+      const aggregatePlan = aggregateByTaskId.get(node.id)
+      const candidatePlan =
+        prepared.targetRoot === undefined ? undefined : aggregatePlans.get(prepared.targetRoot)
+      if (aggregatePlan !== undefined) continue
+      if (candidatePlan === undefined || dependencyPlans.some((plan) => plan !== candidatePlan)) {
+        throw new Error(`Cross-root candidate verification is unsupported for Task "${node.id}".`)
+      }
+      candidateByTaskId.set(node.id, candidatePlan)
     }
   }
-  if (needsAggregate) await ensureAggregate()
+  for (const plan of aggregatePlans.values()) await ensureAggregate(plan)
   const mailbox = new RunMailbox(graph.nodes.map((node) => node.id))
   const results = new Map<string, BatchItemResult>()
   let runState: CoordinationRunState = {
@@ -270,8 +355,8 @@ async function executeBatch(
     updatedAt: Date.now(),
   }
   options.runtime.addCoordinationRun(runState)
-  for (const wave of graph.waves) {
-    const ready = new Set(wave.map((node) => node.id))
+  const updateRunning = (nodes: readonly TaskNodeInput[]): void => {
+    const ready = new Set(nodes.map((node) => node.id))
     runState = {
       ...runState,
       tasks: runState.tasks.map((task) =>
@@ -280,127 +365,166 @@ async function executeBatch(
       updatedAt: Date.now(),
     }
     options.runtime.updateCoordinationRun(runState)
-    const waveResults = await Promise.all(
-      wave.map(async (node): Promise<BatchItemResult> => {
-        try {
-          lifecycle.assertContinuing()
-          const dependencies = (node.needs ?? []).map((taskId) => {
-            const result = results.get(taskId)
-            if (result === undefined) throw new Error(`Dependency "${taskId}" has no result.`)
-            return result
-          })
-          if (dependencies.some((dependency) => dependency.status !== 'completed')) {
-            return blockedResult(node, dependencies)
-          }
-          const upstream: { output: string; taskId: string }[] = []
-          for (const dependency of dependencies) {
-            if (dependency.artifact === undefined) {
-              throw new Error(`Dependency "${dependency.taskId}" has no artifact.`)
-            }
-            upstream.push({
-              output: await readArtifact(dependency.artifact),
-              taskId: dependency.taskId,
-            })
-          }
-          const prompt = `${node.prompt}${dependencyEnvelope(options.input.context, upstream)}`
-          const nodeInput = taskInput(node, prompt)
-          let parentWorkspace: WorkspaceContext | undefined
-          if (mutableTaskIds.has(node.id)) {
-            parentWorkspace = await ensureAggregate()
-            if (nodeInput.isolation === undefined) {
-              nodeInput.isolation = { integration: 'apply', mode: 'worktree' }
-            }
-          }
-          const invocation: SubagentInvocation = {
-            ctx: options.ctx,
-            input: nodeInput,
-          }
-          if (parentWorkspace !== undefined) invocation.parentWorkspace = parentWorkspace
-          if (options.onStarted !== undefined) invocation.onStarted = options.onStarted
-          const result = await options.runtime.runCoordinated(
-            options.signal === undefined ? invocation : { ...invocation, signal: options.signal },
-            { mailbox: mailbox.endpoint(node.id), runId, taskId: node.id },
-          )
-          if (result.kind === 'failed') return failedResult(node, result)
-          if (result.kind === 'background')
-            throw new Error('A coordinated Task became background work.')
-          return {
-            agentId: result.details.agentId,
-            artifact: result.details.artifact,
-            error: undefined,
-            gateResults: result.details.gateResults,
-            isolation: result.details.isolation,
-            output: result.content,
-            role: node.role,
-            model: result.details.model,
-            status: 'completed',
-            structuredOutput: result.details.structuredOutput,
-            taskId: node.id,
-          }
-        } catch (error) {
-          return {
-            agentId: undefined,
-            artifact: undefined,
-            error: error instanceof Error ? error.message : String(error),
-            gateResults: [],
-            isolation: undefined,
-            output: undefined,
-            role: node.role,
-            model: node.model,
-            status: options.signal?.aborted === true ? 'aborted' : 'failed',
-            structuredOutput: undefined,
-            taskId: node.id,
-          }
-        } finally {
-          mailbox.close(node.id)
-        }
-      }),
-    )
-    for (const node of wave) {
-      const result = waveResults.find((candidate) => candidate.taskId === node.id)
-      if (
-        result === undefined ||
-        result.status !== 'completed' ||
-        !mutableTaskIds.has(node.id) ||
-        result.isolation?.integration !== 'apply'
-      ) {
-        continue
-      }
-      const aggregateWorkspace = aggregate
-      if (aggregateWorkspace === undefined) {
-        result.status = 'failed'
-        result.error = 'The aggregate workspace is unavailable.'
-        continue
-      }
-      const joined = await options.runtime.joinCoordinated(
-        result.agentId ?? '',
-        {
-          destinationPhysicalRoot: aggregateWorkspace.context.physicalRoot,
-          destinationWorkspaceId: aggregateWorkspace.context.workspaceId,
-          durableCommonDir: aggregateWorkspace.durableCommonDir,
-        },
-        runId,
-      )
-      result.isolation = joined.receipt
-      if (joined.status !== 'joined') {
-        result.status = 'failed'
-        result.error = `The coordinated writer could not integrate: ${joined.reason ?? joined.status}.`
-      }
-    }
-    for (const result of waveResults) results.set(result.taskId, result)
-    const waveById = new Map(wave.map((node) => [node.id, node]))
-    const resultById = new Map(waveResults.map((result) => [result.taskId, result]))
+  }
+  const updateResults = (completed: readonly BatchItemResult[]): void => {
+    const resultById = new Map(completed.map((result) => [result.taskId, result]))
     runState = {
       ...runState,
       tasks: runState.tasks.map((task) => {
         const result = resultById.get(task.taskId)
-        const node = waveById.get(task.taskId)
-        if (result === undefined || node === undefined) return task
-        return taskState(result, node.needs ?? [])
+        if (result === undefined) return task
+        return taskState(result, task.needs)
       }),
       updatedAt: Date.now(),
     }
     options.runtime.updateCoordinationRun(runState)
+  }
+  const executeNode = async (node: TaskNodeInput): Promise<BatchItemResult> => {
+    try {
+      lifecycle.assertContinuing()
+      const dependencies = (node.needs ?? []).map((taskId) => {
+        const result = results.get(taskId)
+        if (result === undefined) throw new Error(`Dependency "${taskId}" has no result.`)
+        return result
+      })
+      if (dependencies.some((dependency) => dependency.status !== 'completed')) {
+        return blockedResult(node, dependencies)
+      }
+      const upstream: { output: string; taskId: string }[] = []
+      for (const dependency of dependencies) {
+        if (dependency.artifact === undefined) {
+          throw new Error(`Dependency "${dependency.taskId}" has no artifact.`)
+        }
+        upstream.push({
+          output: await readArtifact(dependency.artifact),
+          taskId: dependency.taskId,
+        })
+      }
+      const prompt = `${node.prompt}${dependencyEnvelope(options.input.context, upstream)}`
+      const prepared = preparedByTaskId.get(node.id)
+      if (prepared === undefined)
+        throw new Error(`The Task preparation for "${node.id}" is missing.`)
+      const nodeInput = taskInput(node, prompt)
+      nodeInput.cwd = prepared.cwd
+      if (prepared.isolation !== undefined) nodeInput.isolation = prepared.isolation
+      const candidatePlan = candidateByTaskId.get(node.id)
+      const parentWorkspace =
+        candidatePlan === undefined ? undefined : await ensureAggregate(candidatePlan)
+      const invocation: SubagentInvocation = {
+        ctx: options.ctx,
+        input: nodeInput,
+      }
+      if (parentWorkspace !== undefined) invocation.parentWorkspace = parentWorkspace
+      if (options.onStarted !== undefined) invocation.onStarted = options.onStarted
+      const result = await options.runtime.runCoordinated(
+        options.signal === undefined ? invocation : { ...invocation, signal: options.signal },
+        { mailbox: mailbox.endpoint(node.id), runId, taskId: node.id },
+      )
+      if (result.kind === 'failed') return failedResult(node, result)
+      if (result.kind === 'background')
+        throw new Error('A coordinated Task became background work.')
+      return {
+        agentId: result.details.agentId,
+        artifact: result.details.artifact,
+        error: undefined,
+        gateResults: result.details.gateResults,
+        isolation: result.details.isolation,
+        output: result.content,
+        role: node.role,
+        model: result.details.model,
+        status: 'completed',
+        structuredOutput: result.details.structuredOutput,
+        taskId: node.id,
+      }
+    } catch (error) {
+      return {
+        agentId: undefined,
+        artifact: undefined,
+        error: error instanceof Error ? error.message : String(error),
+        gateResults: [],
+        isolation: undefined,
+        output: undefined,
+        role: node.role,
+        model: node.model,
+        status: options.signal?.aborted === true ? 'aborted' : 'failed',
+        structuredOutput: undefined,
+        taskId: node.id,
+      }
+    } finally {
+      mailbox.close(node.id)
+    }
+  }
+  if (needsAggregate) {
+    for (const wave of graph.waves) {
+      updateRunning(wave)
+      const waveResults = await Promise.all(wave.map((node) => executeNode(node)))
+      for (const node of wave) {
+        const result = waveResults.find((candidate) => candidate.taskId === node.id)
+        const aggregatePlan = aggregateByTaskId.get(node.id)
+        if (
+          result === undefined ||
+          result.status !== 'completed' ||
+          aggregatePlan === undefined ||
+          result.isolation?.integration !== 'apply'
+        ) {
+          continue
+        }
+        const aggregateWorkspace = aggregatePlan.workspace
+        if (aggregateWorkspace === undefined) {
+          result.status = 'failed'
+          result.error = 'The aggregate workspace is unavailable.'
+          continue
+        }
+        const joined = await options.runtime.joinCoordinated(
+          result.agentId ?? '',
+          {
+            destinationPhysicalRoot: aggregateWorkspace.context.physicalRoot,
+            destinationWorkspaceId: aggregateWorkspace.context.workspaceId,
+            durableCommonDir: aggregateWorkspace.durableCommonDir,
+          },
+          runId,
+        )
+        result.isolation = joined.receipt ?? result.isolation
+        if (joined.status !== 'joined') {
+          result.status = 'failed'
+          result.error = `The coordinated writer could not integrate: ${joined.reason ?? joined.status}.`
+        }
+      }
+      for (const result of waveResults) results.set(result.taskId, result)
+      updateResults(waveResults)
+    }
+  } else {
+    const remaining = new Set(graph.nodes.map((node) => node.id))
+    const active = new Set<Promise<void>>()
+    const settle = async (node: TaskNodeInput): Promise<void> => {
+      const result = await executeNode(node)
+      results.set(node.id, result)
+      updateResults([result])
+    }
+    while (remaining.size > 0) {
+      const ready = graph.nodes.filter(
+        (node) =>
+          remaining.has(node.id) &&
+          (node.needs ?? []).every((dependency) => results.has(dependency)),
+      )
+      if (ready.length === 0) {
+        if (active.size === 0)
+          throw new Error('The Task graph stopped before reaching a terminal state.')
+        await Promise.race(active)
+        continue
+      }
+      for (const node of ready) {
+        remaining.delete(node.id)
+        updateRunning([node])
+        const pending = settle(node)
+        active.add(pending)
+        pending.then(
+          () => active.delete(pending),
+          () => active.delete(pending),
+        )
+      }
+    }
+    await Promise.all(active)
   }
 
   const items = graph.nodes.map((node) => {
@@ -413,45 +537,58 @@ async function executeBatch(
     : items.some((item) => item.status === 'aborted')
       ? 'aborted'
       : 'completed'
-  let aggregateError: string | undefined
+  const aggregateErrors: string[] = []
   try {
-    if (aggregate !== undefined && rootDestination !== undefined) {
-      const receipt = await captureIsolation(aggregate)
-      await options.runtime.updateWorkspaceLifecycle(aggregate, 'captured', 'pending')
-      const anyApplied =
-        status === 'completed' &&
-        items.some((item) => item.status === 'completed' && item.isolation?.integration === 'apply')
-      if (anyApplied) {
-        await options.runtime.updateWorkspaceLifecycle(aggregate, 'integrating', 'pending')
+    for (const plan of aggregatePlans.values()) {
+      const aggregateWorkspace = plan.workspace
+      if (aggregateWorkspace === undefined) {
+        throw new Error('The aggregate workspace is unavailable.')
       }
-      const finalReceipt = anyApplied
-        ? await integrateStagedReceipt(receipt, rootDestination, runId, () =>
-            lifecycle.beforeApply(),
-          )
-        : receipt
+      const receipt = await captureIsolation(aggregateWorkspace)
+      await options.runtime.updateWorkspaceLifecycle(aggregateWorkspace, 'captured', 'pending')
+      const planItems = items.filter((item) => plan.nodeIds.has(item.taskId))
+      const planSucceeded = planItems.every((item) => item.status === 'completed')
+      const anyApplied =
+        planSucceeded &&
+        planItems.some(
+          (item) => item.status === 'completed' && item.isolation?.integration === 'apply',
+        )
+      let finalReceipt = receipt
+      if (anyApplied && receipt.captureStatus === 'captured') {
+        await options.runtime.updateWorkspaceLifecycle(aggregateWorkspace, 'integrating', 'pending')
+        finalReceipt = await integrateStagedReceipt(receipt, plan.rootDestination, runId, () =>
+          lifecycle.beforeApply(),
+        )
+      }
       const recoveryRequired = finalReceipt.repositories.some(
         (repository) => repository.status === 'recovery-required',
       )
+      const lifecycleState =
+        finalReceipt.status === 'integrated'
+          ? 'integrated'
+          : finalReceipt.status === 'conflict' || finalReceipt.status === 'partial'
+            ? 'conflict'
+            : 'captured'
       await options.runtime.updateWorkspaceLifecycle(
-        aggregate,
-        !anyApplied ? 'captured' : finalReceipt.status === 'integrated' ? 'integrated' : 'conflict',
+        aggregateWorkspace,
+        lifecycleState,
         finalReceipt.rootVisibility ?? 'pending',
       )
       if (!recoveryRequired) {
         await options.runtime.updateWorkspaceLifecycle(
-          aggregate,
+          aggregateWorkspace,
           'cleanup-pending',
           finalReceipt.rootVisibility ?? 'pending',
         )
-        const cleanupDebt = await cleanupWorkspaceArtifacts(aggregate)
+        const cleanupDebt = await cleanupWorkspaceArtifacts(aggregateWorkspace)
         await options.runtime.updateWorkspaceLifecycle(
-          aggregate,
+          aggregateWorkspace,
           cleanupDebt ? 'cleanup-debt' : 'cleaned',
           finalReceipt.rootVisibility ?? 'pending',
         )
       }
       if (finalReceipt.status === 'conflict' || finalReceipt.status === 'partial') {
-        aggregateError = `The coordinated result could not be integrated without a conflict.`
+        aggregateErrors.push('The coordinated result could not be integrated without a conflict.')
       }
     }
   } catch (error) {
@@ -469,7 +606,7 @@ async function executeBatch(
   const aggregateStatus =
     !lifecycle.integrationStarted && options.signal?.aborted === true
       ? 'aborted'
-      : aggregateError === undefined
+      : aggregateErrors.length === 0
         ? status
         : status === 'aborted'
           ? 'aborted'
@@ -478,7 +615,9 @@ async function executeBatch(
   options.runtime.updateCoordinationRun(runState)
   const content = items
     .map(itemContent)
-    .concat(aggregateError === undefined ? [] : [`aggregate: failed - ${aggregateError}`])
+    .concat(
+      aggregateErrors.length === 0 ? [] : [`aggregate: failed - ${aggregateErrors.join(' ')}`],
+    )
     .join('\n\n')
   return { content, items, runId, status: aggregateStatus }
 }

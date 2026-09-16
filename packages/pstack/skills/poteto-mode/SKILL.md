@@ -66,7 +66,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 **Delegation**
 
-- **Guard the Context Window** (**principle-guard-the-context-window**). Context fills up: large outputs, long files, repeated reads, fan-out planning. Route bulk to subagents, keep summaries in the main thread.
+- **Guard the Context Window** (**principle-guard-the-context-window**). Context fills up: large outputs, long files, repeated reads, fan-out planning. Keep bounded evidence and recoverable sources. Delegate only an independent slice that benefits from another context.
 - **Never Block on the Human** (**principle-never-block-on-the-human**). Tempted to ask "should I do X?" on reversible work. Proceed, present the result, let the human course-correct.
 
 **Meta**
@@ -85,7 +85,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 ## Subagents
 
-Use `subagent_type: "poteto-agent"` for code delegates and ad-hoc helpers. `/poteto-mode` and `poteto-agent` route through the same wrapper. Routed workflow skills (`how`, `why`, `interrogate`, `reflect`, `swarm`) own their own `Task` contracts. Do not override them.
+Use `subagent_type: "poteto-agent"` for code delegates and ad-hoc helpers. Scoped workers load `references/worker.md` and their assigned workflow. Full coordinators read this skill. Run `how` and `why` in the current issue owner by default, including inside a leaf. Delegation requires a named independent slice or an explicit user requirement. Routed review and exploration skills retain their Task contracts when delegation is justified.
 
 Read [Task contracts](references/task-contracts.md) before dispatch. Set `Task.role` to the active model-policy role, even when the model is inherited. Preserve it on resume. For every `Task` call, pass file pointers instead of large inline context. Use read-only mode for analysis and static review. A runtime verifier that needs `control-ui` or `control-cli` requires shell access. Run that verifier as mutable background work with `isolation: { mode: "worktree", integration: "manual" }`. Never join its incidental patch. Use agent mode for repository writers. Pass `capability_profile: "pstack-nested"` to a `poteto-agent` or another owner that can delegate. The profile permits three Task levels. Leaf `poteto-agent` workers receive planning tools through `pstack-leaf` by default. Routed `generalPurpose` leaves must explicitly select `pstack-leaf`. Owners that execute delegating skills need `pstack-nested`. A leaf must report missing capabilities instead of skipping required steps.
 
@@ -95,11 +95,11 @@ Use `request_parent` for real coordinator decisions. Use `ask_parent` only for n
 
 The extension supplies the parsed runtime model policy in root and nested context. Omit `Task.model` for scalar roles to select their configured model. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role. For a panel or pool with distinct choices, pass the selected entry explicitly, including `inherit-parent` for an inherited entry. Never silently pick the first model or invent a selector. Every dispatch needs an exact policy role and a pstack capability profile.
 
-You own every subagent's work. Review each diff and write your own summary. Use a fresh subagent with consolidated scope when directives changed materially. A second opinion uses the same prompt against another configured model. Agreement is high-signal.
+You own every subagent's work. Review each diff against its evidence. Keep compatible owners from investigation through corrections. Replace an owner only for an incompatible contract or demonstrated context failure, with a consolidated evidence brief. A second opinion uses another permitted model when required. Agreement prioritizes inspection but never substitutes for executable evidence.
 
 ## Delivery contract
 
-Read [Delivery contract](references/delivery-contract.md) before dispatching issue work. One persistent implementer owns the issue, and one independent reviewer that never wrote the code owns the review. Use `code review` for static-only acceptance. If executable checks are expected, start the reviewer with `runtime verification`, shell access, and manual isolation. Select one permitted model from the required family. Combine static, no-comments, deslop, and runtime findings in one complete verdict without extra cleanup agents. Corrections resume the same implementer while the accepted design stays compatible. Return incompatible design to the coordinator.
+Read [Delivery contract](references/delivery-contract.md) before dispatching issue work. Assign the persistent implementer before reproduction or discovery, not after a separate investigator writes a plan. The same owner investigates, implements, and corrects. One independent reviewer that never wrote the code owns acceptance. Use `code review` for static-only acceptance. If executable checks are expected, start the reviewer with `runtime verification`, shell access, and manual isolation. Select one permitted model from the required family. Combine static, no-comments, deslop, and runtime findings in one complete verdict without extra cleanup agents. Corrections resume the same implementer while the accepted design stays compatible. Return incompatible design to the coordinator.
 
 Implementation against an accepted design inherits its grounding. It does not rerun `how` or `architect`, and it needs no owner with `pstack-nested`.
 

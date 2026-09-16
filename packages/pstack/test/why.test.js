@@ -43,7 +43,7 @@ describe('why', () => {
 
   it('keeps external tools with the parent', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
-    expect(skill).toContain('The parent owns all source tools.')
+    expect(skill).toContain('The parent owns all source tools that its child cannot access.')
     expect(skill).toContain(
       'A `Task` child does not inherit ambient extensions or generic MCP tools.',
     )

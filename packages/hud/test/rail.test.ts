@@ -1604,6 +1604,35 @@ describe('mapSessionRails', () => {
     expect(rails.byToolCallId.get('child')).toBe(rails.byToolCallId.get('parent'))
   })
 
+  test('restores the latest legacy per-frame state entry', () => {
+    const initial = railStateEntry({
+      report: {
+        doneLabel: 'Custom',
+        iconKey: 'todo',
+        output: 'first frame',
+        runningLabel: 'Customizing',
+        status: 'pending',
+        toolCallId: 'legacy',
+      },
+      turn: 1,
+    })
+    const latest = railStateEntry({
+      report: {
+        doneLabel: 'Custom',
+        iconKey: 'todo',
+        output: 'latest frame',
+        runningLabel: 'Customizing',
+        status: 'pending',
+        toolCallId: 'legacy',
+      },
+      turn: 1,
+    })
+    const rails = mapSessionRails([userEntry, railEntry, initial, latest])
+    const action = rails.byToolCallId.get('legacy')?.groups()[0]?.actions[0]
+    expect(action?.output).toBe('latest frame')
+    expect(action?.status).toBe('pending')
+  })
+
   test('keeps a completed result after a pending state report', () => {
     const rails = mapSessionRails([
       userEntry,

@@ -15,6 +15,7 @@ import {
   CoordinationRunStateSchema,
   decodeJsonValue,
   GateDefinitionSchema,
+  parseDeliveryBinding,
   RunRecordSchema,
   WorkspaceRecordSchema,
   RuntimeStateSchema,
@@ -54,6 +55,14 @@ const RecordJsonFieldsSchema = Type.Pick(RunRecordSchema, [
   'structuredOutput',
 ])
 const RecordsInputSchema = Type.Object({ records: Type.Array(Type.Unknown()) })
+const RecordDeliveryInputSchema = Type.Object(
+  {
+    execution: Type.Optional(
+      Type.Object({ delivery: Type.Optional(Type.Unknown()) }, { additionalProperties: true }),
+    ),
+  },
+  { additionalProperties: true },
+)
 let snapshotValidator: ReturnType<typeof Compile<typeof RuntimeStateSchema>> | undefined
 let deltaValidator: ReturnType<typeof Compile<typeof DeltaSchema>> | undefined
 
@@ -217,6 +226,10 @@ function preserveRecordJson<Input>(records: RunRecord[], input: Input): void {
   if (!Value.Check(RecordsInputSchema, input)) return
   for (const [index, record] of records.entries()) {
     const raw = input.records[index]
+    if (Value.Check(RecordDeliveryInputSchema, raw) && raw.execution?.delivery !== undefined) {
+      const delivery = parseDeliveryBinding(raw.execution.delivery)
+      if (record.execution?.version === 5) record.execution.delivery = delivery
+    }
     if (!Value.Check(RecordJsonFieldsSchema, raw)) continue
     if (record.structuredOutput !== undefined && raw.structuredOutput?.data !== undefined) {
       record.structuredOutput.data = decodeJsonValue(raw.structuredOutput.data)

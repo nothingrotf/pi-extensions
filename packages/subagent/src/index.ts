@@ -25,7 +25,13 @@ import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs
 import { JobProgress } from './progress.ts'
 import { RailChildReporter } from './rail-children.ts'
 import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
-import { type RuntimeDetails, type RuntimeFailedResult, type SubagentRuntime } from './runtime.ts'
+import {
+  type RuntimeBackgroundResult,
+  type RuntimeCompletedDetails,
+  type RuntimeFailedDetails,
+  type RuntimeFailedResult,
+  type SubagentRuntime,
+} from './runtime.ts'
 import { decodeBatchTaskInput, decodeSingleTaskInput, TaskInputSchema } from './schema.ts'
 import {
   plainText,
@@ -50,13 +56,70 @@ export const SUBAGENT_CAPABILITY_PROFILE_REGISTRATION_EVENT =
   '@nothingrotf/subagent/register-capability-profiles'
 
 interface BatchToolDetails {
+  has_more: boolean
   items: readonly BatchItemResult[]
   runId: string
   status: 'batch'
   succeeded: boolean
+  total: number
 }
 
-type TaskToolDetails = RuntimeDetails | BatchToolDetails | JobProgressDetails
+type OperationalCompletedDetails = Pick<
+  RuntimeCompletedDetails,
+  | 'agentId'
+  | 'artifact'
+  | 'durationMs'
+  | 'effort'
+  | 'fast'
+  | 'finalMessage'
+  | 'intercomUsage'
+  | 'model'
+  | 'role'
+  | 'runId'
+  | 'status'
+  | 'taskId'
+  | 'timing'
+  | 'toolCallCount'
+  | 'transcriptPath'
+  | 'usage'
+> & {
+  attempt: number
+  gateCount: number
+  isolationStatus: string | null
+  structuredOutputStatus: string | null
+  toolReceiptCount: number
+}
+
+type OperationalFailedDetails = Pick<
+  RuntimeFailedDetails,
+  | 'agentId'
+  | 'artifact'
+  | 'attemptStarted'
+  | 'error'
+  | 'finalMessage'
+  | 'model'
+  | 'role'
+  | 'runId'
+  | 'status'
+  | 'taskId'
+  | 'timing'
+> & {
+  attempt: number
+  gateCount: number
+  isolationStatus: string | null
+  structuredOutputStatus: string | null
+}
+
+type TaskToolDetails =
+  | RuntimeBackgroundResult['details']
+  | OperationalCompletedDetails
+  | OperationalFailedDetails
+  | BatchToolDetails
+  | JobProgressDetails
+
+const MAX_OPERATIONAL_BYTES = 8 * 1024
+const MAX_OPERATIONAL_DETAILS_BYTES = 22 * 1024
+const MAX_DETAIL_PREVIEW_BYTES = 2 * 1024
 
 const TaskDetailSchema = Type.Object({
   description: Type.Optional(Type.String()),
@@ -65,9 +128,99 @@ const TaskDetailSchema = Type.Object({
   model: Type.Optional(Type.String()),
 })
 
+function boundedText(text: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(text)
+  if (encoded.byteLength <= maxBytes) return text
+  const suffix = '\n\n[Operational output truncated. Use TaskControl evidence for full content.]'
+  const suffixBytes = Buffer.byteLength(suffix)
+  let end = Math.max(0, maxBytes - suffixBytes)
+  while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end -= 1
+  return `${new TextDecoder().decode(encoded.slice(0, end))}${suffix}`
+}
+
 function failedContent(result: RuntimeFailedResult): string {
   const agent = 'agentId' in result.details ? `\n\nAgent ID: ${result.details.agentId}` : ''
-  return `Task failed: ${result.details.error}${agent}`
+  return boundedText(`Task failed: ${result.details.error}${agent}`, MAX_OPERATIONAL_BYTES)
+}
+
+function completedDetails(details: RuntimeCompletedDetails): OperationalCompletedDetails {
+  return {
+    agentId: details.agentId,
+    artifact: details.artifact,
+    attempt: details.artifact.attempt,
+    durationMs: details.durationMs,
+    effort: details.effort,
+    fast: details.fast,
+    finalMessage: boundedText(details.finalMessage, MAX_DETAIL_PREVIEW_BYTES),
+    gateCount: details.gateResults.length,
+    intercomUsage: details.intercomUsage,
+    isolationStatus: details.isolation?.integrationStatus ?? details.isolation?.status ?? null,
+    model: details.model,
+    role: details.role,
+    runId: details.runId,
+    status: details.status,
+    structuredOutputStatus: details.structuredOutput?.status ?? null,
+    taskId: details.taskId,
+    timing: details.timing,
+    toolCallCount: details.toolCallCount,
+    toolReceiptCount: details.toolExecutionReceipts.length,
+    transcriptPath: details.transcriptPath,
+    usage: details.usage,
+  }
+}
+
+function failedDetails(
+  result: RuntimeFailedResult,
+  runtime: SubagentRuntime,
+): OperationalFailedDetails {
+  const details = result.details
+  const output: OperationalFailedDetails = {
+    attempt: details.artifact?.attempt ?? runtime.getRecord(details.agentId)?.runGeneration ?? 1,
+    attemptStarted: details.attemptStarted ?? true,
+    error: details.error,
+    gateCount: details.gateResults?.length ?? 0,
+    isolationStatus: details.isolation?.integrationStatus ?? details.isolation?.status ?? null,
+    status: details.status,
+    structuredOutputStatus: details.structuredOutput?.status ?? null,
+  }
+  if (details.agentId !== undefined) output.agentId = details.agentId
+  if (details.artifact !== undefined) output.artifact = details.artifact
+  if (details.finalMessage !== undefined) {
+    output.finalMessage = boundedText(details.finalMessage, MAX_DETAIL_PREVIEW_BYTES)
+  }
+  if (details.model !== undefined) output.model = details.model
+  if (details.role !== undefined) output.role = details.role
+  if (details.runId !== undefined) output.runId = details.runId
+  if (details.taskId !== undefined) output.taskId = details.taskId
+  if (details.timing !== undefined) output.timing = details.timing
+  return output
+}
+
+function operationalItem(item: BatchItemResult): BatchItemResult {
+  return {
+    ...item,
+    error: item.error === undefined ? undefined : boundedText(item.error, MAX_DETAIL_PREVIEW_BYTES),
+    gateResults: [],
+    isolation: undefined,
+    output:
+      item.output === undefined ? undefined : boundedText(item.output, MAX_DETAIL_PREVIEW_BYTES),
+    structuredOutput: undefined,
+  }
+}
+
+export function operationalBatchItems(items: readonly BatchItemResult[]): BatchItemResult[] {
+  const operational = items.map(operationalItem)
+  for (let index = operational.length - 1; index >= 0; index -= 1) {
+    if (Buffer.byteLength(JSON.stringify(operational)) <= MAX_OPERATIONAL_DETAILS_BYTES) break
+    const item = operational[index]
+    if (item?.output !== undefined) operational[index] = { ...item, output: undefined }
+  }
+  for (let index = operational.length - 1; index >= 0; index -= 1) {
+    if (Buffer.byteLength(JSON.stringify(operational)) <= MAX_OPERATIONAL_DETAILS_BYTES) break
+    const item = operational[index]
+    if (item?.error !== undefined) operational[index] = { ...item, error: undefined }
+  }
+  return operational
 }
 
 export function railTaskDetail(
@@ -395,13 +548,24 @@ async function executeTask(
       runtime,
       signal,
     })
+    const items = operationalBatchItems(batch.items)
     return {
-      content: [{ text: `Run ID: ${batch.runId}\n\n${batch.content}`, type: 'text' }],
+      content: [
+        {
+          text: boundedText(`Run ID: ${batch.runId}\n\n${batch.content}`, MAX_OPERATIONAL_BYTES),
+          type: 'text',
+        },
+      ],
       details: {
-        items: batch.items,
+        has_more: items.some(
+          (item, index) =>
+            item.output !== batch.items[index]?.output || item.error !== batch.items[index]?.error,
+        ),
+        items,
         runId: batch.runId,
         status: 'batch',
         succeeded: batch.status === 'completed',
+        total: batch.items.length,
       },
     }
   }
@@ -423,17 +587,27 @@ async function executeTask(
   if (result.kind === 'failed') {
     return {
       content: [{ text: failedContent(result), type: 'text' }],
-      details: result.details,
+      details: failedDetails(result, runtime),
     }
   }
 
   return {
-    content: [{ text: `Agent ID: ${result.details.agentId}\n\n${result.content}`, type: 'text' }],
-    details: result.details,
+    content: [
+      {
+        text: boundedText(
+          `Agent ID: ${result.details.agentId}\n\n${result.content}`,
+          MAX_OPERATIONAL_BYTES,
+        ),
+        type: 'text',
+      },
+    ],
+    details: completedDetails(result.details),
   }
 }
 
 export { acquireSubagentController } from './controller.ts'
+export { captureWorkspaceSnapshot } from './git-isolation.ts'
+export { latestState as readSubagentState } from './state.ts'
 export { TaskControlInputSchema } from './control.ts'
 export type { TaskControlDetails, TaskControlInput } from './control.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
@@ -444,6 +618,10 @@ export type {
   CapabilityPublication,
   CapabilityRegistration,
   CapabilityToolDefinition,
+  RoleToolRequirement,
+  TerminalValidationInput,
+  TerminalValidationPolicy,
+  TerminalValidationResult,
 } from './capabilities.ts'
 export type { BatchItemResult, BatchResult } from './coordinator.ts'
 export type {
@@ -462,6 +640,9 @@ export type {
   BatchTaskInput,
   CapabilityContract,
   CoordinationRunState,
+  DeliveryBinding,
+  ExecutionContractV4,
+  ExecutionContractV5,
   GateDefinition,
   GateResult,
   IsolationChangedFile,
@@ -470,10 +651,19 @@ export type {
   IsolationReceipt,
   IsolationRepositoryReceipt,
   IsolationRequest,
+  JsonValue,
+  RunRecord,
   StructuredOutput,
   TaskInput,
   TaskNodeInput,
+  ToolExecutionReceipt,
+  TerminalOutputRevision,
+  WorkspaceIdentity,
+  WorkspaceSnapshot,
+  WorkspaceSnapshotRepository,
 } from './schema.ts'
+export { decodeJsonValue, isJsonObject } from './schema.ts'
+export { jsonEquals, resolveStructuredOutput, validateOutputSchema } from './output.ts'
 export { recoverIsolations } from './isolation.ts'
 export type { IsolationRecovery } from './isolation.ts'
 

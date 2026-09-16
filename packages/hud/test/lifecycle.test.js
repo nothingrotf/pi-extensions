@@ -514,7 +514,7 @@ describe('HUD lifecycle', () => {
     })
   })
 
-  test('persists state changes instead of alternating call and result render reports', async () => {
+  test('keeps streaming state live while persisting semantic checkpoints', async () => {
     const instance = harness()
     await instance.emit('agent_start')
     const call = {
@@ -526,27 +526,27 @@ describe('HUD lifecycle', () => {
       toolCallId: 'task',
       toolName: 'Task',
     }
-    const result = { ...call, output: 'Agent started' }
     for (let frame = 0; frame < 1000; frame += 1) {
       instance.emitEvent('hud:rail-action', call)
-      instance.emitEvent('hud:rail-action', result)
+      instance.emitEvent('hud:rail-action', { ...call, output: `Agent started ${String(frame)}` })
     }
     const reports = () =>
       instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
-    expect(reports()).toHaveLength(2)
-    expect(reports().at(-1)?.data.report).toMatchObject({
-      output: 'Agent started',
-      summary: 'Agent started',
-    })
-    instance.emitEvent('hud:rail-action', { ...result, status: 'ok', output: 'Done' })
+    expect(instance.transcript()).toContain('Agent started 999')
+    expect(reports()).toHaveLength(1)
+    instance.emitEvent('hud:rail-action', { ...call, status: 'ok', output: 'Done' })
     instance.emitEvent('hud:rail-action', call)
-    expect(reports()).toHaveLength(3)
+    expect(reports()).toHaveLength(2)
     expect(reports().at(-1)?.data.report).toMatchObject({ status: 'ok', output: 'Done' })
     await instance.emit('agent_end')
-    expect(reports()).toHaveLength(3)
+    expect(reports()).toHaveLength(2)
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript()).toContain('Done')
+    await restored.emit('session_shutdown')
   })
 
-  test('deduplicates child snapshots without losing child progress', async () => {
+  test('checkpoints child progress at the turn boundary', async () => {
     const instance = harness()
     await instance.emit('agent_start')
     instance.emitEvent('hud:rail-action', {
@@ -564,15 +564,141 @@ describe('HUD lifecycle', () => {
       instance.emitEvent('hud:rail-action', child)
       instance.emitEvent('hud:rail-action', { ...child, output: 'Read file' })
     }
-    const reports = instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
-    expect(reports).toHaveLength(3)
-    expect(reports.at(-1)?.data.report).toMatchObject({
+    const reports = () =>
+      instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+    expect(reports()).toHaveLength(2)
+    expect(instance.transcript()).toContain('Read file')
+    await instance.emit('agent_end')
+    expect(reports()).toHaveLength(3)
+    expect(reports().at(-1)?.data.report).toMatchObject({
       toolCallId: 'child',
       parentToolCallId: 'parent',
       output: 'Read file',
     })
-    await instance.emit('agent_end')
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript()).toContain('Read file')
+    await restored.emit('session_shutdown')
   })
+
+  test('restores the last durable checkpoint after interruption and reload', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    const report = {
+      doneLabel: 'Running',
+      iconKey: 'agent',
+      status: 'pending',
+      toolCallId: 'task',
+    }
+    instance.emitEvent('hud:rail-action', report)
+    instance.emitEvent('hud:rail-action', { ...report, output: 'Transient progress' })
+    const interrupted = harness(instance.sessionManager)
+    await interrupted.emit('session_start')
+    expect(interrupted.transcript()).not.toContain('Transient progress')
+    await interrupted.emit('session_shutdown')
+    await instance.emit('session_shutdown')
+    const reloaded = harness(instance.sessionManager)
+    await reloaded.emit('session_start')
+    expect(reloaded.transcript()).toContain('Transient progress')
+    expect(
+      instance.appended().filter((entry) => entry.customType === 'hud-rail-state'),
+    ).toHaveLength(2)
+    await reloaded.emit('session_shutdown')
+  })
+
+  test('ignores post-turn progress without replacing its durable checkpoint', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    const report = {
+      doneLabel: 'Running',
+      iconKey: 'agent',
+      status: 'pending',
+      toolCallId: 'background-task',
+    }
+    instance.emitEvent('hud:rail-action', report)
+    await instance.emit('agent_end')
+    instance.emitEvent('hud:rail-action', { ...report, output: 'Background progress' })
+    await instance.emit('session_shutdown')
+    const restored = harness(instance.sessionManager)
+    await restored.emit('session_start')
+    expect(restored.transcript()).not.toContain('Background progress')
+    expect(restored.transcript()).toContain('Running')
+    await restored.emit('session_shutdown')
+  })
+
+  test('persists terminal errors immediately without duplicate final writes', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    const report = {
+      doneLabel: 'Task',
+      iconKey: 'agent',
+      status: 'pending',
+      toolCallId: 'task',
+    }
+    instance.emitEvent('hud:rail-action', report)
+    instance.emitEvent('hud:rail-action', { ...report, output: 'Failed', status: 'error' })
+    const states = () =>
+      instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+    expect(states()).toHaveLength(2)
+    expect(states().at(-1)?.data.report.status).toBe('error')
+    await instance.emit('agent_end')
+    expect(states()).toHaveLength(2)
+  })
+
+  test('preserves checkpoints across reload and a new turn in one instance', async () => {
+    const instance = harness()
+    const report = {
+      doneLabel: 'Task',
+      iconKey: 'agent',
+      status: 'pending',
+      toolCallId: 'same-id',
+    }
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', report)
+    await instance.emit('agent_end')
+    await instance.emit('session_start')
+    expect(instance.transcript()).toContain('Task')
+    await instance.emit('agent_start')
+    instance.emitEvent('hud:rail-action', { ...report, toolCallId: 'next-id' })
+    await instance.emit('agent_end')
+    const states = instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+    expect(states).toHaveLength(2)
+    expect(states[0].data.turn).not.toBe(states[1].data.turn)
+    expect(states[1].data.report.toolCallId).toBe('next-id')
+    await instance.emit('session_shutdown')
+  })
+
+  test('does not persist an unanchored turn on shutdown', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    await instance.emit('session_shutdown')
+    expect(instance.appended()).toEqual([])
+  })
+
+  test.each([false, true])(
+    'checkpoints built-in completion before agent_end with error=%s',
+    async (isError) => {
+      const instance = harness()
+      await instance.emit('agent_start')
+      await instance.emit('tool_execution_start', {
+        args: { path: 'package.json' },
+        toolCallId: 'read-checkpoint',
+        toolName: 'read',
+      })
+      await instance.emit('tool_execution_end', {
+        isError,
+        result: { content: [{ text: 'Recorded output', type: 'text' }], details: undefined },
+        toolCallId: 'read-checkpoint',
+        toolName: 'read',
+      })
+      const states = () =>
+        instance.appended().filter((entry) => entry.customType === 'hud-rail-state')
+      expect(states().at(-1)?.data.report.status).toBe(isError ? 'error' : 'ok')
+      const count = states().length
+      await instance.emit('agent_end')
+      expect(states()).toHaveLength(count)
+    },
+  )
 
   test('persists a final built-in action snapshot', async () => {
     const instance = harness()

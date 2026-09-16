@@ -8,6 +8,7 @@ import { type JobProgressDetails, type JobSnapshot, jobTitle, toJobSnapshot } fr
 import type { SubagentRuntime } from './runtime.ts'
 
 const TICK_MS = 1000
+const MAX_PROGRESS_JOBS = 20
 
 export interface JobProgressSource {
   listSnapshots: SubagentRuntime['listSnapshots']
@@ -53,6 +54,7 @@ export class JobProgress {
     const jobs: JobSnapshot[] = []
     for (const snapshot of this.runtime.listSnapshots()) {
       if (this.agentIds.has(snapshot.agentId)) jobs.push(toJobSnapshot(snapshot, now))
+      if (jobs.length >= MAX_PROGRESS_JOBS) break
     }
     return jobs
   }

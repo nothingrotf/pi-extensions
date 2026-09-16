@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import type { DependencyMode, IsolationIntegration, IsolationPatchRef } from './schema.ts'
+import type {
+  DependencyMode,
+  IsolationIntegration,
+  IsolationPatchRef,
+  WorkspaceIdentity,
+  WorkspaceSnapshot,
+} from './schema.ts'
 import {
   acquireLock,
   currentLockOwner,
@@ -518,9 +524,14 @@ export async function createWriterWorkspace(options: {
       })
     }
 
-    const rootWorktree = join(baseDir, 'root')
+    const rootWorktree = await mkdtemp(
+      join(await realpath(tmpdir()), `pi-subagent-${workspaceId}-${attemptId}-`),
+    )
     manifest.physicalRoot = rootWorktree
     await writeManifest(manifest)
+    const historyRoot = join(storeRoot, 'execution-roots')
+    await mkdir(historyRoot, { recursive: true })
+    await writeAtomicFile(join(historyRoot, `${digest(rootWorktree)}.path`), rootWorktree)
     const repositories: RepositoryIsolation[] = []
     for (const entry of entries) {
       const target =
@@ -568,6 +579,9 @@ export async function createWriterWorkspace(options: {
       writerId: options.writerId,
     }
   } catch (error) {
+    if (manifest.physicalRoot.length > 0) {
+      await rm(manifest.physicalRoot, { force: true, recursive: true }).catch(() => '')
+    }
     await rm(baseDir, { force: true, recursive: true }).catch(() => '')
     throw error
   } finally {
@@ -625,6 +639,132 @@ export function artifactDirectory(storeRoot: string, attemptId: string): string 
   return join(storeRoot, 'artifacts', attemptId)
 }
 
+async function emptyTree(repoRoot: string): Promise<string> {
+  return (await git(repoRoot, ['mktree'], '')).trim()
+}
+
+async function snapshotRepository(
+  repository: Pick<
+    RepositoryEntry,
+    'baselineTree' | 'sourceHead' | 'relativePath' | 'physicalRepoRoot'
+  >,
+  artifactRoot: string,
+): Promise<WorkspaceSnapshot['repositories'][number]> {
+  const sourceTree =
+    repository.sourceHead === undefined
+      ? await emptyTree(repository.physicalRepoRoot)
+      : `${repository.sourceHead}^{tree}`
+  const patch = await git(repository.physicalRepoRoot, [
+    'diff',
+    '--binary',
+    '--full-index',
+    sourceTree,
+    repository.baselineTree,
+  ])
+  return {
+    base: repository.baselineTree,
+    tree: repository.baselineTree,
+    relativePath: repository.relativePath,
+    root: repository.physicalRepoRoot,
+    patch: await writePatchArtifact({ artifactRoot, name: `identity-${digest(patch)}`, patch }),
+  }
+}
+
+export async function captureIsolationIdentity(
+  workspace: WriterWorkspace,
+): Promise<WorkspaceIdentity> {
+  const root = workspace.repositories[0]
+  if (root === undefined || root.relativePath !== '')
+    throw new Error('The isolated workspace has no root baseline.')
+  const repositories = await Promise.all(
+    workspace.repositories.map((repository) =>
+      snapshotRepository(repository, join(workspace.storeRoot, 'artifacts', 'workspace')),
+    ),
+  )
+  const primary = repositories[0]
+  if (primary === undefined) throw new Error('The isolated workspace snapshot is missing.')
+  const identity: WorkspaceIdentity = {
+    baselineCommit: root.baselineCommit,
+    baselineTree: root.baselineTree,
+    expectedTree: root.baselineTree,
+    patch: primary.patch,
+    repositoryRoot: root.physicalRepoRoot,
+    snapshot: { repositories },
+    syntheticBaseline: true,
+  }
+  if (root.sourceHead !== undefined) identity.productHead = root.sourceHead
+  return identity
+}
+
+async function captureSnapshotRepository(options: {
+  artifactRoot: string
+  relativePath: string
+  root: string
+}): Promise<{
+  baseline: Awaited<ReturnType<typeof syntheticBaseline>>
+  patch: IsolationPatchRef
+  productHead: string | undefined
+  snapshot: WorkspaceSnapshot['repositories'][number]
+}> {
+  const baseline = await syntheticBaseline(options.root)
+  const productHead = await headCommit(options.root)
+  const repository: Parameters<typeof snapshotRepository>[0] = {
+    baselineTree: baseline.baselineTree,
+    relativePath: options.relativePath,
+    physicalRepoRoot: options.root,
+  }
+  if (productHead !== undefined) repository.sourceHead = productHead
+  const snapshot = await snapshotRepository(repository, options.artifactRoot)
+  return { baseline, patch: snapshot.patch, productHead, snapshot }
+}
+
+export async function captureWorkspaceIdentity(
+  cwd: string,
+): Promise<WorkspaceIdentity | undefined> {
+  const root = await repositoryRoot(cwd)
+  if (root === undefined) return undefined
+  const artifactRoot = join(await commonDirectory(root), 'pi-subagent', 'artifacts', 'workspace')
+  const primary = await captureSnapshotRepository({ artifactRoot, relativePath: '', root })
+  const repositories = [primary.snapshot]
+  for (const relativePath of await nestedRepositories(root)) {
+    const nestedRoot = await repositoryRoot(join(root, relativePath))
+    if (nestedRoot === undefined)
+      throw new Error(`The nested repository ${relativePath} is unavailable.`)
+    repositories.push(
+      (
+        await captureSnapshotRepository({
+          artifactRoot,
+          relativePath,
+          root: nestedRoot,
+        })
+      ).snapshot,
+    )
+  }
+  const identity: WorkspaceIdentity = {
+    baselineCommit: primary.baseline.baselineCommit,
+    baselineTree: primary.baseline.baselineTree,
+    expectedTree: primary.baseline.baselineTree,
+    patch: primary.patch,
+    repositoryRoot: root,
+    snapshot: { repositories },
+    syntheticBaseline: true,
+  }
+  if (primary.productHead !== undefined) identity.productHead = primary.productHead
+  return identity
+}
+
+export async function captureWorkspaceSnapshot(
+  cwd: string,
+): Promise<WorkspaceSnapshot | undefined> {
+  return (await captureWorkspaceIdentity(cwd))?.snapshot
+}
+
+export async function workspaceTree(cwd: string): Promise<string | undefined> {
+  const root = await repositoryRoot(cwd)
+  if (root === undefined) return undefined
+  return (await syntheticBaseline(root)).baselineTree
+}
+
 export async function writePatchArtifact(options: {
   artifactRoot: string
   name: string
@@ -635,6 +775,7 @@ export async function writePatchArtifact(options: {
   await writeAtomicFile(target, options.patch)
   return {
     byteLength: Buffer.byteLength(options.patch, 'utf8'),
+    path: target,
     sha256: digest(options.patch),
     uri: pathToFileURL(target).href,
   }

@@ -2,7 +2,18 @@ import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-
 import { type StaticDecode, Type, type TSchema } from 'typebox'
 import { Value } from 'typebox/value'
 
-import { TaskRoleSchema, type CapabilityContract } from './schema.ts'
+import {
+  RoleToolRequirementSchema,
+  TaskRoleSchema,
+  type ArtifactRef,
+  type CapabilityContract,
+  type IsolationReceipt,
+  type StructuredOutput,
+  type TaskInput,
+  type TerminalOutputRevision,
+  type ToolExecutionReceipt,
+  type WorkspaceIdentity,
+} from './schema.ts'
 
 export type CapabilityToolDefinition = ToolDefinition<TSchema, unknown, unknown>
 
@@ -15,13 +26,52 @@ export type CapabilityModelPolicy =
   | { status: 'valid'; enforcement?: 'configured'; roles: readonly RoleModelPolicyEntry[] }
   | { status: 'invalid'; error: string }
 
+export interface RoleToolRequirement {
+  isolation?: 'manual'
+  role: string
+  tools: readonly string[]
+}
+
+export interface TerminalValidationInput {
+  agentId: string
+  artifact: ArtifactRef
+  attempt: number
+  isolation?: IsolationReceipt
+  output: string
+  previousOutputs: readonly TerminalOutputRevision[]
+  prompt: string
+  readonly: boolean
+  role?: string
+  structuredOutput?: StructuredOutput
+  toolExecutionReceipts: readonly ToolExecutionReceipt[]
+  workspaceIdentity?: WorkspaceIdentity
+}
+
+export type TerminalValidationResult =
+  | { status: 'accepted' }
+  | {
+      correctionAllowed?: boolean
+      correctionPrompt: string
+      error: string
+      status: 'rejected'
+    }
+
+export interface TerminalValidationPolicy {
+  maxCorrections: number
+  validate: (
+    input: TerminalValidationInput,
+  ) => Promise<TerminalValidationResult> | TerminalValidationResult
+}
+
 export interface CapabilityRegistration {
   modelPolicy?: CapabilityModelPolicy
+  roleToolRequirements?: readonly RoleToolRequirement[]
   createTools?: () => readonly CapabilityToolDefinition[]
   extensions: readonly InlineExtension[]
   id: string
   readonlyTools?: readonly string[]
   systemPrompt?: string
+  terminalValidation?: TerminalValidationPolicy
   tools: readonly CapabilityToolDefinition[]
   version: string
 }
@@ -35,7 +85,9 @@ export interface CapabilityProfile {
 export interface ResolvedCapabilities {
   modelPolicies: readonly CapabilityModelPolicy[]
   contract: CapabilityContract
+  roleToolRequirements: readonly RoleToolRequirement[]
   extensions: readonly InlineExtension[]
+  terminalValidation?: TerminalValidationPolicy
   tools: readonly string[]
 }
 
@@ -151,6 +203,42 @@ function normalizeSelector(selector: string): string {
     : selector
 }
 
+export function assertRoleToolRequirements(
+  requirements: readonly RoleToolRequirement[],
+  role: string | undefined,
+  effectiveTools: readonly string[],
+): void {
+  if (role === undefined) return
+  const requirement = requirements.find((candidate) => candidate.role === role)
+  if (requirement === undefined) return
+  const available = new Set(effectiveTools)
+  const missing = requirement.tools.filter((tool) => !available.has(tool))
+  if (missing.length > 0) {
+    throw new Error(
+      `Task role "${role}" requires unavailable effective tools: ${missing.join(', ')}.`,
+    )
+  }
+}
+
+export function resolveRoleIsolation(
+  requirements: readonly RoleToolRequirement[],
+  input: Pick<TaskInput, 'role' | 'isolation' | 'readonly'>,
+): TaskInput['isolation'] {
+  const manual = requirements.some(
+    (entry) => entry.role === input.role && entry.isolation === 'manual',
+  )
+  if (!manual) return input.isolation
+  if (
+    input.readonly === true ||
+    (input.isolation?.integration !== undefined && input.isolation.integration !== 'manual')
+  ) {
+    throw new Error(
+      `Task role "${input.role}" requires manual writer isolation and readonly=false.`,
+    )
+  }
+  return { integration: 'manual', mode: 'worktree' }
+}
+
 export function preservesMandatoryModelPolicies(
   required: readonly CapabilityModelPolicy[],
   requested: readonly CapabilityModelPolicy[],
@@ -205,7 +293,17 @@ const CapabilityRegistrationSchema = Type.Object(
     id: Type.String({ maxLength: 128, minLength: 1 }),
     modelPolicy: Type.Optional(CapabilityModelPolicySchema),
     readonlyTools: Type.Optional(Type.Array(Type.String(), { maxItems: 64, uniqueItems: true })),
+    roleToolRequirements: Type.Optional(Type.Array(RoleToolRequirementSchema, { maxItems: 128 })),
     systemPrompt: Type.Optional(Type.String({ maxLength: 256 * 1024 })),
+    terminalValidation: Type.Optional(
+      Type.Object(
+        {
+          maxCorrections: Type.Integer({ maximum: 8, minimum: 0 }),
+          validate: Type.Function([], Type.Unknown()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     tools: Type.Array(CapabilityToolSchema, { maxItems: 64 }),
     version: Type.String({ maxLength: 128, minLength: 1 }),
   },
@@ -307,8 +405,16 @@ export class CapabilityRegistry {
               name: extension.name,
             })),
             readonlyTools: entry.readonlyTools ?? [],
+            roleToolRequirements: entry.roleToolRequirements ?? [],
+            terminalValidation:
+              entry.terminalValidation === undefined
+                ? undefined
+                : { maxCorrections: entry.terminalValidation.maxCorrections },
           })
-        if (contract(previous) !== contract(registration))
+        if (
+          contract(previous) !== contract(registration) ||
+          previous.terminalValidation?.validate !== registration.terminalValidation?.validate
+        )
           throw new Error(`Capability "${registration.id}" republication changed its contract.`)
         staged.registrations.delete(registration.id)
       }
@@ -355,6 +461,22 @@ export class CapabilityRegistry {
       }
       names.add(tool.name)
     }
+    const roleRequirements = new Set<string>()
+    for (const requirement of registration.roleToolRequirements ?? []) {
+      if (roleRequirements.has(requirement.role)) {
+        throw new Error(
+          `Capability registration "${registration.id}" has duplicate role tool requirements.`,
+        )
+      }
+      roleRequirements.add(requirement.role)
+      for (const tool of requirement.tools) {
+        if (PRIVATE_TOOLS.has(tool)) {
+          throw new Error(
+            `Capability tool requirement "${tool}" is private and cannot be required.`,
+          )
+        }
+      }
+    }
     const readonlyTools = new Set<string>()
     for (const name of registration.readonlyTools ?? []) {
       if (!names.has(name)) {
@@ -372,6 +494,10 @@ export class CapabilityRegistry {
       extensions: [...registration.extensions],
       id: registration.id,
       readonlyTools: [...readonlyTools],
+      roleToolRequirements: (registration.roleToolRequirements ?? []).map((requirement) => ({
+        ...requirement,
+        tools: [...requirement.tools],
+      })),
       tools: registration.tools.map((tool) => ({
         ...tool,
         parameters: structuredClone(tool.parameters),
@@ -392,6 +518,9 @@ export class CapabilityRegistry {
     }
     if (registration.createTools !== undefined) stored.createTools = registration.createTools
     if (registration.systemPrompt !== undefined) stored.systemPrompt = registration.systemPrompt
+    if (registration.terminalValidation !== undefined) {
+      stored.terminalValidation = registration.terminalValidation
+    }
     validateToolContract(stored, instantiateTools(stored))
     this.registrations.set(registration.id, stored)
   }
@@ -440,8 +569,15 @@ export class CapabilityRegistry {
     if (profileId === undefined) {
       return {
         modelPolicies: [],
-        contract: { extensions: [], nested: { enabled: false }, registrations: [], tools: [] },
+        contract: {
+          extensions: [],
+          nested: { enabled: false },
+          registrations: [],
+          roleToolRequirements: [],
+          tools: [],
+        },
         extensions: [],
+        roleToolRequirements: [],
         tools: [],
       }
     }
@@ -451,7 +587,9 @@ export class CapabilityRegistry {
     const extensions: InlineExtension[] = []
     const tools: string[] = []
     const registrations: { id: string; version: string }[] = []
+    const requirements = new Map<string, Set<string>>()
     const names = new Set<string>()
+    let terminalValidation: TerminalValidationPolicy | undefined
     for (const registrationId of profile.registrations) {
       const registration = this.registrations.get(registrationId)
       if (registration === undefined) {
@@ -459,6 +597,19 @@ export class CapabilityRegistry {
       }
       if (registration.modelPolicy !== undefined)
         modelPolicies.push(structuredClone(registration.modelPolicy))
+      if (registration.terminalValidation !== undefined) {
+        if (terminalValidation !== undefined) {
+          throw new Error(
+            `Capability profile "${profile.id}" has more than one terminal validator.`,
+          )
+        }
+        terminalValidation = registration.terminalValidation
+      }
+      for (const requirement of registration.roleToolRequirements ?? []) {
+        const tools = requirements.get(requirement.role) ?? new Set<string>()
+        for (const tool of requirement.tools) tools.add(tool)
+        requirements.set(requirement.role, tools)
+      }
       registrations.push({ id: registration.id, version: registration.version })
       if (!readonly) extensions.push(...registration.extensions)
       const definitions = registration.tools
@@ -492,7 +643,27 @@ export class CapabilityRegistry {
         }
       }
     }
-    return {
+    const roleToolRequirements = [...requirements.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([role, tools]) => {
+        const requirement: StaticDecode<typeof RoleToolRequirementSchema> = {
+          role,
+          tools: [...tools].sort(),
+        }
+        if (
+          profile.registrations.some((id) =>
+            this.registrations
+              .get(id)
+              ?.roleToolRequirements?.some(
+                (entry) => entry.role === role && entry.isolation === 'manual',
+              ),
+          )
+        ) {
+          requirement.isolation = 'manual'
+        }
+        return requirement
+      })
+    const resolved: ResolvedCapabilities = {
       modelPolicies,
       contract: {
         extensions: registrations,
@@ -502,11 +673,15 @@ export class CapabilityRegistry {
             : { enabled: true, maxDepth: profile.nested.maxDepth },
         profileId,
         registrations,
+        roleToolRequirements,
         tools,
       },
       extensions,
+      roleToolRequirements,
       tools,
     }
+    if (terminalValidation !== undefined) resolved.terminalValidation = terminalValidation
+    return resolved
   }
 
   resolveContract(contract: CapabilityContract, readonly: boolean): ResolvedCapabilities {
@@ -526,12 +701,21 @@ export class CapabilityRegistry {
     const toolsMatch =
       resolved.contract.tools.length === contract.tools.length &&
       resolved.contract.tools.every((tool, index) => contract.tools[index] === tool)
+    const requirementsMatch =
+      JSON.stringify(resolved.contract.roleToolRequirements) ===
+      JSON.stringify(contract.roleToolRequirements ?? [])
     const nestedMatches =
       resolved.contract.nested.enabled === contract.nested.enabled &&
       (resolved.contract.nested.enabled === false ||
         (contract.nested.enabled === true &&
           resolved.contract.nested.maxDepth === contract.nested.maxDepth))
-    if (!registrationsMatch || !extensionsMatch || !toolsMatch || !nestedMatches) {
+    if (
+      !registrationsMatch ||
+      !extensionsMatch ||
+      !toolsMatch ||
+      !requirementsMatch ||
+      !nestedMatches
+    ) {
       throw new Error('The persisted capability contract is unavailable or changed.')
     }
     return resolved

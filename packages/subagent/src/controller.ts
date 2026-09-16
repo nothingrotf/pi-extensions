@@ -34,6 +34,7 @@ function cloneResult(result: SubagentResult): SubagentResult {
     isolation: result.isolation === undefined ? undefined : structuredClone(result.isolation),
     structuredOutput:
       result.structuredOutput === undefined ? undefined : structuredClone(result.structuredOutput),
+    toolExecutionReceipts: structuredClone(result.toolExecutionReceipts),
     usage: { ...result.usage },
   }
 }

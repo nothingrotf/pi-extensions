@@ -132,19 +132,7 @@ export function isJsonString(value: JsonValue): value is string {
   return Value.Check(JsonStringSchema, value)
 }
 
-export const GateDefinitionSchema = Type.Union([
-  Type.Object(
-    { expected: Type.Literal('completed'), type: Type.Literal('status') },
-    { additionalProperties: false },
-  ),
-  Type.Object({ type: Type.Literal('schema-valid') }, { additionalProperties: false }),
-  Type.Object(
-    {
-      mediaType: Type.Optional(Type.String({ minLength: 1 })),
-      type: Type.Literal('artifact-present'),
-    },
-    { additionalProperties: false },
-  ),
+const StrictJsonPointerGateSchema = Type.Union([
   Type.Object(
     {
       op: Type.Literal('exists'),
@@ -173,8 +161,45 @@ export const GateDefinitionSchema = Type.Union([
   ),
 ])
 
+export const GateDefinitionSchema = Type.Union([
+  Type.Object(
+    { expected: Type.Literal('completed'), type: Type.Literal('status') },
+    { additionalProperties: false },
+  ),
+  Type.Object({ type: Type.Literal('schema-valid') }, { additionalProperties: false }),
+  Type.Object(
+    {
+      mediaType: Type.Optional(Type.String({ minLength: 1 })),
+      type: Type.Literal('artifact-present'),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Intersect([
+    Type.Object({ path: Type.String(), type: Type.Literal('json-pointer') }),
+    Type.Union([
+      Type.Object({ op: Type.Literal('exists') }),
+      Type.Object({ op: Type.Literal('eq'), value: JsonValueSchema }),
+      Type.Object({ op: Type.Literal('in'), values: Type.Array(JsonValueSchema) }),
+    ]),
+  ]),
+])
+
+export const DeliveryBindingSchema = Type.Union([
+  Type.Object(
+    { issue: Type.String({ minLength: 1, maxLength: 256 }), kind: Type.Literal('managed') },
+    { additionalProperties: false },
+  ),
+  Type.Object({ kind: Type.Literal('independent') }, { additionalProperties: false }),
+])
+
+export function parseDeliveryBinding<Input>(input: Input): DeliveryBinding {
+  if (!Value.Check(DeliveryBindingSchema, input)) throw new Error('Invalid delivery binding.')
+  return Value.Decode(DeliveryBindingSchema, input)
+}
+
 const SingleTaskFields = {
   capability_profile: Type.Optional(Type.String({ minLength: 1 })),
+  delivery: Type.Optional(DeliveryBindingSchema),
   cwd: Type.Optional(Type.String({ minLength: 1 })),
   description: Type.String({ minLength: 1 }),
   gates: Type.Optional(Type.Array(GateDefinitionSchema)),
@@ -304,6 +329,7 @@ export const GateResultSchema = Type.Object({
 
 export const IsolationPatchRefSchema = Type.Object({
   byteLength: Type.Number({ minimum: 0 }),
+  path: Type.Optional(Type.String({ minLength: 1 })),
   sha256: Type.String({ minLength: 64, maxLength: 64 }),
   uri: Type.String({ minLength: 1 }),
 })
@@ -442,11 +468,21 @@ export const NestedPolicySchema = Type.Union([
   Type.Object({ enabled: Type.Literal(true), maxDepth: Type.Number({ minimum: 1 }) }),
 ])
 
+export const RoleToolRequirementSchema = Type.Object(
+  {
+    isolation: Type.Optional(Type.Literal('manual')),
+    role: TaskRoleSchema,
+    tools: Type.Array(Type.String({ minLength: 1 }), { maxItems: 64, uniqueItems: true }),
+  },
+  { additionalProperties: false },
+)
+
 export const CapabilityContractSchema = Type.Object({
   extensions: Type.Array(CapabilityRegistrationContractSchema),
   nested: NestedPolicySchema,
   profileId: Type.Optional(Type.String({ minLength: 1 })),
   registrations: Type.Array(CapabilityRegistrationContractSchema),
+  roleToolRequirements: Type.Optional(Type.Array(RoleToolRequirementSchema, { maxItems: 128 })),
   tools: Type.Array(Type.String({ minLength: 1 })),
 })
 
@@ -505,11 +541,92 @@ export const ExecutionContractV3Schema = Type.Object({
   version: Type.Literal(3),
 })
 
+export const WorkspaceSnapshotRepositorySchema = Type.Object({
+  base: Type.String({ minLength: 1 }),
+  patch: IsolationPatchRefSchema,
+  relativePath: Type.String(),
+  root: Type.String({ minLength: 1 }),
+  tree: Type.String({ minLength: 1 }),
+})
+
+export const WorkspaceSnapshotSchema = Type.Object({
+  repositories: Type.Array(WorkspaceSnapshotRepositorySchema, { minItems: 1 }),
+})
+
+export const WorkspaceIdentitySchema = Type.Object({
+  baselineCommit: Type.String({ minLength: 1 }),
+  baselineTree: Type.String({ minLength: 1 }),
+  expectedTree: Type.String({ minLength: 1 }),
+  patch: IsolationPatchRefSchema,
+  productHead: Type.Optional(Type.String({ minLength: 1 })),
+  repositoryRoot: Type.String({ minLength: 1 }),
+  snapshot: WorkspaceSnapshotSchema,
+  syntheticBaseline: Type.Literal(true),
+})
+
+export const ExecutionContractV4Schema = Type.Object({
+  ...ExecutionContractV3Schema.properties,
+  version: Type.Literal(4),
+  workspaceIdentity: Type.Optional(WorkspaceIdentitySchema),
+})
+
+export const ExecutionContractV5Schema = Type.Object({
+  ...ExecutionContractV4Schema.properties,
+  delivery: Type.Optional(DeliveryBindingSchema),
+  version: Type.Literal(5),
+})
+
 export const ExecutionContractAnySchema = Type.Union([
   ExecutionContractV1Schema,
   ExecutionContractSchema,
   ExecutionContractV3Schema,
+  ExecutionContractV4Schema,
+  ExecutionContractV5Schema,
 ])
+
+export const ToolExecutionReceiptSchema = Type.Object({
+  callId: Type.String({ minLength: 1 }),
+  command: Type.Optional(Type.String()),
+  completedAt: Type.Number({ minimum: 0 }),
+  isError: Type.Boolean(),
+  output: ArtifactRefSchema,
+  startedAt: Type.Number({ minimum: 0 }),
+  status: Type.Union([Type.Literal('error'), Type.Literal('success')]),
+  tool: Type.String({ minLength: 1 }),
+})
+
+export const EvidenceSectionSchema = Type.Union([
+  Type.Literal('output'),
+  Type.Literal('isolation'),
+  Type.Literal('structured-output'),
+  Type.Literal('tool-receipts'),
+  Type.Literal('gates'),
+])
+
+export const TerminalOutputRevisionSchema = Type.Object({
+  artifact: ArtifactRefSchema,
+  correction: Type.Number({ minimum: 0 }),
+  structuredOutput: Type.Optional(StructuredOutputSchema),
+  validationError: Type.Optional(Type.String({ minLength: 1 })),
+})
+
+export const TerminalFailureKindSchema = Type.Literal('report-contract')
+
+export const AttemptEvidenceSchema = Type.Object({
+  agentId: Type.String({ minLength: 1 }),
+  artifact: Type.Optional(ArtifactRefSchema),
+  attempt: Type.Number({ minimum: 1 }),
+  error: Type.Optional(Type.String()),
+  gateResults: Type.Array(GateResultSchema),
+  isolation: Type.Optional(IsolationReceiptSchema),
+  status: Type.Union([Type.Literal('completed'), Type.Literal('failed'), Type.Literal('aborted')]),
+  structuredOutput: Type.Optional(StructuredOutputSchema),
+  terminalFailureKind: Type.Optional(TerminalFailureKindSchema),
+  terminalOutputRevisions: Type.Optional(
+    Type.Array(TerminalOutputRevisionSchema, { maxItems: 16 }),
+  ),
+  toolExecutionReceipts: Type.Array(ToolExecutionReceiptSchema),
+})
 
 const RunRecordFields = {
   agentId: Type.String({ minLength: 1 }),
@@ -522,6 +639,7 @@ const RunRecordFields = {
   durationMs: Type.Optional(Type.Number({ minimum: 0 })),
   effort: EffortSchema,
   error: Type.Optional(Type.String()),
+  evidenceArtifacts: Type.Optional(Type.Array(ArtifactRefSchema)),
   fast: Type.Boolean(),
   gateResults: Type.Optional(Type.Array(GateResultSchema)),
   intercomUsage: Type.Optional(RunUsageSchema),
@@ -532,6 +650,7 @@ const RunRecordFields = {
   modelSelector: Type.String({ minLength: 1 }),
   output: Type.Optional(Type.String()),
   ownerSessionId: Type.String({ minLength: 1 }),
+  toolExecutionReceipts: Type.Optional(Type.Array(ToolExecutionReceiptSchema)),
   parentAgentId: Type.Optional(Type.String({ minLength: 1 })),
   parentSessionId: Type.Optional(Type.String({ minLength: 1 })),
   readonly: Type.Boolean(),
@@ -543,6 +662,10 @@ const RunRecordFields = {
   sessionFile: Type.String({ minLength: 1 }),
   status: RunStatusSchema,
   structuredOutput: Type.Optional(StructuredOutputSchema),
+  terminalFailureKind: Type.Optional(TerminalFailureKindSchema),
+  terminalOutputRevisions: Type.Optional(
+    Type.Array(TerminalOutputRevisionSchema, { maxItems: 16 }),
+  ),
   subagentType: SubagentTypeSchema,
   timing: Type.Optional(RunTimingSchema),
   updatedAt: Type.Number({ minimum: 0 }),
@@ -670,9 +793,12 @@ export const RuntimeStateSchema = Type.Object({
 })
 
 export type ExecutionContractV3 = StaticDecode<typeof ExecutionContractV3Schema>
+export type ExecutionContractV4 = StaticDecode<typeof ExecutionContractV4Schema>
+export type ExecutionContractV5 = StaticDecode<typeof ExecutionContractV5Schema>
 
 export type AgentSource = StaticDecode<typeof AgentSourceSchema>
 export type ArtifactRef = StaticDecode<typeof ArtifactRefSchema>
+export type AttemptEvidence = StaticDecode<typeof AttemptEvidenceSchema>
 export type BatchTaskInput = StaticDecode<typeof BatchTaskInputSchema>
 export type CapabilityContract = StaticDecode<typeof CapabilityContractSchema>
 export type ContextState = StaticDecode<typeof ContextStateSchema>
@@ -682,8 +808,10 @@ export type CoordinationTaskStateV3 = StaticDecode<typeof CoordinationTaskStateV
 export type Effort = StaticDecode<typeof EffortSchema>
 export type ExecutionContract = StaticDecode<typeof ExecutionContractSchema>
 export type ExecutionContractV1 = StaticDecode<typeof ExecutionContractV1Schema>
+export type EvidenceSection = StaticDecode<typeof EvidenceSectionSchema>
 export type GateDefinition = StaticDecode<typeof GateDefinitionSchema>
 export type GateResult = StaticDecode<typeof GateResultSchema>
+export type DeliveryBinding = StaticDecode<typeof DeliveryBindingSchema>
 export type DependencyMode = StaticDecode<typeof DependencyModeSchema>
 export type HeadState = StaticDecode<typeof HeadStateSchema>
 export type IsolationChangedFile = StaticDecode<typeof IsolationChangedFileSchema>
@@ -709,26 +837,38 @@ export type RuntimeState = StaticDecode<typeof RuntimeStateSchema>
 export type SchemaMode = StaticDecode<typeof SchemaModeSchema>
 export type SingleTaskInput = StaticDecode<typeof SingleTaskInputSchema>
 export type StructuredOutput = StaticDecode<typeof StructuredOutputSchema>
+export type ToolExecutionReceipt = StaticDecode<typeof ToolExecutionReceiptSchema>
+export type WorkspaceIdentity = StaticDecode<typeof WorkspaceIdentitySchema>
+export type WorkspaceSnapshot = StaticDecode<typeof WorkspaceSnapshotSchema>
+export type WorkspaceSnapshotRepository = StaticDecode<typeof WorkspaceSnapshotRepositorySchema>
 export type SubagentType = StaticDecode<typeof SubagentTypeSchema>
 export type TaskInput = StaticDecode<typeof SingleTaskInputSchema>
+export type TerminalOutputRevision = StaticDecode<typeof TerminalOutputRevisionSchema>
 export type TaskToolInput = StaticDecode<typeof TaskInputSchema>
 export type TaskNodeInput = StaticDecode<typeof TaskNodeInputSchema>
 
 const TaskJsonFieldsSchema = Type.Object({
+  delivery: Type.Optional(Type.Unknown()),
   outputSchema: Type.Optional(Type.Unknown()),
   gates: Type.Optional(Type.Array(GateDefinitionSchema)),
 })
 
-function preserveTaskJson<Input, Output extends Pick<TaskInput, 'outputSchema' | 'gates'>>(
-  input: Input,
-  output: Output,
-): Output {
+function preserveTaskJson<
+  Input,
+  Output extends Pick<TaskInput, 'delivery' | 'outputSchema' | 'gates'>,
+>(input: Input, output: Output): Output {
   if (!Value.Check(TaskJsonFieldsSchema, input)) return output
+  if (input.delivery !== undefined) {
+    output.delivery = parseDeliveryBinding(input.delivery)
+  }
   if (Object.hasOwn(input, 'outputSchema'))
     output.outputSchema = decodeJsonValue(input.outputSchema)
   if (input.gates !== undefined) {
     output.gates = input.gates.map((source) => {
-      const gate = Value.Decode(GateDefinitionSchema, source)
+      const gate = Value.Decode(
+        source.type === 'json-pointer' ? StrictJsonPointerGateSchema : GateDefinitionSchema,
+        source,
+      )
       if (source.type === 'json-pointer' && gate.type === 'json-pointer') {
         if (source.op === 'eq' && gate.op === 'eq') gate.value = decodeJsonValue(source.value)
         if (source.op === 'in' && gate.op === 'in')

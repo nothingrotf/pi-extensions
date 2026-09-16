@@ -3,8 +3,10 @@ import { Type, type TSchema } from 'typebox'
 import { describe, expect, it } from 'vite-plus/test'
 
 import {
+  assertRoleToolRequirements,
   CapabilityRegistry,
   type CapabilityModelPolicy,
+  type TerminalValidationPolicy,
   decodeCapabilityPublication,
   isCapabilitySubset,
   selectCapabilityModel,
@@ -71,6 +73,19 @@ describe('capability attenuation', () => {
 
   it('cannot re-enable delegation after it has been removed', () => {
     expect(isCapabilitySubset(approved, { ...approved, nested: { enabled: false } })).toBe(false)
+  })
+})
+
+describe('role tool requirements', () => {
+  it('requires declared role tools from the resolved effective set', () => {
+    const requirements = [{ role: 'runtime verification', tools: ['bash'] }]
+    expect(() =>
+      assertRoleToolRequirements(requirements, 'runtime verification', ['read', 'write']),
+    ).toThrow('runtime verification')
+    expect(() =>
+      assertRoleToolRequirements(requirements, 'runtime verification', ['bash', 'read']),
+    ).not.toThrow()
+    expect(() => assertRoleToolRequirements(requirements, 'feature', [])).not.toThrow()
   })
 })
 
@@ -322,6 +337,31 @@ describe('model policy selection compatibility', () => {
         'chosen',
       ),
     ).toThrow('configured')
+  })
+
+  it('rejects terminal validator callback replacement without a version change', () => {
+    const registry = new CapabilityRegistry()
+    const validate: TerminalValidationPolicy['validate'] = () => ({ status: 'accepted' })
+    const registration = {
+      id: 'validator',
+      version: '1',
+      extensions: [],
+      tools: [],
+      terminalValidation: { maxCorrections: 1, validate },
+    }
+    registry.publishCapabilities({ sourceId: 'owner', registrations: [registration] })
+    registry.publishCapabilities({ sourceId: 'owner', registrations: [registration] })
+    expect(() =>
+      registry.publishCapabilities({
+        sourceId: 'owner',
+        registrations: [
+          {
+            ...registration,
+            terminalValidation: { maxCorrections: 1, validate: () => ({ status: 'accepted' }) },
+          },
+        ],
+      }),
+    ).toThrow('changed its contract')
   })
 
   it('updates same-source policies atomically without transferring ownership or changing contracts', () => {

@@ -1,17 +1,23 @@
 ### Bug fix
 
-**You own this task. Plan, review, verify.** Delegate investigation and the fix to subagents, stay in the lead.
+**One issue owner reproduces, investigates, implements, and corrects. An independent reviewer owns acceptance.**
 
-Be scientific. Every shipped line traces to runtime evidence. Belt-and-suspenders that "might help" is a hypothesis, not a fix. It does not ship. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies ships, nothing more.
+Assign the owner before reproduction, not after another agent writes a plan.
+For managed delivery, dispatch one `poteto-agent` with `role: "bug-fix"` and `capability_profile: "pstack-leaf"`.
+Omit `Task.model` for the configured scalar policy.
+Read `references/task-contracts.md` and pass the original request, evidence, and per-issue fields from `references/delivery-contract.md`.
+If an existing owner already has the evidence and compatible contract, continue that owner instead of creating another Task.
+The owner executes the following steps directly. It does not delegate merely because a step has a different name.
 
-1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables). Don't hand the repro to the user. A debug or instrumentation protocol that says to ask the user does not override this. You drive the instrumented runtime. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. Won't reproduce directly, force it: synthesize the trigger, tighten conditions, or instrument until it fires.
-2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with `how` over the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with the installed `loop` skill. Confirm the surviving *mechanism* with runtime evidence before the step-3 architect/interrogate fan-out.
-3. Plan the fix. Run `architect` only when the fix introduces a genuinely new or contested contract, ownership, state, or security design; crossing a function is not a design trigger. An accepted design carries its grounding, so implementation inherits it without rerunning `how` or `architect`. Delegate implementation to one persistent subagent using the configured `bug-fix` model, `role: "bug-fix"`, and the per-issue fields from `references/delivery-contract.md` in the Task prompt. Follow `references/task-contracts.md` for capabilities and isolation. Concrete selectors use `provider/model-id:effort [fast]`. Omit `Task.model` to use the scalar runtime policy. Pass `capability_profile: "pstack-leaf"` for a leaf or `pstack-nested` for a delegating owner. Corrections resume the same implementer while the accepted design stays compatible. Send the accepted patch to one independent reviewer that never wrote it, combining comment cleanup, deslop, and static audit when those passes are safe together. Review the diff.
-4. Verify on the same surface. Run an early executable probe before the fix when the failure involves security, concurrency, a real database role, or the actual configured runtime. Recheck only the affected behavior after a correction, then run the full required gates before commit. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
-5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
-   This is the canonical **sequence-verifiable-units** principle skill, the failing test first and the fix on top.
-6. Run **Opening a PR**.
+1. Reproduce the failure on the matching surface through the control skill. Use the smallest executable trigger that represents the user's experience. For integration failures, connect the real entry point, authorization, persistence, and observable result before editing. Retain that probe in a repository-owned harness. If the actual surface is unavailable, record the limitation and use the closest executable reproduction without declaring acceptance.
+2. Trace the cause with `how` in the owner's session. Use `why` locally when regression history or a disputed rationale matters. Execute independent tool queries in parallel. Retain decisive observations, contrary evidence, and rejected hypotheses with stable references. Confirm the mechanism before changing code.
+3. Plan and implement the smallest fix supported by that evidence. Use `architect` only for genuinely new or contested contracts, ownership, state, or security. An accepted design carries its grounding. A leaf returns a required design decision to the coordinator without discarding its investigation. After that decision, resume the same compatible owner.
+4. Verify the original reproduction and adjacent regression risks on the corrected artifact. Reuse the retained harness and preserve gate exit status and immutable logs. Read unchanged passing logs instead of rerunning gates for a different summary. Keep incomplete work as WIP. A passing unit suite does not replace required runtime proof. Recheck affected behavior after corrections and run the full required gates before commit.
+5. Send the complete candidate to one independent reviewer that never wrote it. Combine static, no-comments, deslop, and runtime findings when the reviewer has the required tools and manual isolation. Return findings to the same implementer. Keep the same compatible reviewer for the correction delta. Neither summaries nor agent agreement prove acceptance.
+6. Preserve a failing-then-passing regression test when the reproduction supports it. Follow `tdd` for a cheap local test path. Do not manufacture a separate agent or expensive test stage only to satisfy a phase label.
+7. Run **Opening a PR** only after independent acceptance and the required gates. Publication remains separately scoped and authorized.
 
-Investigation fans out `how` + `why` as parallel subagents.
+The issue evidence retains the original request, criteria, reproduction, decisive source references, rejected hypotheses, current artifact, harness, and open findings.
+Do not fan out `how` and `why` by default. Delegate only a justified independent slice or an explicit user-required perspective.
 
-**Reply:** what was broken, root cause, fix, how you verified. Paste failing-then-passing repro output verbatim.
+**Reply:** what was broken, root cause, fix, and executed verification. Include failing-then-passing evidence and remaining limitations.

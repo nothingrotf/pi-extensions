@@ -78,8 +78,8 @@ Assistant messages render Markdown with these rules:
 - Bare project paths and single-backtick paths become `file://` links after the path exists on disk. Line and column suffixes stay visible in the label.
 - Headings hide their `#` markers. Level one and two use the primary color. Deeper levels use the secondary color.
 - Code blocks use a brand-colored left border instead of fences. Highlighting uses the active Pi syntax theme when the language is known.
-- Complete `mermaid` fences render as Unicode diagrams. `graph` and `flowchart` support `TD`/`TB`, `BT`, `LR`, and `RL` directions, node shapes, branches, solid, dotted, and labeled edges, subgraphs, and `<br/>` labels. `sequenceDiagram` supports participants, messages, self-messages, notes, `loop`/`alt`/`opt` sections, and autonumbering.
-- Unsupported, malformed, or partially parsed Mermaid syntax remains visible as its original code. Mermaid fences still streaming are not rendered until their real closing fence arrives. A diagram wider than the code block also falls back to the original code instead of wrapping and damaging the diagram.
+- Complete `mermaid` fences render as Unicode diagrams when the art fits without losing labels. `graph` and `flowchart` support `TD`/`TB`, `BT`, `LR`, and `RL` directions, node shapes, branches, solid, dotted, and labeled edges, subgraphs, and `<br/>` labels. `sequenceDiagram` supports participants, messages, self-messages, notes, `loop`/`alt`/`opt` sections, and autonumbering.
+- An oversized or lossy flowchart with safely understood node and edge syntax uses a compact terminal presentation: numbered node labels followed by wrapped source-to-target connections and edge labels. Unsupported, malformed, or partially understood Mermaid syntax remains visible as its original code. Mermaid fences still streaming are not rendered until their real closing fence arrives.
 - Tables use rounded borders and one header rule.
 - List markers use the warning color. Task markers use success and dim colors.
 - Quotes use a faint border with muted italic text.
@@ -241,6 +241,11 @@ the message history, and layout fixes do not create polling timers.
 Rail restoration indexes tool calls by their owning turn.
 Finalizing a turn checks its own calls instead of rescanning calls from every earlier turn.
 Recognized terminal font hints bypass the fallback font-directory scan.
+
+Live rail progress updates in memory without appending each frame to session history.
+Durable checkpoints capture first observations, status transitions, turn completion, and graceful shutdown.
+Identical final snapshots do not create duplicate entries. Legacy per-frame histories remain readable.
+After an abrupt interruption, restoration uses the last durable checkpoint, not subsequent transient display updates.
 
 Settled rails cache their grouped actions and rendered output. Message framing
 and speaker headers reuse unchanged output, retaining only the latest frame per

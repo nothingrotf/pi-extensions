@@ -6,6 +6,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { loadPstackBootstrap } from './bootstrap.ts'
+import { registerDeliveryProtocol, validateDeliveryTerminal } from './delivery-tools.ts'
 import {
   loadPstackModelPolicy,
   renderPstackModelPolicy,
@@ -60,6 +61,7 @@ export default async function pstack(
   pi: ExtensionAPI,
   options: PstackModelPolicyOptions = {},
 ): Promise<void> {
+  registerDeliveryProtocol(pi)
   const bootstrap = await loadPstackBootstrap()
   let modelPolicy = await loadPstackModelPolicy(options)
   let policyPrompt = renderPstackModelPolicy(modelPolicy)
@@ -91,9 +93,13 @@ export default async function pstack(
           id: 'pstack-planning',
           modelPolicy,
           readonlyTools: ['todo_write', 'todo_read'],
+          roleToolRequirements: [
+            { role: 'runtime verification', tools: ['bash'], isolation: 'manual' },
+          ],
           systemPrompt: `${bootstrap.systemPrompt}\n\n${policyPrompt}`,
+          terminalValidation: { maxCorrections: 2, validate: validateDeliveryTerminal },
           tools: createSessionTodoTools(),
-          version: '1',
+          version: '2',
         },
       ],
       sourceId,

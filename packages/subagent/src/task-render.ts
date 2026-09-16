@@ -247,7 +247,10 @@ export function rowFromJob(job: JobSnapshot, background: boolean): AgentRow {
 }
 
 export function rowFromCompleted(
-  details: RuntimeCompletedDetails,
+  details: Pick<
+    RuntimeCompletedDetails,
+    'durationMs' | 'finalMessage' | 'model' | 'role' | 'toolCallCount' | 'usage'
+  >,
   label: string,
   agentType: string,
 ): AgentRow {
@@ -270,7 +273,7 @@ export function rowFromCompleted(
 }
 
 export function rowFromFailed(
-  details: RuntimeFailedDetails,
+  details: Pick<RuntimeFailedDetails, 'error' | 'finalMessage' | 'model' | 'role'>,
   label: string,
   agentType: string,
   aborted: boolean,

@@ -1,12 +1,27 @@
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
+import { createServer } from 'vite-plus'
 import { describe, expect, it } from 'vite-plus/test'
 
 import {
+  captureWorkspaceIdentity,
+  captureIsolationIdentity,
+  captureWorkspaceSnapshot,
   commitTree,
   commonDirectory,
   git,
@@ -16,10 +31,12 @@ import {
 } from '../src/git-isolation.ts'
 import {
   captureIsolation,
+  cleanupCapturedReceipt,
   cleanupWorkspaceArtifacts,
   createIsolation,
   integrateStagedReceipt,
   needsRecoveryCapture,
+  reconstructCapturedIsolation,
   recoverIsolations,
   type IsolationDestination,
 } from '../src/isolation.ts'
@@ -29,6 +46,7 @@ import {
   createRootWorkspaceContext,
   currentLockOwner,
   relativeCwdWithin,
+  writeManifest,
 } from '../src/workspace.ts'
 
 const execFileAsync = promisify(execFile)
@@ -83,6 +101,100 @@ async function writer(cwd: string, writerId: string, relativeCwd = '') {
 }
 
 describe('writer isolation', () => {
+  it('serves browser modules without disabling Vite filesystem guards', async () => {
+    const directory = await repository()
+    try {
+      await mkdir(join(directory, 'src'))
+      await writeFile(join(directory, 'src', 'probe.ts'), 'export const answer = 42\n')
+      const isolation = await writer(directory, 'vite-browser')
+      try {
+        const server = await createServer({
+          configFile: false,
+          root: isolation.rootWorktree,
+          server: { middlewareMode: true, watch: null },
+        })
+        try {
+          expect((await server.transformRequest('/src/probe.ts'))?.code).toContain('answer = 42')
+          await expect(server.transformRequest('/.git/config')).rejects.toThrow(
+            'Failed to load url',
+          )
+        } finally {
+          await server.close()
+        }
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it.each([false, true])(
+    'cleans captured execution paths including legacy layout=%s',
+    async (legacy) => {
+      const directory = await repository()
+      try {
+        const isolation = await writer(directory, 'captured-cleanup')
+        const receipt = await captureIsolation(isolation)
+        let physicalRoot = isolation.rootWorktree
+        if (legacy) {
+          physicalRoot = join(isolation.baseDir, 'root')
+          await rename(isolation.rootWorktree, physicalRoot)
+          await writeManifest({ ...isolation.manifest, physicalRoot })
+        }
+        expect(await cleanupCapturedReceipt(receipt)).toBe(false)
+        await expect(stat(physicalRoot)).rejects.toHaveProperty('code', 'ENOENT')
+        await expect(stat(isolation.baseDir)).rejects.toHaveProperty('code', 'ENOENT')
+        const ref = receipt.repositories[0]?.durableRef
+        if (ref === undefined) throw new Error('The durable result ref is missing.')
+        expect((await git(directory, ['rev-parse', ref])).trim()).toBe(
+          receipt.repositories[0]?.resultCommit,
+        )
+        expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('base\n')
+      } finally {
+        await rm(directory, { force: true, recursive: true })
+      }
+    },
+    180_000,
+  )
+
+  it('uses a canonical execution root for nested workspace containment', async () => {
+    const directory = await repository()
+    try {
+      const isolation = await writer(directory, 'canonical-root')
+      try {
+        const canonical = await realpath(isolation.rootWorktree)
+        expect(isolation.context.physicalRoot).toBe(canonical)
+        expect(relativeCwdWithin(isolation.context.physicalRoot, canonical)).toBe('')
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('rejects cleanup of a retained path outside its attempt', async () => {
+    const directory = await repository()
+    const unrelated = await mkdtemp(join(tmpdir(), 'subagent-cleanup-unrelated-'))
+    try {
+      const isolation = await writer(directory, 'unsafe-cleanup')
+      try {
+        await writeFile(join(unrelated, 'keep.txt'), 'keep')
+        const receipt = await captureIsolation(isolation)
+        await writeManifest({ ...isolation.manifest, physicalRoot: unrelated })
+        expect(await cleanupCapturedReceipt(receipt)).toBe(true)
+        expect(await readFile(join(unrelated, 'keep.txt'), 'utf8')).toBe('keep')
+        expect((await stat(isolation.baseDir)).isDirectory()).toBe(true)
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+      await rm(unrelated, { force: true, recursive: true })
+    }
+  })
+
   it('accepts dot-prefixed child paths and rejects parent escapes', () => {
     const root = join(tmpdir(), 'workspace')
     expect(relativeCwdWithin(root, join(root, '..cache'))).toBe('..cache')
@@ -534,6 +646,105 @@ describe('writer isolation', () => {
     }
   }, 180_000)
 
+  it.each(['baseline', 'new-rule', 'unignored', 'tracked', 'removed'])(
+    'checks reference repository boundaries with %s ignores',
+    async (scenario) => {
+      const directory = await repository()
+      const reference = await repository()
+      try {
+        if (scenario !== 'unignored' && scenario !== 'new-rule') {
+          await writeFile(join(directory, '.gitignore'), 'node_modules/\nrefs/\n')
+        }
+        if (scenario === 'tracked') {
+          await mkdir(join(directory, 'refs', 'external'), { recursive: true })
+          await writeFile(join(directory, 'refs', 'external', 'product.txt'), 'tracked product\n')
+          await git(directory, ['add', '-f', 'refs/external/product.txt'])
+          await git(directory, ['commit', '-qm', 'tracked product'])
+        }
+        if (scenario === 'removed') {
+          await git(directory, ['clone', '-q', reference, 'existing'])
+        }
+        const isolation = await writer(directory, `reference-${scenario}`)
+        try {
+          if (scenario === 'new-rule')
+            await writeFile(join(isolation.rootWorktree, '.gitignore'), 'refs/\n')
+          if (scenario === 'tracked')
+            await rm(join(isolation.rootWorktree, 'refs'), { recursive: true, force: true })
+          if (scenario === 'removed')
+            await rm(join(isolation.rootWorktree, 'existing'), { recursive: true, force: true })
+          await git(isolation.rootWorktree, ['clone', '-q', reference, 'refs/external'])
+          await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'product result\n')
+          const receipt = await captureIsolation(isolation)
+          expect(receipt.captureStatus).toBe(scenario === 'baseline' ? 'captured' : 'failed')
+          if (scenario === 'baseline') {
+            expect(receipt.repositories.map((entry) => entry.relativePath)).toEqual([''])
+            expect(receipt.repositories[0]?.changedFiles).toEqual([
+              { path: 'tracked.txt', status: 'M' },
+            ])
+            const environment = await harness(directory)
+            expect(
+              (await integrateStagedReceipt(receipt, environment.destination, 'reference-parent'))
+                .status,
+            ).toBe('integrated')
+            expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('product result\n')
+            await expect(stat(join(directory, 'refs'))).rejects.toHaveProperty('code', 'ENOENT')
+          } else {
+            expect(receipt.error).toContain('nested repository boundary')
+          }
+        } finally {
+          await cleanupWorkspaceArtifacts(isolation)
+        }
+      } finally {
+        await rm(directory, { force: true, recursive: true })
+        await rm(reference, { force: true, recursive: true })
+      }
+    },
+    180_000,
+  )
+
+  it.each(['nested-parent', 'modified-parent', 'private-exclude'])(
+    'checks new reference clones against %s ignore authority',
+    async (scenario) => {
+      const directory = await repository()
+      const reference = await repository()
+      try {
+        await git(directory, ['clone', '-q', reference, 'product'])
+        const product = join(directory, 'product')
+        await mkdir(join(product, 'references'))
+        await writeFile(
+          join(product, 'references', '.gitignore'),
+          scenario === 'private-exclude' ? '' : 'vendor/\n',
+        )
+        const isolation = await writer(directory, `reference-owner-${scenario}`)
+        try {
+          const isolatedProduct = join(isolation.rootWorktree, 'product')
+          if (scenario === 'modified-parent')
+            await writeFile(join(isolatedProduct, 'references', '.gitignore'), 'vendor/\n\n')
+          if (scenario === 'private-exclude')
+            await writeFile(
+              join(isolatedProduct, '.git', 'info', 'exclude'),
+              'references/vendor/\n',
+            )
+          await git(isolatedProduct, ['clone', '-q', reference, 'references/vendor/external'])
+          const receipt = await captureIsolation(isolation)
+          expect(receipt.captureStatus).toBe(scenario === 'nested-parent' ? 'captured' : 'failed')
+          if (scenario === 'nested-parent') {
+            expect(receipt.repositories.map((entry) => entry.relativePath)).toEqual(['', 'product'])
+            expect(receipt.repositories.every((entry) => entry.changedFiles.length === 0)).toBe(
+              true,
+            )
+          }
+        } finally {
+          await cleanupWorkspaceArtifacts(isolation)
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+        await rm(reference, { recursive: true, force: true })
+      }
+    },
+    180_000,
+  )
+
   it('captures nested repository changes in an ordered ledger', async () => {
     const directory = await repository()
     try {
@@ -619,45 +830,80 @@ describe('writer isolation', () => {
       expect(recovery?.ownerStatus).toBe('dead')
       expect(recovery?.receipt?.status).toBe('captured')
       expect(recovery?.receipt?.repositories[0]?.patch.sha256).toHaveLength(64)
+      expect(recovery?.receipt?.cleanupDebt).toBe(false)
+      await expect(stat(isolation.rootWorktree)).rejects.toHaveProperty('code', 'ENOENT')
+      await expect(stat(isolation.baseDir)).rejects.toHaveProperty('code', 'ENOENT')
       expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('base\n')
     } finally {
       await rm(directory, { force: true, recursive: true })
     }
   }, 180_000)
 
-  it('leaves captured dead workspaces untouched during startup recovery', async () => {
-    const directory = await repository()
-    try {
-      const isolation = await writer(directory, 'writer-staged')
-      await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'staged work\n', 'utf8')
-      const receipt = await captureIsolation(isolation)
-      expect(receipt.captureStatus).toBe('captured')
-      const durableRef = receipt.repositories[0]?.durableRef
-      if (durableRef === undefined) throw new Error('The durable ref is missing.')
-      const durableCommonDir = await commonDirectory(directory)
-      const before = (await git(durableCommonDir, ['rev-parse', durableRef])).trim()
-      await writeFile(
-        join(isolation.baseDir, 'manifest.json'),
-        JSON.stringify({
-          ...isolation.manifest,
-          owner: { ...isolation.manifest.owner, pid: 999_999, startedAt: 1, token: 'dead' },
-          state: 'staged',
-        }),
-        'utf8',
-      )
-      const recoveries = await recoverIsolations(directory)
-      const recovery = recoveries.find((item) => item.attemptId === isolation.attemptId)
-      expect(recovery?.ownerStatus).toBe('dead')
-      expect(recovery?.receipt).toBeUndefined()
-      expect((await git(durableCommonDir, ['rev-parse', durableRef])).trim()).toBe(before)
-      expect(await readFile(join(isolation.rootWorktree, 'tracked.txt'), 'utf8')).toBe(
-        'staged work\n',
-      )
-      await cleanupWorkspaceArtifacts(isolation)
-    } finally {
-      await rm(directory, { force: true, recursive: true })
-    }
-  }, 180_000)
+  it.each(['staged', 'integrating'])(
+    'removes a dead %s workspace after durable capture during startup recovery',
+    async (state) => {
+      const directory = await repository()
+      try {
+        const isolation = await writer(directory, 'writer-staged')
+        await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'staged work\n', 'utf8')
+        const receipt = await captureIsolation(isolation)
+        expect(receipt.captureStatus).toBe('captured')
+        const durableRef = receipt.repositories[0]?.durableRef
+        if (durableRef === undefined) throw new Error('The durable ref is missing.')
+        const durableCommonDir = await commonDirectory(directory)
+        const before = (await git(durableCommonDir, ['rev-parse', durableRef])).trim()
+        await writeFile(
+          join(isolation.baseDir, 'manifest.json'),
+          JSON.stringify({
+            ...isolation.manifest,
+            owner: { ...isolation.manifest.owner, pid: 999_999, startedAt: 1, token: 'dead' },
+            state,
+          }),
+          'utf8',
+        )
+        const recoveries = await recoverIsolations(directory)
+        const recovery = recoveries.find((item) => item.attemptId === isolation.attemptId)
+        expect(recovery?.ownerStatus).toBe('dead')
+        expect(recovery?.receipt).toBeUndefined()
+        await expect(stat(isolation.rootWorktree)).rejects.toHaveProperty('code', 'ENOENT')
+        await expect(stat(isolation.baseDir)).rejects.toHaveProperty('code', 'ENOENT')
+        expect((await git(durableCommonDir, ['rev-parse', durableRef])).trim()).toBe(before)
+      } finally {
+        await rm(directory, { force: true, recursive: true })
+      }
+    },
+    180_000,
+  )
+
+  it.each(['capture-conflict', 'integrating'])(
+    'retains a dead %s workspace without durable result refs during startup recovery',
+    async (state) => {
+      const directory = await repository()
+      let isolation: Awaited<ReturnType<typeof writer>> | undefined
+      try {
+        const workspace = await writer(directory, 'writer-capture-conflict')
+        isolation = workspace
+        await writeFile(
+          join(workspace.baseDir, 'manifest.json'),
+          JSON.stringify({
+            ...workspace.manifest,
+            owner: { ...workspace.manifest.owner, pid: 999_999, startedAt: 1, token: 'dead' },
+            state,
+          }),
+          'utf8',
+        )
+        const recoveries = await recoverIsolations(directory)
+        const recovery = recoveries.find((item) => item.attemptId === workspace.attemptId)
+        expect(recovery?.ownerStatus).toBe('dead')
+        expect(recovery?.receipt).toBeUndefined()
+        expect((await stat(workspace.rootWorktree)).isDirectory()).toBe(true)
+      } finally {
+        if (isolation !== undefined) await cleanupWorkspaceArtifacts(isolation)
+        await rm(directory, { force: true, recursive: true })
+      }
+    },
+    180_000,
+  )
 
   it('classifies only uncaptured workspaces as recovery capture candidates', () => {
     const repositories = [{ relativePath: '' }]
@@ -820,6 +1066,244 @@ describe('writer isolation', () => {
       expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('applied before crash\n')
       expect(await readFile(journalPath, 'utf8')).toContain('"phase":"verified"')
       await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('captures dirty nested repository snapshots with isolation baselines', async () => {
+    const directory = await repository()
+    try {
+      await writeFile(join(directory, '.gitignore'), 'node_modules/\nnested/\n', 'utf8')
+      await command(directory, ['git', 'add', '.gitignore'])
+      await command(directory, ['git', 'commit', '-qm', 'ignore nested repository'])
+      const nested = join(directory, 'nested')
+      await mkdir(nested)
+      await command(nested, ['git', 'init', '-q', '-b', 'main'])
+      await command(nested, ['git', 'config', 'user.name', 'Test User'])
+      await command(nested, ['git', 'config', 'user.email', 'test@example.com'])
+      await writeFile(join(nested, 'nested.txt'), 'base\n', 'utf8')
+      await command(nested, ['git', 'add', 'nested.txt'])
+      await command(nested, ['git', 'commit', '-qm', 'nested base'])
+      await writeFile(join(directory, 'tracked.txt'), 'root dirty\n', 'utf8')
+      await writeFile(join(nested, 'nested.txt'), 'nested dirty\n', 'utf8')
+
+      const snapshot = await captureWorkspaceSnapshot(directory)
+      if (snapshot === undefined) throw new Error('The workspace snapshot is unavailable.')
+      const isolation = await writer(directory, 'snapshot-nested')
+      try {
+        expect(snapshot.repositories.map((entry) => entry.relativePath)).toEqual(
+          isolation.repositories.map((entry) => entry.relativePath),
+        )
+        expect(snapshot.repositories.map((entry) => entry.root)).toEqual(
+          isolation.repositories.map((entry) => entry.physicalRepoRoot),
+        )
+        expect(snapshot.repositories.map((entry) => entry.base)).toEqual(
+          isolation.repositories.map((entry) => entry.baselineTree),
+        )
+        expect(
+          await readFile(fileURLToPath(snapshot.repositories[0]?.patch.uri ?? ''), 'utf8'),
+        ).toContain('root dirty')
+        expect(
+          await readFile(fileURLToPath(snapshot.repositories[1]?.patch.uri ?? ''), 'utf8'),
+        ).toContain('nested dirty')
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('captures unborn dirty content against the empty tree', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'subagent-unborn-'))
+    try {
+      await command(directory, ['git', 'init', '-q', '-b', 'main'])
+      await writeFile(join(directory, 'unborn.txt'), 'unborn dirty\n', 'utf8')
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      expect(identity.productHead).toBeUndefined()
+      expect(await readFile(fileURLToPath(identity.patch.uri), 'utf8')).toContain('unborn dirty')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('derives writer identity from its captured baseline instead of the live source', async () => {
+    const directory = await repository()
+    try {
+      const before = await captureWorkspaceIdentity(directory)
+      await writeFile(join(directory, 'tracked.txt'), 'captured baseline\n')
+      const isolation = await writer(directory, 'immutable-identity')
+      try {
+        expect(before?.baselineTree).not.toBe(isolation.repositories[0]?.baselineTree)
+        await writeFile(join(directory, 'tracked.txt'), 'later source mutation\n')
+        const identity = await captureIsolationIdentity(isolation)
+        expect(identity.baselineTree).toBe(isolation.repositories[0]?.baselineTree)
+        expect(identity.snapshot.repositories.map((entry) => entry.tree)).toEqual(
+          isolation.repositories.map((entry) => entry.baselineTree),
+        )
+        expect(await readFile(fileURLToPath(identity.patch.uri), 'utf8')).toContain(
+          'captured baseline',
+        )
+        expect(await readFile(fileURLToPath(identity.patch.uri), 'utf8')).not.toContain(
+          'later source mutation',
+        )
+        expect((await captureIsolationIdentity(isolation)).patch).toEqual(identity.patch)
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 180_000)
+
+  it('captures an immutable read-only workspace snapshot', async () => {
+    const directory = await repository()
+    try {
+      await writeFile(join(directory, 'tracked.txt'), 'first snapshot\n', 'utf8')
+      const snapshot = await captureWorkspaceSnapshot(directory)
+      if (snapshot === undefined) throw new Error('The workspace snapshot is unavailable.')
+      expect(snapshot.repositories).toHaveLength(1)
+      const entry = snapshot.repositories[0]
+      if (entry === undefined) throw new Error('The repository snapshot is unavailable.')
+      expect(entry.root).toBe(await realpath(directory))
+      expect(entry.relativePath).toBe('')
+      expect(entry.base).toBe(entry.tree)
+      const patchPath = fileURLToPath(entry.patch.uri)
+      expect(await readFile(patchPath, 'utf8')).toContain('-base')
+      expect(await readFile(patchPath, 'utf8')).toContain('+first snapshot')
+      await writeFile(join(directory, 'tracked.txt'), 'second snapshot\n', 'utf8')
+      expect(await readFile(patchPath, 'utf8')).toContain('+first snapshot')
+      expect(await readFile(patchPath, 'utf8')).not.toContain('+second snapshot')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('reconstructs a captured patch into a new isolation', async () => {
+    const directory = await repository()
+    try {
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      const first = await writer(directory, 'writer-reconstruct-first')
+      await writeFile(join(first.rootWorktree, 'tracked.txt'), 'base\nretained\n', 'utf8')
+      const receipt = await captureIsolation(first)
+      await cleanupWorkspaceArtifacts(first)
+      const resumed = await writer(directory, 'writer-reconstruct-resumed')
+      try {
+        await reconstructCapturedIsolation({ identity, receipt, workspace: resumed })
+        expect(await readFile(join(resumed.rootWorktree, 'tracked.txt'), 'utf8')).toBe(
+          'base\nretained\n',
+        )
+        expect((await captureIsolation(resumed)).repositories[0]?.resultTree).toBe(
+          receipt.repositories[0]?.resultTree,
+        )
+      } finally {
+        await cleanupWorkspaceArtifacts(resumed)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('rejects captured work when the source baseline changed', async () => {
+    const directory = await repository()
+    try {
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      const first = await writer(directory, 'writer-reconstruct-conflict')
+      await writeFile(join(first.rootWorktree, 'tracked.txt'), 'base\nretained\n', 'utf8')
+      const receipt = await captureIsolation(first)
+      await cleanupWorkspaceArtifacts(first)
+      await writeFile(join(directory, 'tracked.txt'), 'base\nconcurrent\n', 'utf8')
+      const resumed = await writer(directory, 'writer-reconstruct-conflict-resumed')
+      try {
+        await expect(
+          reconstructCapturedIsolation({ identity, receipt, workspace: resumed }),
+        ).rejects.toThrow('captured baseline')
+        expect(await readFile(join(directory, 'tracked.txt'), 'utf8')).toBe('base\nconcurrent\n')
+      } finally {
+        await cleanupWorkspaceArtifacts(resumed)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('rejects a tampered captured patch digest', async () => {
+    const directory = await repository()
+    try {
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      const first = await writer(directory, 'writer-reconstruct-tampered')
+      await writeFile(join(first.rootWorktree, 'tracked.txt'), 'base\nretained\n', 'utf8')
+      const receipt = await captureIsolation(first)
+      await cleanupWorkspaceArtifacts(first)
+      const patch = receipt.repositories[0]?.patch.path
+      if (patch === undefined) throw new Error('The captured patch path is unavailable.')
+      await writeFile(patch, 'tampered\n', 'utf8')
+      const resumed = await writer(directory, 'writer-reconstruct-tampered-resumed')
+      try {
+        await expect(
+          reconstructCapturedIsolation({ identity, receipt, workspace: resumed }),
+        ).rejects.toThrow('digest')
+      } finally {
+        await cleanupWorkspaceArtifacts(resumed)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('rejects a missing captured patch artifact', async () => {
+    const directory = await repository()
+    try {
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      const first = await writer(directory, 'writer-reconstruct-missing')
+      await writeFile(join(first.rootWorktree, 'tracked.txt'), 'base\nretained\n', 'utf8')
+      const receipt = await captureIsolation(first)
+      await cleanupWorkspaceArtifacts(first)
+      const patch = receipt.repositories[0]?.patch.path
+      if (patch === undefined) throw new Error('The captured patch path is unavailable.')
+      await rm(patch)
+      const resumed = await writer(directory, 'writer-reconstruct-missing-resumed')
+      try {
+        await expect(
+          reconstructCapturedIsolation({ identity, receipt, workspace: resumed }),
+        ).rejects.toThrow('missing')
+      } finally {
+        await cleanupWorkspaceArtifacts(resumed)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('does not reapply an already integrated captured patch', async () => {
+    const directory = await repository()
+    try {
+      const identity = await captureWorkspaceIdentity(directory)
+      if (identity === undefined) throw new Error('The workspace identity is unavailable.')
+      const first = await writer(directory, 'writer-reconstruct-integrated')
+      await writeFile(join(first.rootWorktree, 'tracked.txt'), 'base\nintegrated\n', 'utf8')
+      const integrated = await integrateStagedReceipt(
+        await captureIsolation(first),
+        (await harness(directory)).destination,
+        first.writerId,
+      )
+      expect(integrated.status).toBe('integrated')
+      await cleanupWorkspaceArtifacts(first)
+      const resumed = await writer(directory, 'writer-reconstruct-integrated-resumed')
+      try {
+        await reconstructCapturedIsolation({ identity, receipt: integrated, workspace: resumed })
+        expect(await readFile(join(resumed.rootWorktree, 'tracked.txt'), 'utf8')).toBe(
+          'base\nintegrated\n',
+        )
+      } finally {
+        await cleanupWorkspaceArtifacts(resumed)
+      }
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

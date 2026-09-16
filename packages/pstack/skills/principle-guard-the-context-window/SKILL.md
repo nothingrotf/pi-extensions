@@ -1,17 +1,19 @@
 ---
 name: principle-guard-the-context-window
-description: "Apply when context is filling up: large outputs, long files, repeated reads, fan-out planning. Route bulk to subagents; keep summaries in the main thread, not raw payloads."
+description: "Apply when context fills with large outputs, long files, repeated reads, or fan-out plans. Keep bounded evidence and recoverable sources. Delegate only useful independent slices."
 disable-model-invocation: true
 ---
 
 # Guard the Context Window
 
-The context window is finite and non-renewable within a session. Every token should be worth its cost.
+The context window is finite. Compaction reduces context but can discard evidence, so retain recoverable sources.
 
 **Why:** Context overflow degrades reasoning quality, creates compression artifacts, and halts progress.
 
 **Pattern:**
-- **Isolate large payloads.** Route verbose outputs, screenshots, and large documents to subagents. The main context gets summaries, not raw data.
-- **Don't read what you won't use.** Read selectively based on relevance. If a file isn't needed for the current task, skip it.
-- **Keep frequently used content inline.** Templates and references used on every invocation belong in the skill file, not in separate files that cost a read each time.
+- **Bound large payloads.** Keep raw logs and documents in durable artifacts with references. Load decisive passages instead of complete dumps.
+- **Preserve evidence.** Summaries locate sources but never replace original observations, rejected hypotheses, or acceptance criteria.
+- **Keep one owner.** Investigation and implementation share an owner. Delegate only a justified independent slice or required perspective.
+- **Read selectively.** Load relevant skills and sources. Reuse unchanged documents already read when policy permits, preserving explicit rereading requirements.
+- **Separate worker guidance.** Keep essential constraints in the worker contract and load the assigned workflow without unrelated coordinator instructions.
 - **Size phases and cap scope.** Limit files per phase, set turn budgets, account for mechanism costs.

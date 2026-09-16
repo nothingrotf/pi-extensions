@@ -85,6 +85,7 @@ export interface CreateChildOptions {
   ctx: ExtensionContext
   cwd: string
   description: string
+  executionContext: string
   extensions: readonly InlineExtension[]
   intercom: ChildIntercomHandlers
   requestParent: (question: string, signal?: AbortSignal) => Promise<string>
@@ -110,6 +111,7 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
     agentDir: getAgentDir(),
     appendSystemPrompt: [
       options.systemPrompt,
+      options.executionContext,
       [
         '# Task workspace',
         `Effective working directory: ${options.cwd}`,

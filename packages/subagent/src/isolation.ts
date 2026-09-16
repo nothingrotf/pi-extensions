@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile, realpath, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   artifactDirectory,
@@ -31,10 +33,12 @@ import type {
   IsolationPatchRef,
   IsolationReceipt,
   IsolationRepositoryReceipt,
+  WorkspaceIdentity,
   WorkspaceLifecycle,
 } from './schema.ts'
 import {
   currentLockOwner,
+  digest,
   listManifests,
   ownerStatus,
   readManifest,
@@ -68,11 +72,44 @@ const UNCAPTURED_STATES: ReadonlySet<WorkspaceLifecycle> = new Set<WorkspaceLife
   'closing',
 ])
 
+const RECOVERABLE_CLEANUP_STATES: ReadonlySet<WorkspaceLifecycle> = new Set<WorkspaceLifecycle>([
+  'captured',
+  'staged',
+  'integrating',
+  'integrated',
+  'cleanup-pending',
+  'cleanup-debt',
+])
+
 export function needsRecoveryCapture(manifest: {
   repositories: ArrayLike<unknown>
   state: WorkspaceLifecycle
 }): boolean {
   return manifest.repositories.length > 0 && UNCAPTURED_STATES.has(manifest.state)
+}
+
+function needsRecoveryCleanup(manifest: WorkspaceManifest): boolean {
+  return manifest.repositories.length > 0 && RECOVERABLE_CLEANUP_STATES.has(manifest.state)
+}
+
+async function hasDurableCapture(manifest: WorkspaceManifest): Promise<boolean> {
+  for (const repository of manifest.repositories) {
+    const ref = internalRef(
+      manifest.rootWorkspaceId,
+      manifest.writerId,
+      manifest.attemptId,
+      repository.repositoryId,
+    )
+    try {
+      const commit = (
+        await git(repository.durableCommonDir, ['rev-parse', '--verify', `${ref}^{commit}`])
+      ).trim()
+      if (commit.length === 0) return false
+    } catch {
+      return false
+    }
+  }
+  return true
 }
 
 export async function createIsolation(options: {
@@ -92,6 +129,186 @@ export async function createIsolation(options: {
     spawnOrdinal: options.spawnOrdinal,
     writerId: options.writerId,
   })
+}
+
+function artifactPath(patch: IsolationPatchRef): string {
+  if (patch.path !== undefined) return patch.path
+  try {
+    return fileURLToPath(patch.uri)
+  } catch {
+    throw new Error('The captured patch artifact URI is invalid.')
+  }
+}
+
+async function verifiedPatch(patch: IsolationPatchRef): Promise<string> {
+  let contents: string
+  try {
+    contents = await readFile(artifactPath(patch), 'utf8')
+  } catch {
+    throw new Error('The captured patch artifact is missing.')
+  }
+  if (
+    Buffer.byteLength(contents, 'utf8') !== patch.byteLength ||
+    digest(contents) !== patch.sha256
+  ) {
+    throw new Error('The captured patch artifact digest does not match its receipt.')
+  }
+  return contents
+}
+
+function descendantPaths(
+  repositories: readonly { relativePath: string }[],
+  repositoryRelativePath: string,
+): string[] {
+  return repositories
+    .filter((candidate) => {
+      if (candidate.relativePath.length === 0) return false
+      if (repositoryRelativePath.length === 0) return true
+      return candidate.relativePath.startsWith(`${repositoryRelativePath}/`)
+    })
+    .map((candidate) =>
+      repositoryRelativePath.length === 0
+        ? candidate.relativePath
+        : candidate.relativePath.slice(repositoryRelativePath.length + 1),
+    )
+}
+
+function assertMatchingRepositoryPaths(
+  workspace: WriterWorkspace,
+  receipt: IsolationReceipt,
+  identity: WorkspaceIdentity,
+): 'baseline' | 'adopted' {
+  const snapshots = identity.snapshot.repositories
+  const adopted = workspace.repositories.every(
+    (repository, index) => repository.baselineTree === receipt.repositories[index]?.resultTree,
+  )
+  if (
+    workspace.repositories.length !== receipt.repositories.length ||
+    workspace.repositories.length !== snapshots.length
+  ) {
+    throw new Error('The resumed workspace repository boundary changed.')
+  }
+  for (let index = 0; index < workspace.repositories.length; index += 1) {
+    const current = workspace.repositories[index]
+    const captured = receipt.repositories[index]
+    const snapshot = snapshots[index]
+    if (current === undefined || captured === undefined || snapshot === undefined) {
+      throw new Error('The captured workspace repository evidence is incomplete.')
+    }
+    if (
+      current.relativePath !== captured.relativePath ||
+      current.relativePath !== snapshot.relativePath ||
+      (!adopted && current.baselineTree !== captured.baselineTree) ||
+      captured.baselineTree !== snapshot.tree ||
+      snapshot.base !== snapshot.tree
+    ) {
+      throw new Error('The resumed workspace does not match the captured baseline.')
+    }
+  }
+  const root = workspace.repositories[0]
+  const capturedRoot = receipt.repositories[0]
+  if (
+    root === undefined ||
+    capturedRoot === undefined ||
+    capturedRoot.baselineTree !== identity.baselineTree ||
+    capturedRoot.baselineTree !== identity.expectedTree ||
+    (!adopted && root.sourceHead !== identity.productHead)
+  ) {
+    throw new Error('The resumed workspace does not match the captured product identity.')
+  }
+  return adopted ? 'adopted' : 'baseline'
+}
+
+async function verifyCapturedRepository(
+  workspace: WriterWorkspace,
+  captured: IsolationRepositoryReceipt,
+): Promise<string> {
+  const current = workspace.repositories.find(
+    (repository) => repository.relativePath === captured.relativePath,
+  )
+  if (current === undefined)
+    throw new Error('The captured repository is unavailable in the new isolation.')
+  if (captured.durableRef === undefined) {
+    throw new Error('The captured durable artifact reference is missing.')
+  }
+  const durableCommit = (
+    await git(current.durableCommonDir, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `${captured.durableRef}^{commit}`,
+    ]).catch(() => '')
+  ).trim()
+  if (durableCommit !== captured.resultCommit) {
+    throw new Error('The captured durable artifact no longer matches its receipt.')
+  }
+  const durableTree = (
+    await git(current.durableCommonDir, ['rev-parse', `${captured.resultCommit}^{tree}`]).catch(
+      () => '',
+    )
+  ).trim()
+  if (durableTree !== captured.resultTree) {
+    throw new Error('The captured durable artifact result tree is stale.')
+  }
+  const patch = await verifiedPatch(captured.patch)
+  const expected =
+    captured.resultTree === captured.baselineTree
+      ? ''
+      : await git(current.worktree, [
+          'diff',
+          '--binary',
+          '--full-index',
+          captured.baselineTree,
+          captured.resultTree,
+        ])
+  if (patch !== expected) {
+    throw new Error('The captured patch artifact does not match its durable result.')
+  }
+  return patch
+}
+
+export async function reconstructCapturedIsolation(options: {
+  identity: WorkspaceIdentity
+  receipt: IsolationReceipt
+  workspace: WriterWorkspace
+}): Promise<void> {
+  const { identity, receipt, workspace } = options
+  if (receipt.integrationStatus === 'integrated' || receipt.status === 'integrated') return
+  if (receipt.captureStatus !== 'captured' || receipt.status !== 'captured') {
+    throw new Error('Only an unintegrated captured isolation can be reconstructed.')
+  }
+  const source = assertMatchingRepositoryPaths(workspace, receipt, identity)
+  for (const snapshot of identity.snapshot.repositories) await verifiedPatch(snapshot.patch)
+  const patches = await Promise.all(
+    receipt.repositories.map((repository) => verifyCapturedRepository(workspace, repository)),
+  )
+  if (source === 'adopted') return
+  for (let index = 0; index < receipt.repositories.length; index += 1) {
+    const repository = receipt.repositories[index]
+    const patch = patches[index]
+    const current = workspace.repositories[index]
+    if (repository === undefined || patch === undefined || current === undefined) {
+      throw new Error('The captured reconstruction evidence is incomplete.')
+    }
+    if (patch.length === 0) continue
+    try {
+      await git(
+        current.worktree,
+        ['apply', '--check', '--binary', '--whitespace=nowarn', '-'],
+        patch,
+      )
+      await git(current.worktree, ['apply', '--binary', '--whitespace=nowarn', '-'], patch)
+    } catch {
+      throw new Error('The captured work-in-progress conflicts with the new isolated workspace.')
+    }
+    const reconstructedTree = await captureResultTree(
+      current,
+      descendantPaths(workspace.repositories, current.relativePath),
+    )
+    if (reconstructedTree !== repository.resultTree) {
+      throw new Error('The reconstructed isolated workspace does not match the captured result.')
+    }
+  }
 }
 
 function parseChangedFiles(output: string): IsolationChangedFile[] {
@@ -121,10 +338,7 @@ export async function captureIsolation(workspace: WriterWorkspace): Promise<Isol
     .filter((repository) => repository.relativePath.length > 0)
     .map((repository) => repository.relativePath)
   const actualNested = await nestedRepositories(workspace.rootWorktree)
-  if (
-    expectedNested.length !== actualNested.length ||
-    expectedNested.some((path, index) => path !== actualNested[index])
-  ) {
+  if (!(await matchesRepositoryBoundaries(workspace, expectedNested, actualNested))) {
     return failureReceipt(workspace, 'The isolated task changed a nested repository boundary.')
   }
 
@@ -157,6 +371,72 @@ export async function captureIsolation(workspace: WriterWorkspace): Promise<Isol
   }
 }
 
+async function matchesRepositoryBoundaries(
+  workspace: WriterWorkspace,
+  expected: readonly string[],
+  actual: readonly string[],
+): Promise<boolean> {
+  if (expected.some((path) => !actual.includes(path))) return false
+  const references: string[] = []
+  for (const path of actual) {
+    if (expected.includes(path) || references.some((parent) => path.startsWith(`${parent}/`)))
+      continue
+    const owner = workspace.repositories
+      .filter(
+        (repository) =>
+          repository.relativePath === '' || path.startsWith(`${repository.relativePath}/`),
+      )
+      .sort((left, right) => right.relativePath.length - left.relativePath.length)[0]
+    if (owner === undefined) return false
+    const relativePath =
+      owner.relativePath === '' ? path : path.slice(owner.relativePath.length + 1)
+    if (!(await isBaselineReference(owner, relativePath))) return false
+    references.push(path)
+  }
+  return true
+}
+
+async function isBaselineReference(
+  repository: RepositoryIsolation,
+  path: string,
+): Promise<boolean> {
+  try {
+    if (
+      (await git(repository.worktree, ['ls-tree', repository.baselineTree, '--', path])).trim() !==
+      ''
+    )
+      return false
+    const rules: string[] = []
+    let directory = dirname(path)
+    for (;;) {
+      const rule = directory === '.' ? '.gitignore' : `${directory}/.gitignore`
+      const baseline = await git(repository.worktree, [
+        'show',
+        `${repository.baselineTree}:${rule}`,
+      ]).catch(() => undefined)
+      const current = await readFile(join(repository.worktree, rule), 'utf8').catch(() => undefined)
+      if (baseline !== current) return false
+      if (baseline !== undefined) rules.push(rule)
+      if (directory === '.') break
+      directory = dirname(directory)
+    }
+    const ignored = await git(
+      repository.worktree,
+      ['-c', 'core.excludesFile=', 'check-ignore', '--no-index', '--verbose', '-z', '--stdin'],
+      `${path}\0`,
+    )
+    const [source, , pattern] = ignored.split('\0')
+    return (
+      source !== undefined &&
+      rules.includes(source) &&
+      pattern !== undefined &&
+      !pattern.startsWith('!')
+    )
+  } catch {
+    return false
+  }
+}
+
 function failureReceipt(workspace: WriterWorkspace, error: string): IsolationReceipt {
   return {
     attemptId: workspace.attemptId,
@@ -169,7 +449,7 @@ function failureReceipt(workspace: WriterWorkspace, error: string): IsolationRec
     manifestUri: workspace.manifestPath,
     parentWorkspaceId: workspace.context.parentWorkspaceId,
     repositories: [],
-    retainedPath: workspace.baseDir,
+    retainedPath: workspace.rootWorktree,
     rootWorkspaceId: workspace.context.rootWorkspaceId,
     rootVisibility: 'pending',
     status: 'conflict',
@@ -398,8 +678,94 @@ function isolationStatus(
   return integrated > 0 ? 'partial' : 'conflict'
 }
 
+async function hasValidWorkspaceLocation(workspace: WriterWorkspace): Promise<boolean> {
+  const { workspaceId } = workspace.context
+  if (!/^ws-[a-f0-9]{16}$/.test(workspaceId) || !/^[a-f0-9-]{36}$/.test(workspace.attemptId)) {
+    return false
+  }
+  const expectedBase = join(
+    workspace.storeRoot,
+    'worktrees',
+    `${workspaceId}-${workspace.attemptId}`,
+  )
+  if (
+    workspace.baseDir !== expectedBase ||
+    workspace.manifestPath !== join(expectedBase, 'manifest.json')
+  ) {
+    return false
+  }
+  const prefix = `pi-subagent-${workspaceId}-${workspace.attemptId}-`
+  const external =
+    dirname(workspace.rootWorktree) === (await realpath(tmpdir())) &&
+    basename(workspace.rootWorktree).startsWith(prefix) &&
+    /^[A-Za-z0-9]{6}$/.test(basename(workspace.rootWorktree).slice(prefix.length))
+  return workspace.rootWorktree === join(expectedBase, 'root') || external
+}
+
+export async function recaptureRetainedIsolation(options: {
+  receipt: IsolationReceipt
+  identity: WorkspaceIdentity
+  ownerSessionId: string
+  writerId: string
+  durableCommonDir: string
+}): Promise<IsolationReceipt> {
+  const { receipt, identity } = options
+  const manifest =
+    receipt.manifestUri === undefined ? undefined : await readManifest(receipt.manifestUri)
+  if (manifest === undefined || receipt.manifestUri === undefined)
+    throw new Error('The retained workspace manifest is unavailable.')
+  const workspace = workspaceFromManifest(manifest, receipt.manifestUri)
+  if (
+    receipt.captureStatus !== 'failed' ||
+    receipt.integrationStatus !== 'not-requested' ||
+    manifest.ownerSessionId !== options.ownerSessionId ||
+    manifest.writerId !== options.writerId ||
+    receipt.writerId !== options.writerId ||
+    manifest.attemptId !== receipt.attemptId ||
+    manifest.workspaceId !== receipt.workspaceId ||
+    manifest.parentWorkspaceId !== receipt.parentWorkspaceId ||
+    manifest.rootWorkspaceId !== receipt.rootWorkspaceId ||
+    manifest.physicalRoot !== receipt.retainedPath ||
+    manifest.integration !== receipt.integration ||
+    manifest.storeRoot !== join(options.durableCommonDir, 'pi-subagent') ||
+    !(await hasValidWorkspaceLocation(workspace))
+  )
+    throw new Error('The retained workspace does not match its execution ownership and location.')
+  if (workspace.repositories.length !== identity.snapshot.repositories.length)
+    throw new Error('The retained workspace repository boundary changed.')
+  for (const [index, repository] of workspace.repositories.entries()) {
+    const snapshot = identity.snapshot.repositories[index]
+    if (
+      snapshot === undefined ||
+      repository.relativePath !== snapshot.relativePath ||
+      repository.baselineTree !== snapshot.tree ||
+      snapshot.tree !== snapshot.base ||
+      repository.physicalRepoRoot !== snapshot.root ||
+      repository.durableCommonDir !== options.durableCommonDir ||
+      repository.worktree !== join(workspace.rootWorktree, repository.relativePath) ||
+      (await realpath(repository.worktree)) !== repository.worktree ||
+      (await commonDirectory(repository.worktree)) !== join(repository.worktree, '.git') ||
+      (
+        await git(repository.worktree, ['rev-parse', `${repository.baselineCommit}^{tree}`])
+      ).trim() !== repository.baselineTree
+    )
+      throw new Error('The retained workspace does not match its recorded baseline.')
+    await verifiedPatch(snapshot.patch)
+  }
+  const root = workspace.repositories[0]
+  if (
+    root?.baselineTree !== identity.baselineTree ||
+    identity.expectedTree !== identity.baselineTree ||
+    root.sourceHead !== identity.productHead
+  )
+    throw new Error('The retained workspace product identity changed.')
+  return captureIsolation(workspace)
+}
+
 export async function cleanupWorkspaceArtifacts(workspace: WriterWorkspace): Promise<boolean> {
   try {
+    if (!(await hasValidWorkspaceLocation(workspace))) return true
+    await rm(workspace.rootWorktree, { force: true, recursive: true })
     await rm(workspace.baseDir, { force: true, recursive: true })
     await removeFromRegistry(workspace.storeRoot, workspace.manifestPath, workspace.manifest.owner)
     return false
@@ -412,16 +778,7 @@ export async function cleanupCapturedReceipt(receipt: IsolationReceipt): Promise
   if (receipt.manifestUri === undefined) return receipt.cleanupDebt
   const manifest = await readManifest(receipt.manifestUri)
   if (manifest === undefined) return receipt.cleanupDebt
-  try {
-    await rm(
-      join(manifest.storeRoot, 'worktrees', `${manifest.workspaceId}-${manifest.attemptId}`),
-      { force: true, recursive: true },
-    )
-    await removeFromRegistry(manifest.storeRoot, receipt.manifestUri, manifest.owner)
-    return false
-  } catch {
-    return true
-  }
+  return cleanupWorkspaceArtifacts(workspaceFromManifest(manifest, receipt.manifestUri))
 }
 
 export async function recoverIsolations(cwd: string): Promise<IsolationRecovery[]> {
@@ -474,19 +831,19 @@ export async function recoverIsolationStore(storeRoot: string): Promise<Isolatio
     const classification = classifications.get(manifest.workspaceId) ?? 'ambiguous'
     if (classification === 'live' || manifest.state === 'cleaned') continue
     let receipt: IsolationReceipt | undefined
-    if (classification === 'dead' && needsRecoveryCapture(manifest)) {
+    if (classification === 'dead') {
       const workspace = workspaceFromManifest(manifest, path)
-      receipt = await captureIsolation(workspace).catch(() => undefined)
-      const durableCapture =
-        receipt?.captureStatus === 'captured' &&
-        receipt.repositories.length === manifest.repositories.length &&
-        receipt.repositories.every((repository) => repository.durableRef !== undefined)
-      if (durableCapture) {
-        await rm(
-          join(manifest.storeRoot, 'worktrees', `${manifest.workspaceId}-${manifest.attemptId}`),
-          { force: true, recursive: true },
-        ).catch(() => {})
-        await removeFromRegistry(manifest.storeRoot, path, manifest.owner).catch(() => {})
+      if (needsRecoveryCapture(manifest)) {
+        receipt = await captureIsolation(workspace).catch(() => undefined)
+        const durableCapture =
+          receipt?.captureStatus === 'captured' &&
+          receipt.repositories.length === manifest.repositories.length &&
+          receipt.repositories.every((repository) => repository.durableRef !== undefined)
+        if (durableCapture && receipt !== undefined) {
+          receipt.cleanupDebt = await cleanupWorkspaceArtifacts(workspace)
+        }
+      } else if (needsRecoveryCleanup(manifest) && (await hasDurableCapture(manifest))) {
+        await cleanupWorkspaceArtifacts(workspace)
       }
     }
     recoveries.push({

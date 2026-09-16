@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -13,6 +13,7 @@ import {
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { Value } from 'typebox/value'
 import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { CapabilityRegistry, type CapabilityToolDefinition } from '../src/capabilities.ts'
@@ -30,6 +31,9 @@ import {
 import { isReadonlyByDefault, resolveRole } from '../src/roles.ts'
 import {
   type CoordinationRunState,
+  DeliveryBindingSchema,
+  decodeSingleTaskInput,
+  type TaskNodeInput,
   SingleTaskInputSchema,
   TaskInputSchema,
   type RunRecord,
@@ -53,11 +57,31 @@ const node = {
   subagent_type: 'explore',
 }
 
+interface TaskExecutionControl {
+  failures: ReadonlySet<string>
+  held: ReadonlyMap<string, Promise<void>>
+  observed: Set<string>
+  started: ReadonlyMap<string, PromiseWithResolvers<void>>
+}
+
+function readonlySchedulerTask(id: string, needs?: string[]): TaskNodeInput {
+  const task: TaskNodeInput = {
+    description: `Scheduler ${id}`,
+    id,
+    model: 'coordination-test/writer',
+    prompt: `SCHEDULER_${id.toUpperCase()}`,
+    readonly: true,
+    subagent_type: 'explore',
+  }
+  if (needs !== undefined) task.needs = needs
+  return task
+}
+
 const execFileAsync = promisify(execFile)
 
-async function createBatchHarness() {
+async function createBatchHarness(control?: TaskExecutionControl) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-coordination-'))
-  await writeFile(join(dir, '.gitignore'), 'agent/\nsessions/\n')
+  await writeFile(join(dir, '.gitignore'), 'agent/\nsessions/\n.worktrees/\n')
   await writeFile(join(dir, 'shared.txt'), 'base\n')
   await execFileAsync('git', ['init', '-q'], { cwd: dir })
   await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: dir })
@@ -80,8 +104,89 @@ async function createBatchHarness() {
         reasoning: false,
       },
     ],
-    streamSimple: (model, context) => {
+    streamSimple: (model, context, options) => {
       const stream = createAssistantMessageEventStream()
+      if (control !== undefined) {
+        const taskId = [...control.started.keys()].find((candidate) =>
+          JSON.stringify(context.messages).includes(`SCHEDULER_${candidate.toUpperCase()}`),
+        )
+        const failed = taskId !== undefined && control.failures.has(taskId)
+        let ended = false
+        const finish = (stopReason: 'aborted' | 'error' | 'stop') => {
+          if (ended) return
+          ended = true
+          const message: AssistantMessage = {
+            api: model.api,
+            content: [{ text: taskId ?? 'Done', type: 'text' }],
+            model: model.id,
+            provider: model.provider,
+            role: 'assistant',
+            stopReason,
+            timestamp: Date.now(),
+            usage: {
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+              input: 1,
+              output: 1,
+              totalTokens: 2,
+            },
+          }
+          if (stopReason === 'error') {
+            message.errorMessage = `SCHEDULER_${taskId?.toUpperCase()} failed`
+          }
+          stream.push({ partial: message, type: 'start' })
+          if (stopReason === 'aborted') {
+            stream.push({ error: message, reason: 'aborted', type: 'error' })
+          } else {
+            stream.push({ message, reason: 'stop', type: 'done' })
+          }
+          stream.end()
+        }
+        options?.signal?.addEventListener('abort', () => finish('aborted'), { once: true })
+        if (taskId !== undefined) {
+          control.observed.add(taskId)
+          control.started.get(taskId)?.resolve()
+        }
+        const held = taskId === undefined ? undefined : control.held.get(taskId)
+        if (held === undefined) finish(failed ? 'error' : 'stop')
+        else held.then(() => finish(failed ? 'error' : 'stop')).catch(() => finish('error'))
+        return stream
+      }
+      const readsCandidate = JSON.stringify(context.messages).includes('READ_CANDIDATE')
+      if (readsCandidate) {
+        const read = context.messages.some((message) => message.role === 'toolResult')
+        const message: AssistantMessage = {
+          api: model.api,
+          content: read
+            ? [{ text: JSON.stringify(context.messages), type: 'text' }]
+            : [
+                {
+                  arguments: { path: 'shared.txt' },
+                  id: 'read-candidate',
+                  name: 'read',
+                  type: 'toolCall',
+                },
+              ],
+          model: model.id,
+          provider: model.provider,
+          role: 'assistant',
+          stopReason: read ? 'stop' : 'toolUse',
+          timestamp: Date.now(),
+          usage: {
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+            input: 1,
+            output: 1,
+            totalTokens: 2,
+          },
+        }
+        stream.push({ partial: message, type: 'start' })
+        stream.push({ message, reason: read ? 'stop' : 'toolUse', type: 'done' })
+        stream.end()
+        return stream
+      }
       const wrote = context.messages.some((message) => message.role === 'toolResult')
       const message: AssistantMessage = {
         api: model.api,
@@ -161,6 +266,13 @@ async function createBatchHarness() {
     ctx,
     dir,
     host,
+    runTasks: (tasks: Parameters<typeof runBatch>[0]['input']['tasks'], signal?: AbortSignal) =>
+      runBatch({
+        ctx,
+        input: { tasks },
+        runtime,
+        signal,
+      }),
     run: (signal?: AbortSignal) =>
       runBatch({
         ctx,
@@ -185,6 +297,290 @@ async function createBatchHarness() {
 }
 
 describe('coordination finalization', () => {
+  it('keeps linked worktree roots separate in one batch', async () => {
+    const harness = await createBatchHarness()
+    const lifecycle = vi.spyOn(harness.runtime, 'updateWorkspaceLifecycle')
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-a'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-b'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      const result = await harness.runTasks([
+        {
+          description: 'Write issue A',
+          cwd: '.worktrees/issue-a',
+          id: 'issue-a',
+          model: 'coordination-test/writer',
+          prompt: 'Write shared.txt',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+        {
+          description: 'Write issue B',
+          cwd: '.worktrees/issue-b',
+          id: 'issue-b',
+          model: 'coordination-test/writer',
+          prompt: 'Write shared.txt',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+      ])
+      expect(result.status).toBe('completed')
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-a', 'shared.txt'), 'utf8')).toBe(
+        'writer\n',
+      )
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-b', 'shared.txt'), 'utf8')).toBe(
+        'writer\n',
+      )
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('base\n')
+      expect(
+        result.items.map((item) =>
+          item.isolation?.repositories.map((repository) => repository.relativePath),
+        ),
+      ).toEqual([[''], ['']])
+      const parentWorkspaceIds = result.items.map((item) => item.isolation?.parentWorkspaceId)
+      expect(parentWorkspaceIds.every((workspaceId) => workspaceId !== undefined)).toBe(true)
+      expect(new Set(parentWorkspaceIds).size).toBe(2)
+      const aggregateWorkspaces = lifecycle.mock.calls
+        .map(([workspace]) => workspace)
+        .filter((workspace) => workspace.writerId === `coordination-${result.runId}`)
+        .filter(
+          (workspace, index, workspaces) =>
+            workspaces.findIndex(
+              (candidate) => candidate.context.workspaceId === workspace.context.workspaceId,
+            ) === index,
+        )
+      expect(aggregateWorkspaces).toHaveLength(2)
+      expect(
+        aggregateWorkspaces.map((workspace) =>
+          workspace.repositories.map((repository) => repository.relativePath),
+        ),
+      ).toEqual([[''], ['']])
+      expect(aggregateWorkspaces.map((workspace) => workspace.context.logicalCwd).sort()).toEqual(
+        [
+          await realpath(join(harness.dir, '.worktrees', 'issue-a')),
+          await realpath(join(harness.dir, '.worktrees', 'issue-b')),
+        ].sort(),
+      )
+    } finally {
+      lifecycle.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('does not aggregate policy-derived manual isolation tasks', async () => {
+    const harness = await createBatchHarness()
+    harness.runtime.registerCapability({
+      extensions: [],
+      id: 'manual-policy',
+      roleToolRequirements: [{ isolation: 'manual', role: 'runtime-verifier', tools: [] }],
+      tools: [],
+      version: '1',
+    })
+    harness.runtime.registerCapabilityProfile({
+      id: 'manual-policy-profile',
+      registrations: ['manual-policy'],
+    })
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-a'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      const issueRoot = await realpath(join(harness.dir, '.worktrees', 'issue-a'))
+      await expect(
+        harness.runtime.preflight(harness.ctx, [
+          {
+            capability_profile: 'manual-policy-profile',
+            cwd: '.worktrees/issue-a',
+            description: 'Verify issue A',
+            model: 'coordination-test/writer',
+            prompt: 'Write shared.txt',
+            readonly: false,
+            role: 'runtime-verifier',
+            subagent_type: 'generalPurpose',
+          },
+        ]),
+      ).resolves.toEqual([
+        {
+          isolation: { integration: 'manual', mode: 'worktree' },
+          logicalCwd: issueRoot,
+          readonly: false,
+        },
+      ])
+      const result = await harness.runTasks([
+        {
+          capability_profile: 'manual-policy-profile',
+          description: 'Verify issue A',
+          cwd: '.worktrees/issue-a',
+          id: 'issue-a',
+          model: 'coordination-test/writer',
+          prompt: 'Write shared.txt',
+          readonly: false,
+          role: 'runtime-verifier',
+          subagent_type: 'generalPurpose',
+        },
+      ])
+      expect(result.status).toBe('completed')
+      expect(result.items[0]?.isolation?.integration).toBe('manual')
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-a', 'shared.txt'), 'utf8')).toBe(
+        'base\n',
+      )
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('base\n')
+      expect(
+        (harness.states().at(-1)?.workspaces ?? []).filter(
+          (workspace) => workspace.writerId === `coordination-${result.runId}`,
+        ),
+      ).toHaveLength(0)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('gives dependent verifiers the joined aggregate candidate', async () => {
+    const harness = await createBatchHarness()
+    harness.runtime.registerCapability({
+      extensions: [],
+      id: 'manual-policy',
+      roleToolRequirements: [{ isolation: 'manual', role: 'runtime-verifier', tools: [] }],
+      tools: [],
+      version: '1',
+    })
+    harness.runtime.registerCapabilityProfile({
+      id: 'manual-policy-profile',
+      registrations: ['manual-policy'],
+    })
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-a'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      const result = await harness.runTasks([
+        {
+          description: 'Write issue A',
+          cwd: '.worktrees/issue-a',
+          id: 'writer',
+          model: 'coordination-test/writer',
+          prompt: 'Write shared.txt',
+          readonly: false,
+          subagent_type: 'generalPurpose',
+        },
+        {
+          description: 'Read issue A candidate',
+          cwd: '.worktrees/issue-a',
+          id: 'readonly-verifier',
+          model: 'coordination-test/writer',
+          needs: ['writer'],
+          prompt: 'READ_CANDIDATE',
+          readonly: true,
+          subagent_type: 'explore',
+        },
+        {
+          capability_profile: 'manual-policy-profile',
+          description: 'Read issue A manually',
+          cwd: '.worktrees/issue-a',
+          id: 'manual-verifier',
+          model: 'coordination-test/writer',
+          needs: ['writer'],
+          prompt: 'READ_CANDIDATE',
+          readonly: false,
+          role: 'runtime-verifier',
+          subagent_type: 'generalPurpose',
+        },
+      ])
+      expect(result.status).toBe('completed')
+      expect(result.items[1]?.output).toContain('writer')
+      expect(result.items[2]?.output).toContain('writer')
+      expect(result.items[2]?.isolation?.integration).toBe('manual')
+      expect(
+        result.items[2]?.isolation?.repositories.map((repository) => repository.relativePath),
+      ).toEqual([''])
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-a', 'shared.txt'), 'utf8')).toBe(
+        'writer\n',
+      )
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('rejects cross-root candidate verification before dispatch', async () => {
+    const harness = await createBatchHarness()
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-a'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-q', join(harness.dir, '.worktrees', 'issue-b'), 'HEAD'],
+        { cwd: harness.dir },
+      )
+      await expect(
+        harness.runTasks([
+          {
+            description: 'Write issue A',
+            cwd: '.worktrees/issue-a',
+            id: 'writer',
+            model: 'coordination-test/writer',
+            prompt: 'Write shared.txt',
+            readonly: false,
+            subagent_type: 'generalPurpose',
+          },
+          {
+            description: 'Read issue B candidate',
+            cwd: '.worktrees/issue-b',
+            id: 'verifier',
+            model: 'coordination-test/writer',
+            needs: ['writer'],
+            prompt: 'READ_CANDIDATE',
+            readonly: true,
+            subagent_type: 'explore',
+          },
+        ]),
+      ).rejects.toThrow('Cross-root candidate verification is unsupported')
+      expect(harness.runtime.listSnapshots()).toHaveLength(0)
+      expect(harness.states().at(-1)?.runs ?? []).toEqual([])
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-a', 'shared.txt'), 'utf8')).toBe(
+        'base\n',
+      )
+      expect(await readFile(join(harness.dir, '.worktrees', 'issue-b', 'shared.txt'), 'utf8')).toBe(
+        'base\n',
+      )
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('preserves the staged patch when a coordinated join is rejected', async () => {
+    const harness = await createBatchHarness()
+    const joining = vi.spyOn(harness.runtime, 'joinCoordinated').mockResolvedValue({
+      reason: 'invalid-lineage',
+      receipt: undefined,
+      revision: harness.runtime.currentRevision,
+      status: 'rejected',
+    })
+    try {
+      const result = await harness.run()
+      const item = result.items[0]
+      expect(result.status).toBe('failed')
+      expect(item?.isolation?.captureStatus).toBe('captured')
+      expect(item?.isolation?.repositories[0]?.patch.sha256).toHaveLength(64)
+      expect(harness.states().at(-1)?.runs?.[0]?.tasks[0]?.isolation).toEqual(item?.isolation)
+      expect(await readFile(join(harness.dir, 'shared.txt'), 'utf8')).toBe('base\n')
+    } finally {
+      joining.mockRestore()
+      await harness.close()
+    }
+  }, 180_000)
+
   it('fences cancellation before aggregate root apply', async () => {
     const harness = await createBatchHarness()
     const controller = new AbortController()
@@ -434,6 +830,121 @@ describe('coordination finalization', () => {
   }, 180_000)
 })
 
+describe('read-only coordination scheduling', () => {
+  it('starts a dependency-ready task before an unrelated sibling completes', async () => {
+    const aStarted = Promise.withResolvers<void>()
+    const bStarted = Promise.withResolvers<void>()
+    const bRelease = Promise.withResolvers<void>()
+    const cStarted = Promise.withResolvers<void>()
+    const harness = await createBatchHarness({
+      failures: new Set(),
+      held: new Map([['b', bRelease.promise]]),
+      observed: new Set(),
+      started: new Map([
+        ['a', aStarted],
+        ['b', bStarted],
+        ['c', cStarted],
+      ]),
+    })
+    const tasks = [
+      readonlySchedulerTask('a'),
+      readonlySchedulerTask('b'),
+      readonlySchedulerTask('c', ['a']),
+    ]
+    const pending = harness.runTasks(tasks)
+    try {
+      await Promise.all([aStarted.promise, bStarted.promise])
+      await cStarted.promise
+      bRelease.resolve()
+      const result = await pending
+      expect(result.items.map((item) => item.taskId)).toEqual(['a', 'b', 'c'])
+      expect(result.items.map((item) => item.status)).toEqual([
+        'completed',
+        'completed',
+        'completed',
+      ])
+    } finally {
+      bRelease.resolve()
+      await pending.catch(() => {})
+      await harness.close()
+    }
+  }, 15_000)
+
+  it('blocks only descendants of a failed task', async () => {
+    const aStarted = Promise.withResolvers<void>()
+    const bStarted = Promise.withResolvers<void>()
+    const cStarted = Promise.withResolvers<void>()
+    const observed = new Set<string>()
+    const harness = await createBatchHarness({
+      failures: new Set(['a']),
+      held: new Map(),
+      observed,
+      started: new Map([
+        ['a', aStarted],
+        ['b', bStarted],
+        ['c', cStarted],
+      ]),
+    })
+    try {
+      const result = await harness.runTasks([
+        readonlySchedulerTask('a'),
+        readonlySchedulerTask('b'),
+        readonlySchedulerTask('c', ['a']),
+      ])
+      expect(await Promise.all([aStarted.promise, bStarted.promise])).toEqual([
+        undefined,
+        undefined,
+      ])
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      expect(observed.has('c')).toBe(false)
+      expect(harness.runtime.getCoordinationRun(result.runId)?.tasks[2]?.status).toBe('blocked')
+      expect(result.items.map((item) => item.taskId)).toEqual(['a', 'b', 'c'])
+      expect(result.items.map((item) => item.status)).toEqual(['failed', 'completed', 'blocked'])
+      expect(result.items[2]?.error).toBe('Blocked by: a.')
+    } finally {
+      await harness.close()
+    }
+  }, 15_000)
+
+  it('drains aborted read-only work before completing the batch', async () => {
+    const aStarted = Promise.withResolvers<void>()
+    const aRelease = Promise.withResolvers<void>()
+    const harness = await createBatchHarness({
+      failures: new Set(),
+      held: new Map([['a', aRelease.promise]]),
+      observed: new Set(),
+      started: new Map([['a', aStarted]]),
+    })
+    const controller = new AbortController()
+    const pending = harness.runTasks(
+      [
+        {
+          description: 'Abort a',
+          id: 'a',
+          model: 'coordination-test/writer',
+          prompt: 'SCHEDULER_A',
+          readonly: true,
+          subagent_type: 'explore',
+        },
+      ],
+      controller.signal,
+    )
+    try {
+      await aStarted.promise
+      controller.abort()
+      const result = await pending
+      expect(result.status).toBe('aborted')
+      expect(result.items[0]?.status).toBe('aborted')
+      expect(harness.runtime.hasActiveRun()).toBe(false)
+      expect(harness.states().at(-1)?.runs?.[0]?.status).toBe('aborted')
+    } finally {
+      aRelease.resolve()
+      await pending.catch(() => {})
+      await harness.close()
+    }
+  }, 15_000)
+})
+
 describe('coordination primitives', () => {
   it('preserves legacy local Task role aliases', () => {
     expect(resolveRole('general-purpose', false).name).toBe('generalPurpose')
@@ -542,12 +1053,39 @@ describe('coordination primitives', () => {
     expect(recentRuns(terminal).some((run) => run.runId === 'terminal-0')).toBe(false)
   })
 
+  it.each([
+    [{ kind: 'managed' }, undefined, 'Decode'],
+    [
+      { issue: 'unexpected', kind: 'independent' },
+      { kind: 'independent' },
+      'Invalid delivery binding',
+    ],
+  ])(
+    'rejects malformed delivery bindings even when TypeBox decode can clean them',
+    (delivery, cleaned, expectedBoundaryError) => {
+      expect(Value.Check(DeliveryBindingSchema, delivery)).toBe(false)
+      if (cleaned === undefined) {
+        expect(() => Value.Decode(DeliveryBindingSchema, delivery)).toThrow('Decode')
+      } else {
+        expect(Value.Decode(DeliveryBindingSchema, delivery)).toEqual(cleaned)
+      }
+      expect(() =>
+        decodeSingleTaskInput({
+          delivery,
+          description: 'Malformed delivery',
+          prompt: 'Do not start.',
+          subagent_type: 'explore',
+        }),
+      ).toThrow(expectedBoundaryError)
+    },
+  )
+
   it('keeps the combined Task schema inside its measured context budget', () => {
     const singleBytes = Buffer.byteLength(JSON.stringify(SingleTaskInputSchema), 'utf8')
     const combinedBytes = Buffer.byteLength(JSON.stringify(TaskInputSchema), 'utf8')
-    expect(singleBytes).toBeLessThanOrEqual(2_500)
-    expect(combinedBytes).toBeLessThanOrEqual(5_000)
-    expect(combinedBytes - singleBytes).toBeLessThanOrEqual(2_650)
+    expect(singleBytes).toBeLessThanOrEqual(2_550)
+    expect(combinedBytes).toBeLessThanOrEqual(5_350)
+    expect(combinedBytes - singleBytes).toBeLessThanOrEqual(2_800)
   })
 
   it('validates structured output and deterministic gates', () => {

@@ -13,7 +13,7 @@ const poolAvailability = 'availability for selection, never a dispatch count'
 const laneRule = 'never the size of a configured model pool'
 
 describe('pstack delivery contract', () => {
-  it('publishes the shared per-issue fields as prompt content only', () => {
+  it('separates structured delivery binding from per-issue prompt context', () => {
     const contract = skill(deliveryContractPath)
     for (const field of [
       'issue:',
@@ -28,6 +28,9 @@ describe('pstack delivery contract', () => {
     ])
       expect(contract).toContain(field)
     expect(contract).toContain('not Task schema parameters')
+    expect(contract).toContain('Task.delivery')
+    expect(contract).toContain('{ kind: "managed", issue: "<open issue id>" }')
+    expect(contract).toContain('{ kind: "independent" }')
     expect(contract).not.toContain('"phase"')
     for (const phase of ['design', 'implementation', 'correction', 'verification', 'publication'])
       expect(contract).toContain(phase)
@@ -35,6 +38,15 @@ describe('pstack delivery contract', () => {
     expect(contract).toContain('no measured savings')
     expect(contract).toContain('early executable probe')
     expect(contract).toContain('application database role')
+    expect(contract).toContain('zero assertions')
+    expect(contract).toContain('divergent revision counters')
+    const operations = skill('poteto-mode/references/delivery-operations.md')
+    expect(operations).toContain('separate request or connection')
+    expect(operations).toContain('unauthorized principal')
+    expect(operations).toContain('The independent reviewer checks this semantic coverage')
+    const worker = skill('poteto-mode/references/worker.md')
+    expect(worker).toContain('Before expanding implementation, retain the probe receipt')
+    expect(worker).toContain('zero-assertion success')
     expect(contract).toContain('Pin a reusable harness')
     expect(contract).toContain('A changed runtime or dependency invalidates')
     expect(contract).toContain('throughput.md')
@@ -49,10 +61,10 @@ describe('pstack delivery contract', () => {
     expect(bootstrap.systemPrompt).toContain('never in the Task schema')
     expect(bootstrap.systemPrompt).toContain('A leaf must return required delegation')
     const agent = readFileSync(new URL('../agents/poteto-agent.md', import.meta.url), 'utf8')
-    expect(agent).toContain('Implement the accepted design supplied by the coordinator')
-    expect(agent).toContain('do not rerun `how` or `architect` for it')
+    expect(agent).toContain('Apply the supplied accepted design without rerunning its discovery')
+    expect(agent).toContain('poteto-mode/references/worker.md')
     const how = skill('how/SKILL.md')
-    expect(how).toContain('does not rerun this skill')
+    expect(how).toContain('Run this skill in the current session by default')
   })
 
   it('scopes the architect trigger to new or contested design', () => {
@@ -61,8 +73,8 @@ describe('pstack delivery contract', () => {
     expect(poteto).toContain('Crossing a function is not a design trigger')
     expect(poteto).toContain('genuinely new or contested contracts, ownership, state, or security')
     expect(poteto).toContain('references/delivery-contract.md')
-    expect(poteto).toContain('One persistent implementer')
-    expect(poteto).toContain('one independent reviewer')
+    expect(poteto).toContain('Assign the persistent implementer before reproduction or discovery')
+    expect(poteto).toContain('One independent reviewer')
     expect(poteto).toContain('Two independent issue lanes')
     expect(poteto).toContain(laneRule)
     for (const playbook of ['feature', 'bug-fix', 'perf-issue', 'refactoring']) {
@@ -104,6 +116,13 @@ describe('pstack delivery contract', () => {
     )
     expect(contract).toContain('from the actual implementation model')
     expect(contract).toContain('from their first dispatch')
+    expect(contract).toContain(
+      'Only `feature`, `bug-fix`, `refactoring`, `perf-issue`, and `hillclimb`',
+    )
+    expect(contract).toContain('never replace the implementation owner')
+    expect(skill('poteto-mode/references/task-contracts.md')).toContain(
+      'can own implementation submissions and candidate artifacts',
+    )
     expect(contract).toContain('Do not allocate a separate worktree or preparation owner')
     expect(contract).toContain('Resume a compatible reviewer to complete a missing verdict')
     const task = skill('poteto-mode/references/task-contracts.md')

@@ -31,12 +31,31 @@ import type {
   SubagentRuntime,
   SubagentSnapshot,
 } from './runtime.ts'
+import { EvidenceSectionSchema, type EvidenceSection } from './schema.ts'
 import { type AgentRow, TaskResult } from './task-render.ts'
 
 const MAX_LIST_RESULTS = 20
 const DEFAULT_LIST_RESULTS = 10
-const DEFAULT_WAIT_MS = 300_000
+const MAX_EVIDENCE_BYTES = 8 * 1024
+const MAX_SERIALIZED_BYTES = 32 * 1024
+const DEFAULT_EVIDENCE_BYTES = 4 * 1024
+const DELIVERY_PREVIEW_BYTES = 2 * 1024
+const STATUS_ERROR_PREVIEW_BYTES = 2 * 1024
 const MAX_WAIT_MS = 3_600_000
+const DEFAULT_WAIT_MS = MAX_WAIT_MS
+
+const EvidenceInputSchema = Type.Object(
+  {
+    action: Type.Literal('evidence'),
+    agent_id: Type.String({ minLength: 1 }),
+    attempt: Type.Integer({ minimum: 1 }),
+    section: EvidenceSectionSchema,
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    digest: Type.Optional(Type.String({ minLength: 64, maxLength: 64 })),
+    limit: Type.Optional(Type.Integer({ maximum: MAX_EVIDENCE_BYTES, minimum: 256 })),
+  },
+  { additionalProperties: false },
+)
 
 const StatusInputSchema = Type.Object(
   {
@@ -83,7 +102,7 @@ const WaitInputSchema = Type.Object(
     ),
     timeout_ms: Type.Optional(
       Type.Integer({
-        description: 'Return after this many milliseconds when nothing settles. Default 300000.',
+        description: 'Return after this many milliseconds when nothing settles. Default 3600000.',
         maximum: MAX_WAIT_MS,
         minimum: 1_000,
       }),
@@ -93,7 +112,11 @@ const WaitInputSchema = Type.Object(
 )
 
 const JobsInputSchema = Type.Object(
-  { action: Type.Literal('jobs') },
+  {
+    action: Type.Literal('jobs'),
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ maximum: MAX_LIST_RESULTS, minimum: 1 })),
+  },
   { additionalProperties: false },
 )
 
@@ -110,6 +133,8 @@ const InboxInputSchema = Type.Object(
   {
     action: Type.Literal('inbox'),
     agent_id: Type.Optional(Type.String({ minLength: 1 })),
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ maximum: MAX_LIST_RESULTS, minimum: 1 })),
   },
   { additionalProperties: false },
 )
@@ -135,6 +160,7 @@ const ReplyInputSchema = Type.Object(
 
 export const TaskControlInputSchema = Type.Union(
   [
+    EvidenceInputSchema,
     InboxInputSchema,
     AcknowledgeInputSchema,
     ReplyInputSchema,
@@ -151,12 +177,22 @@ export const TaskControlInputSchema = Type.Union(
 
 export type TaskControlInput = StaticDecode<typeof TaskControlInputSchema>
 
+interface IsolationSummary {
+  attempt_id: string
+  changed_files: number
+  integration: string
+  integration_status: string | null
+  repositories: number
+  status: string
+}
+
 interface TaskStatusSummary {
   activity: string | null
   agent_id: string
+  attempt: number
   description: string
   ended_at: number | null
-  isolation: SubagentSnapshot['isolation'] | null
+  isolation: IsolationSummary | null
   model?: string | undefined
   running: boolean
   role?: string | undefined
@@ -168,18 +204,55 @@ interface TaskStatusSummary {
 }
 
 interface TaskStatus extends TaskStatusSummary {
+  artifact: SubagentResult['artifact'] | null
   context_state: SubagentSnapshot['contextState'] | null
   effort: SubagentSnapshot['effort']
+  evidence: EvidenceSection[]
+  error: string | null
+  gate_count: number
   intercom_usage: SubagentSnapshot['intercomUsage']
   model: string
+  output_bytes: number
   readonly: boolean
   retry_failure: SubagentSnapshot['retryFailure'] | null
   retry_state: SubagentSnapshot['retryState'] | null
-  terminal_result: SubagentResult | null
+  structured_output_status: string | null
+  tool_receipt_count: number
+}
+
+interface DeliverySummary {
+  agentId: string
+  content: string
+  id: string
+  kind: DeliveryRecord['kind']
+  level: DeliveryRecord['level']
+  requestId?: string | undefined
+  state: DeliveryRecord['state']
 }
 
 export type TaskControlDetails =
-  | { action: 'inbox'; deliveries: DeliveryRecord[] }
+  | {
+      action: 'evidence'
+      agent_id: string
+      attempt: number
+      content: string
+      cursor: number
+      digest: string | null
+      freshness: 'current' | 'stale' | null
+      next_cursor: number | null
+      outcome: 'found' | 'not-found' | 'invalid-cursor'
+      section: EvidenceSection
+      total_bytes: number
+    }
+  | {
+      action: 'inbox'
+      count: number
+      cursor: number
+      deliveries: DeliverySummary[]
+      has_more: boolean
+      next_cursor: number | null
+      total: number
+    }
   | {
       action: 'acknowledge'
       agent_id: string
@@ -222,7 +295,7 @@ export type TaskControlDetails =
         | 'not-staged'
         | 'running'
         | null
-      receipt: SubagentResult['isolation'] | null
+      receipt: IsolationSummary | null
       revision: number
     }
   | {
@@ -235,7 +308,15 @@ export type TaskControlDetails =
       total: number
     }
   | TaskWaitDetails
-  | { action: 'jobs'; jobs: JobSnapshot[] }
+  | {
+      action: 'jobs'
+      count: number
+      cursor: number
+      has_more: boolean
+      jobs: JobSnapshot[]
+      next_cursor: number | null
+      total: number
+    }
   | JobProgressDetails
 
 export interface TaskWaitDetails {
@@ -258,6 +339,7 @@ export type TaskControlRuntime = Pick<
   | 'handle'
   | 'joinStaged'
   | 'latestResult'
+  | 'readEvidence'
   | 'replyToDecision'
   | 'subscribe'
 >
@@ -266,18 +348,34 @@ export interface TaskControlScope {
   allows: (agentId: string) => boolean
   callerId: (ctx: ExtensionContext) => string
   cancel: (handle: SubagentHandle, reason: string) => Promise<CancelReceipt>
-  destination: (ctx: ExtensionContext) => Promise<IsolationDestination>
+  destination: (ctx: ExtensionContext, agentId: string) => Promise<IsolationDestination>
   snapshots: () => SubagentSnapshot[]
   steer: (handle: SubagentHandle, message: string) => Promise<SteerReceipt>
+}
+
+function isolationSummary(isolation: SubagentSnapshot['isolation']): IsolationSummary | null {
+  if (isolation === undefined) return null
+  return {
+    attempt_id: isolation.attemptId,
+    changed_files: isolation.repositories.reduce(
+      (count, repository) => count + repository.changedFiles.length,
+      0,
+    ),
+    integration: isolation.integration,
+    integration_status: isolation.integrationStatus ?? null,
+    repositories: isolation.repositories.length,
+    status: isolation.status,
+  }
 }
 
 function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
   return {
     activity: snapshot.lastActivity ?? null,
     agent_id: snapshot.agentId,
+    attempt: snapshot.attempt,
     description: snapshot.description,
     ended_at: snapshot.endedAt ?? null,
-    isolation: snapshot.isolation ?? null,
+    isolation: isolationSummary(snapshot.isolation),
     model: snapshot.role === undefined ? undefined : snapshot.model,
     running: snapshot.running,
     role: snapshot.role,
@@ -289,17 +387,34 @@ function summary(snapshot: SubagentSnapshot): TaskStatusSummary {
   }
 }
 
-function status(runtime: TaskControlRuntime, snapshot: SubagentSnapshot): TaskStatus {
+export function taskStatus(
+  runtime: Pick<TaskControlRuntime, 'latestResult'>,
+  snapshot: SubagentSnapshot,
+): TaskStatus {
+  const terminal = runtime.latestResult(snapshot.agentId)
+  const evidence: EvidenceSection[] = []
+  if (terminal?.artifact !== undefined) evidence.push('output')
+  if (terminal?.isolation !== undefined) evidence.push('isolation')
+  if (terminal?.structuredOutput !== undefined) evidence.push('structured-output')
+  if ((terminal?.toolExecutionReceipts.length ?? 0) > 0) evidence.push('tool-receipts')
+  if ((terminal?.gateResults.length ?? 0) > 0) evidence.push('gates')
+  const error = terminal?.error ?? snapshot.error
   return {
     ...summary(snapshot),
+    artifact: terminal?.artifact ?? null,
     context_state: snapshot.contextState ?? null,
     effort: snapshot.effort,
+    evidence,
+    error: error === undefined ? null : utf8Preview(error, STATUS_ERROR_PREVIEW_BYTES),
+    gate_count: terminal?.gateResults.length ?? 0,
     intercom_usage: snapshot.intercomUsage,
     model: snapshot.model,
+    output_bytes: terminal?.artifact?.byteLength ?? 0,
     readonly: snapshot.readonly,
     retry_failure: snapshot.retryFailure ?? null,
     retry_state: snapshot.retryState ?? null,
-    terminal_result: runtime.latestResult(snapshot.agentId) ?? null,
+    structured_output_status: terminal?.structuredOutput?.status ?? null,
+    tool_receipt_count: terminal?.toolExecutionReceipts.length ?? 0,
   }
 }
 
@@ -350,6 +465,88 @@ export function serializeTaskControl(details: TaskControlDetails): string {
   return JSON.stringify(details, null, 2)
 }
 
+function utf8Preview(content: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(content)
+  if (encoded.byteLength <= maxBytes) return content
+  let end = maxBytes
+  while (end > 0 && (encoded[end] ?? 0) >> 6 === 2) end -= 1
+  return `${new TextDecoder().decode(encoded.slice(0, end))}\n[Preview truncated.]`
+}
+
+function deliverySummary(record: DeliveryRecord): DeliverySummary {
+  const summary: DeliverySummary = {
+    agentId: record.agentId,
+    content: utf8Preview(record.content, DELIVERY_PREVIEW_BYTES),
+    id: record.id,
+    kind: record.kind,
+    level: record.level,
+    state: record.state,
+  }
+  if (record.requestId !== undefined) summary.requestId = record.requestId
+  return summary
+}
+
+export function evidencePage(
+  content: string,
+  cursor: number,
+  limit: number,
+  serialize: (content: string, nextCursor: number | null, totalBytes: number) => string,
+): { content: string; nextCursor: number | null; totalBytes: number } | undefined {
+  const encoded = new TextEncoder().encode(content)
+  if (cursor > encoded.byteLength) return undefined
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(encoded.slice(0, cursor))
+  } catch {
+    return undefined
+  }
+  const maximum = Math.min(encoded.byteLength, cursor + limit)
+  const boundaries = [cursor]
+  for (let end = cursor + 1; end <= maximum; end += 1) {
+    if (end === encoded.byteLength || ((encoded[end] ?? 0) & 0xc0) !== 0x80) boundaries.push(end)
+  }
+  const pageAt = (index: number) => {
+    const end = boundaries[index]
+    if (end === undefined) return undefined
+    const page = new TextDecoder().decode(encoded.slice(cursor, end))
+    const nextCursor = end < encoded.byteLength ? end : null
+    return { content: page, nextCursor, totalBytes: encoded.byteLength }
+  }
+  let accepted = 0
+  let low = 1
+  let high = boundaries.length - 1
+  const maximumPage = pageAt(high)
+  if (
+    maximumPage !== undefined &&
+    Buffer.byteLength(
+      serialize(maximumPage.content, maximumPage.nextCursor, maximumPage.totalBytes),
+    ) <= MAX_SERIALIZED_BYTES
+  ) {
+    return maximumPage
+  }
+  high -= 1
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const page = pageAt(middle)
+    if (page === undefined) break
+    if (
+      Buffer.byteLength(serialize(page.content, page.nextCursor, page.totalBytes)) <=
+      MAX_SERIALIZED_BYTES
+    ) {
+      accepted = middle
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+  const page = pageAt(accepted)
+  if (page !== undefined && accepted > 0) return page
+  return {
+    content: '',
+    nextCursor: cursor < encoded.byteLength ? cursor : null,
+    totalBytes: encoded.byteLength,
+  }
+}
+
 function watchedJobs(
   scope: TaskControlScope,
   ids: ReadonlySet<string>,
@@ -359,6 +556,16 @@ function watchedJobs(
     .snapshots()
     .filter((snapshot) => ids.has(snapshot.agentId) && scope.allows(snapshot.agentId))
     .map((snapshot) => toJobSnapshot(snapshot, now))
+}
+
+function boundedWaitJobs(
+  scope: TaskControlScope,
+  ids: ReadonlySet<string>,
+  now: number,
+): JobSnapshot[] {
+  return watchedJobs(scope, ids, now)
+    .sort((left, right) => Number(left.status === 'running') - Number(right.status === 'running'))
+    .slice(0, MAX_LIST_RESULTS)
 }
 
 export type WaitInput = StaticDecode<typeof WaitInputSchema>
@@ -399,7 +606,10 @@ export async function waitForJobs(
       (resolve) => {
         let unsubscribe = (): void => undefined
         let timer: ReturnType<typeof setTimeout> | undefined
+        let finished = false
         const finish = (value: 'settled' | 'timeout' | 'aborted' | 'attention'): void => {
+          if (finished) return
+          finished = true
           unsubscribe()
           if (timer !== undefined) clearTimeout(timer)
           execution.signal?.removeEventListener('abort', onAbort)
@@ -420,14 +630,16 @@ export async function waitForJobs(
           return
         }
         execution.signal?.addEventListener('abort', onAbort)
-        unsubscribe = runtime.subscribe(check)
         timer = setTimeout(() => finish('timeout'), input.timeout_ms ?? DEFAULT_WAIT_MS)
-        check()
+        const stop = runtime.subscribe(check)
+        unsubscribe = stop
+        if (finished) unsubscribe()
+        else check()
       },
     )
     return {
       action: 'wait',
-      jobs: watchedJobs(scope, ids, Date.now()),
+      jobs: boundedWaitJobs(scope, ids, Date.now()),
       outcome,
       settled: settledIds(),
     }
@@ -443,12 +655,123 @@ export async function executeTaskControl(
   scope: TaskControlScope,
   execution: TaskControlExecution = { onUpdate: undefined, signal: undefined },
 ): Promise<TaskControlDetails> {
+  if (input.action === 'evidence') {
+    const agentId = input.agent_id.trim()
+    if (!scope.allows(agentId)) {
+      return {
+        action: 'evidence',
+        agent_id: agentId,
+        attempt: input.attempt,
+        content: '',
+        cursor: input.cursor ?? 0,
+        digest: null,
+        freshness: null,
+        next_cursor: null,
+        outcome: 'not-found',
+        section: input.section,
+        total_bytes: 0,
+      }
+    }
+    const cursor = input.cursor ?? 0
+    if (cursor > 0 && input.digest === undefined) {
+      return {
+        action: 'evidence',
+        agent_id: agentId,
+        attempt: input.attempt,
+        content: '',
+        cursor,
+        digest: null,
+        freshness: null,
+        next_cursor: null,
+        outcome: 'invalid-cursor',
+        section: input.section,
+        total_bytes: 0,
+      }
+    }
+    const evidence = await runtime.readEvidence(agentId, input.attempt, input.section, input.digest)
+    if (evidence === undefined) {
+      return {
+        action: 'evidence',
+        agent_id: agentId,
+        attempt: input.attempt,
+        content: '',
+        cursor,
+        digest: null,
+        freshness: null,
+        next_cursor: null,
+        outcome: 'not-found',
+        section: input.section,
+        total_bytes: 0,
+      }
+    }
+    const page = evidencePage(
+      evidence.content,
+      cursor,
+      input.limit ?? DEFAULT_EVIDENCE_BYTES,
+      (content, nextCursor, totalBytes) => {
+        const details: TaskControlDetails = {
+          action: 'evidence',
+          agent_id: agentId,
+          attempt: input.attempt,
+          content,
+          cursor,
+          digest: evidence.digest,
+          freshness: evidence.freshness,
+          next_cursor: nextCursor,
+          outcome: 'found',
+          section: input.section,
+          total_bytes: totalBytes,
+        }
+        return JSON.stringify({
+          content: [{ text: serializeTaskControl(details), type: 'text' }],
+          details,
+        })
+      },
+    )
+    return page === undefined
+      ? {
+          action: 'evidence',
+          agent_id: agentId,
+          attempt: input.attempt,
+          content: '',
+          cursor,
+          digest: evidence.digest,
+          freshness: evidence.freshness,
+          next_cursor: null,
+          outcome: 'invalid-cursor',
+          section: input.section,
+          total_bytes: Buffer.byteLength(evidence.content),
+        }
+      : {
+          action: 'evidence',
+          agent_id: agentId,
+          attempt: input.attempt,
+          content: page.content,
+          cursor,
+          digest: evidence.digest,
+          freshness: evidence.freshness,
+          next_cursor: page.nextCursor,
+          outcome: 'found',
+          section: input.section,
+          total_bytes: page.totalBytes,
+        }
+  }
   if (input.action === 'inbox') {
+    const cursor = input.cursor ?? 0
+    const limit = input.limit ?? DEFAULT_LIST_RESULTS
+    const records = runtime.deliveries
+      .list(input.agent_id?.trim())
+      .filter((delivery) => scope.allows(delivery.agentId))
+    const deliveries = records.slice(cursor, cursor + limit).map(deliverySummary)
+    const nextCursor = cursor + deliveries.length
     return {
       action: 'inbox',
-      deliveries: runtime.deliveries
-        .list(input.agent_id?.trim())
-        .filter((delivery) => scope.allows(delivery.agentId)),
+      count: deliveries.length,
+      cursor,
+      deliveries,
+      has_more: nextCursor < records.length,
+      next_cursor: nextCursor < records.length ? nextCursor : null,
+      total: records.length,
     }
   }
   if (input.action === 'acknowledge') {
@@ -479,12 +802,22 @@ export async function executeTaskControl(
   if (input.action === 'wait') return waitForJobs(input, ctx, runtime, scope, execution)
   if (input.action === 'jobs') {
     const now = Date.now()
+    const cursor = input.cursor ?? 0
+    const limit = input.limit ?? DEFAULT_LIST_RESULTS
+    const all = scope
+      .snapshots()
+      .filter((snapshot) => scope.allows(snapshot.agentId))
+      .map((snapshot) => toJobSnapshot(snapshot, now))
+    const jobs = all.slice(cursor, cursor + limit)
+    const nextCursor = cursor + jobs.length
     return {
       action: 'jobs',
-      jobs: scope
-        .snapshots()
-        .filter((snapshot) => scope.allows(snapshot.agentId))
-        .map((snapshot) => toJobSnapshot(snapshot, now)),
+      count: jobs.length,
+      cursor,
+      has_more: nextCursor < all.length,
+      jobs,
+      next_cursor: nextCursor < all.length ? nextCursor : null,
+      total: all.length,
     }
   }
   if (input.action === 'status') {
@@ -494,7 +827,7 @@ export async function executeTaskControl(
       .find((candidate) => candidate.agentId === agentId && scope.allows(candidate.agentId))
     return snapshot === undefined
       ? { action: 'status', agent_id: agentId, outcome: 'not-found' }
-      : { action: 'status', outcome: 'found', task: status(runtime, snapshot) }
+      : { action: 'status', outcome: 'found', task: taskStatus(runtime, snapshot) }
   }
   if (input.action === 'list') {
     const activeOnly = input.active_only ?? false
@@ -544,11 +877,18 @@ export async function executeTaskControl(
     }
   }
   if (input.action === 'join') {
-    const join = await runtime.joinStaged(
-      agentId,
-      await scope.destination(ctx),
-      scope.callerId(ctx),
-    )
+    const destination = await scope.destination(ctx, agentId).catch(() => undefined)
+    if (destination === undefined) {
+      return {
+        action: 'join',
+        agent_id: agentId,
+        outcome: 'rejected',
+        reason: 'invalid-lineage',
+        receipt: null,
+        revision: runtime.currentRevision,
+      }
+    }
+    const join = await runtime.joinStaged(agentId, destination, scope.callerId(ctx))
     if (join.status === 'joined')
       runtime.deliveries.settleAgent(agentId, 'completion', 'acknowledged')
     return {
@@ -556,7 +896,7 @@ export async function executeTaskControl(
       agent_id: agentId,
       outcome: join.status === 'rejected' ? 'rejected' : join.status,
       reason: join.reason ?? null,
-      receipt: join.receipt ?? null,
+      receipt: isolationSummary(join.receipt),
       revision: join.revision,
     }
   }
@@ -614,6 +954,8 @@ export type LabelResolver = (agentId: string) => string
 
 function pendingTarget(input: TaskControlInput, label: LabelResolver): string {
   switch (input.action) {
+    case 'evidence':
+      return `${input.section} evidence ${label(input.agent_id)} attempt ${input.attempt}`
     case 'inbox':
       return 'notification inbox'
     case 'acknowledge':
@@ -658,9 +1000,8 @@ export function renderTaskControlCall(
 }
 
 function statusRow(
-  task: TaskStatusSummary,
+  task: TaskStatusSummary & { error?: string | null },
   agentType: string,
-  terminal: SubagentResult | null,
   now: number,
 ): AgentRow {
   const running = task.running
@@ -671,11 +1012,11 @@ function statusRow(
     context: undefined,
     cost: task.usage.cost,
     durationMs: Math.max(0, (task.ended_at ?? now) - task.started_at),
-    error: terminal?.error,
+    error: task.error ?? undefined,
     label: task.description,
     model: task.model,
     role: task.role,
-    output: terminal?.output,
+    output: undefined,
     status: task.state,
     task: undefined,
     toolCalls: task.usage.toolCalls,
@@ -712,6 +1053,8 @@ export function renderTaskControlResult(
   }
   const rowOptions = { expanded: options.expanded, live: false }
   switch (details.action) {
+    case 'evidence':
+      return new Text(text, 0, 0)
     case 'inbox':
       return new Text(
         details.deliveries
@@ -743,11 +1086,7 @@ export function renderTaskControlResult(
         )
       }
       const task = details.task
-      return new TaskResult(
-        [statusRow(task, task.subagent_type, task.terminal_result, Date.now())],
-        rowOptions,
-        theme,
-      )
+      return new TaskResult([statusRow(task, task.subagent_type, Date.now())], rowOptions, theme)
     }
     case 'list': {
       if (details.tasks.length === 0) {
@@ -758,7 +1097,7 @@ export function renderTaskControlResult(
         )
       }
       const now = Date.now()
-      const rows = details.tasks.map((task) => statusRow(task, task.subagent_type, null, now))
+      const rows = details.tasks.map((task) => statusRow(task, task.subagent_type, now))
       const summary = details.has_more
         ? theme.fg('dim', formatMoreItems(details.total - details.count, 'task'))
         : undefined
@@ -817,7 +1156,7 @@ export function renderTaskControlResult(
 }
 
 export const taskControlDescription =
-  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. inbox shows notification delivery receipts. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, timeout, or abort; use it only without other work. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
+  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. Operational responses are bounded summaries. evidence retrieves paginated output or verification evidence for an exact Agent ID and attempt. inbox shows bounded notification delivery previews. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, timeout, or abort; use it only without other work. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
 
 export function registerTaskControl(
   pi: ExtensionAPI,
@@ -830,13 +1169,14 @@ export function registerTaskControl(
     allows: () => true,
     callerId: (ctx) => ctx.sessionManager.getSessionId(),
     cancel: (handle, reason) => host.cancel(handle, reason),
-    destination: (ctx) => runtime.rootDestination(ctx),
+    destination: (ctx, agentId) => runtime.rootDestination(ctx, agentId),
     snapshots: () => runtime.listSnapshots(),
     steer: (handle, message) => host.steer(handle, message),
   }
   pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
     description: taskControlDescription,
     execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
+      runtime.ensureContext(ctx)
       const details = await executeTaskControl(
         Value.Decode(TaskControlInputSchema, rawInput),
         ctx,

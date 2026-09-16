@@ -71,6 +71,10 @@ Task({
 
 A relative `cwd` resolves from the parent directory. The resolved path must exist and must be a directory.
 
+For isolated Tasks, the repository that contains `cwd` defines the snapshot, capture, execution, and integration root.
+Ordinary subdirectories retain their repository-relative execution path. Inner linked worktrees do not inherit the surrounding repository as their capture root.
+Root joins use the Task's recorded destination rather than the coordinator's current directory.
+
 The runtime permits absolute paths and parent traversal. Trusted adapters must apply a narrower policy when their boundary requires one.
 
 The effective tools equal the intersection of the runtime, agent, and call policies.
@@ -78,7 +82,29 @@ Read-only policy removes default mutable tools and rejects explicitly requested 
 
 Private intercom tools enter after policy validation. A call cannot request or remove them.
 
-A resumed child uses its persisted agent prompt, directory, tools, model, effort, fast mode, and foreground or background mode.
+A capability can set `isolation: 'manual'` in a `roleToolRequirements` entry.
+The runtime supplies manual writer isolation when omitted and rejects explicit `apply`, `branch`, or read-only execution.
+The requirement persists through resume and batch preflight.
+
+A resumed child uses its persisted agent prompt, directory, tools, model, effort, fast mode, and foreground or background mode. Resume validates the same schema mode, gates, output schema, role, capability profile, and effective tools.
+
+An isolated resume always creates a fresh private workspace. When the prior attempt has an unintegrated captured result, resume validates the retained patch digest, durable result, product head, baseline trees, expected tree, and repository boundary before reconstructing that work in the new workspace. The next capture therefore represents the complete retained and new product patch. A changed source baseline, conflict, missing artifact, stale durable result, or tampered patch fails the resume without touching the live workspace. An already integrated attempt is not reconstructed.
+
+Automatic reconstruction requires exact source trees, including non-ignored untracked files. Unrelated source edits can block resume.
+Resume also accepts an already adopted result when every repository tree matches the retained result exactly.
+It verifies the original snapshot patches, captured patch digests, and durable Git results before skipping reconstruction.
+This case permits a destination commit without replaying the retained patch.
+
+Before restarting the same agent, resume retries a failed capture from its retained workspace.
+Recovery validates the original owner, attempt, workspace location, repository boundary, private Git directory, and baseline evidence.
+A successful retry preserves the durable artifact without accepting the previous execution or bypassing delivery gates.
+Unresolved boundaries, invalid ownership, legacy receipts without a v4 identity, and integration conflicts still fail closed.
+Failures retain the previous attempt and identify its patch references. Preserve this WIP instead of replacing its owner merely to formalize delivery.
+
+An isolated attempt derives its identity from its own captured baseline, not a second read of the live source.
+Identical identity patches share a content-addressed artifact. Distinct patches remain available as retained evidence.
+
+Each attempt captures the current workspace identity after prior work has joined. The identity includes the product repository and discovered nested repositories. Each snapshot stores a readable patch from its product head, or from the empty tree when a repository is unborn. The runtime keeps command receipts only for the current attempt and stores redacted, 50 KiB-bounded command and tool output. A delivery system that retains earlier candidate submissions owns their historical receipts.
 
 A changed agent file cannot expand the capabilities of an existing child.
 
@@ -97,7 +123,23 @@ TaskControl({
 })
 ```
 
-The result includes activity, state, usage, isolation evidence, and a terminal result when one exists.
+The result is a bounded operational summary with activity, state, usage, the stable Agent ID and numeric attempt, compact isolation counts, artifact metadata, and an evidence inventory. It does not inline terminal output, isolation ledgers, structured output, gates, or tool receipts.
+
+Retrieve complete evidence explicitly for one immutable Agent ID and attempt:
+
+```ts
+TaskControl({
+  action: 'evidence',
+  agent_id: '<agent-id>',
+  attempt: 1,
+  section: 'isolation',
+  limit: 4096,
+})
+```
+
+Evidence sections are `output`, `isolation`, `structured-output`, `tool-receipts`, and `gates`. The first page returns a manifest digest and `next_cursor`. Pass both `digest` and `cursor` for subsequent pages. A cursor without its digest is rejected, so joining, resuming, or refreshing a Task cannot mix payload versions. `freshness: 'stale'` means the immutable manifest remains valid for that attempt but later operational state, such as a completed join, differs from that captured section. Requests identify evidence only by Agent ID, attempt, section, digest, and cursor. They never accept filesystem paths.
+
+Terminal attempt manifests survive reload and resume. Legacy records remain readable through their current raw evidence when no manifest exists. Artifact and manifest digests are verified on every read.
 
 New attempts also expose `timing` with request, execution-start, execution-end, and terminal-settlement timestamps.
 `workspaceSetupMs` and `sessionSetupMs` measure preparation components.
@@ -174,6 +216,8 @@ TaskControl({
 
 Omit `agent_ids` to watch every running Task. The call returns when a watched Task settles, requests a coordinator decision, times out, or receives an abort signal.
 
+The default wait window is 3,600,000 ms, one hour. This avoids creating a new model turn every five minutes while work is still running. Set `timeout_ms` for an intentionally shorter poll. Cancellation, a coordinator decision request, and Task settlement still wake the current wait immediately. A timeout only returns control; it never retries work or changes acceptance.
+
 It does not wait for every Task. Re-issue `wait` to continue. Completion notices use steering at the next safe context boundary.
 
 While `wait` runs, the tool result streams the same job tree as a foreground Task call, and the working loader shows `Waiting on N jobs`. After the call settles, the tree keeps only the settled rows.
@@ -188,7 +232,9 @@ TaskControl({
 })
 ```
 
-The result renders the job tree with every Task, including running rows.
+The result renders a bounded job page, including running rows. `cursor` and `limit` select additional pages, with a maximum of 20 rows per call.
+
+Operational Task and TaskControl payloads are bounded independently in both model content and persisted tool details. The SPT-78 reproduction produced an 846,484-byte `status` content payload and 472,559-byte details payload from a 3,000-file isolation receipt. A large-output status produced 54,156-byte content and 53,375-byte details. The bounded regression fixtures keep each returned content and details payload below 32 KiB while preserving complete evidence behind digest-pinned pages.
 
 The scope-bound tool supports status, list, steer, cancel, join, wait, and jobs actions.
 
@@ -225,11 +271,15 @@ Each graph has a stable Run ID. Each node has its declared Task ID and a separat
 
 The runtime starts all ready nodes without a capacity scheduler. A failed node blocks only its descendants.
 
-A mutable graph uses one aggregate workspace. Each mutable node uses a private child workspace.
+A mutable graph uses one aggregate workspace per destination repository. Each mutable node uses a private child workspace.
+Linked worktrees inside another repository remain independent destinations. Each node uses the repository that contains its requested `cwd`.
+Manual and branch outputs remain outside aggregate integration.
 
-The coordinator stages ready siblings, then integrates them in declared order. Applied dependencies enter the aggregate before dependent dispatch.
+The coordinator stages ready siblings, then integrates them in declared order. Applied dependencies enter their aggregate before dependent dispatch.
 
-The coordinator captures the aggregate once. It applies one accepted aggregate result at the root boundary.
+The coordinator captures each aggregate once and applies its accepted result to that destination.
+Different destination repositories do not form one atomic transaction.
+Every Task targeting a destination must complete before its aggregate applies, including read-only reviewers and manual verifiers.
 
 A dependent receives complete upstream outputs as Base64 JSON in a deterministic untrusted-data envelope.
 
@@ -293,6 +343,19 @@ Integrate the accepted patch into its destination before dispatching an isolated
 The runtime checks the effective child directory before session construction.
 
 It creates a private workspace from a synthetic baseline commit.
+Execution directories live in the operating system's temporary directory, outside the source checkout and Git metadata.
+A reboot or temporary-directory cleanup can remove an active attempt before terminal capture.
+Terminal capture promotes patches and result commits into durable Git storage.
+Vite browser modules remain readable without disabling filesystem-deny rules.
+Manifests, registries, locks, and captured patches remain in durable Git storage.
+The manifest records the canonical execution path for cleanup and recovery, including older workspaces beneath `.git`.
+Cleanup rejects execution paths that do not match the recorded attempt's layout.
+Small `execution-roots/<sha256-of-canonical-path>.path` registrations remain in durable Git storage after cleanup.
+Each registration contains the canonical execution root so project-scoped session history can recognize removed workspaces.
+Registrations persist without automatic pruning to preserve historical lookup.
+Keep the same operating-system temporary directory across allocation, recovery, and history lookup.
+A changed `TMPDIR` fails closed: cleanup retains the workspace and history excludes its external path.
+Use receipt paths rather than deriving execution paths from `.git/pi-subagent/worktrees`.
 
 The synthetic baseline includes tracked, staged, unstaged, untracked, mode, and symbolic-link state.
 
@@ -321,7 +384,11 @@ The runtime discovers nested Git repositories and excludes submodules.
 
 The receipt contains one ordered ledger entry for each repository.
 
-The runtime rejects new, removed, or moved nested repository boundaries during capture.
+The runtime rejects new, removed, or moved product repository boundaries during capture.
+New reference clones are excluded only when unchanged baseline `.gitignore` files already ignore their paths.
+Their paths must contain no tracked baseline product content. Changed ignore rules cannot authorize this exception.
+Existing nested repositories remain captured, including repositories that the baseline already ignores.
+Prepare product repositories before dispatch. Keep newly synchronized references under predeclared ignored paths.
 
 `integration: 'apply'` uses a three-tree merge of the child baseline, current parent, and child result.
 
@@ -350,6 +417,10 @@ The recovery scan reads durable registries. It preserves live and ambiguous owne
 Recovery attaches root writer evidence to the interrupted record. It does not reconstruct nested parent join scopes.
 
 A cleanup failure retains recovery evidence and sets `cleanupDebt`.
+Startup retries cleanup for dead workspaces in `captured`, `staged`, `integrating`, `integrated`, `cleanup-pending`, or `cleanup-debt` states.
+Cleanup requires durable result references for every repository. It preserves those references, patch artifacts, and transaction journals.
+Each repository result must remain available through its durable internal Git ref.
+Recovery retains live, ambiguous, and conflict workspaces.
 
 ## Structured output and gates
 
@@ -369,6 +440,10 @@ Use `gates` for deterministic checks after artifact publication:
 - `json-pointer` checks existence, equality, or membership.
 
 A failed gate fails the node before the coordinator releases its descendants.
+
+A capability can provide `terminalValidation: { maxCorrections, validate }`. The typed validator runs against immutable captured isolation before descendant success settlement or destination integration. Staged descendants may be merged only into an isolated parent preview; their receipts remain staged until validation succeeds. A scope conflict fails before validation. The validator receives the output artifact, structured output, captured isolation, workspace identity, read-only policy, current-attempt tool receipts, and prior terminal output revisions. A report-contract rejection can request a bounded follow-up in the same child session. A validator returns `correctionAllowed: false` for execution or artifact failures that report-only correction cannot fix. The runtime removes every tool only for an allowed follow-up, restores the session tools afterward, publishes each raw output as a `TerminalOutputRevision`, and fails settlement with the validator diagnostics when the bound is exhausted. Trusted `terminalFailureKind: "report-contract"` metadata is set only when allowed report correction is exhausted. It never redispatches the Task or creates another workspace.
+
+Capability registration is fail closed. Re-registering the same capability ID and version must reuse the exact stable `terminalValidation.validate` callback reference; construct and retain the callback instead of recreating an equivalent closure.
 
 Snapshots expose current context use, active automatic retry state, and the last terminal retry failure.
 
@@ -448,7 +523,8 @@ A read-only Task does not load arbitrary capability extensions. Tool definitions
 
 Each child receives an isolated model runtime. A capability provider cannot mutate a sibling provider registry.
 
-Resume fails if a registration is absent or its version changed. Resume also rejects changed schemas, schema modes, and gates.
+Resume fails if a registration is absent or its version changed. Resume also rejects changed schemas, schema modes, gates, and mandatory role tool requirements.
+After such an upgrade, start a fresh child from retained evidence instead of weakening the stored capability contract.
 
 `pi.getAllTools()` exposes metadata without executable dispatch. The package does not treat that metadata as an executable capability.
 

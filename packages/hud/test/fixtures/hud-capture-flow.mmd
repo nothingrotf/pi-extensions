@@ -1,0 +1,38 @@
+flowchart TD
+    START["Captura manual ou agendada"] --> ADMIT["Validar autorização, finalidade<br/>e orçamento"]
+    ADMIT --> CAPTURE["Acquisition<br/>Job durável de captura"]
+    CAPTURE --> EXEC["Executor da tentativa"]
+    EXEC --> QUOTA["Durable Object<br/>Quota compartilhada do provider"]
+    QUOTA -->|"Sem capacidade ou indisponível"| WAIT["Persistir próxima tentativa<br/>e liberar o worker"]
+    WAIT --> ADMIT
+    QUOTA -->|"Reserva concedida"| PROVIDER["Chamada externa"]
+    PROVIDER -->|"Resposta"| LEDGER["Owner registra resultado,<br/>consumo e outbox"]
+    LEDGER --> CONFIRM["Confirmar consumo no DO<br/>de forma idempotente"]
+    PROVIDER -->|"429"| COOLDOWN["Cooldown compartilhado no DO"]
+    COOLDOWN --> WAIT
+    PROVIDER -->|"Timeout após envio"| UNCERTAIN["Resultado externo incerto<br/>Preservar ledger e reconciliar"]
+    PROVIDER -->|"Credencial ou créditos inválidos"| BLOCK["Bloquear configuração<br/>e informar pendência"]
+    LEDGER -->|"Observação de captura"| CONTENT["Content<br/>Incorporação transacional"]
+    CONTENT --> PROFILE["Profile global e snapshots"]
+    CONTENT --> VERSION["Publicação e versões"]
+    CONTENT --> METRICS["Medições independentes"]
+    CONTENT --> CREATOR_EVENT["Outbox: autor empresarial"]
+    CREATOR_EVENT --> CREATORS["Creators<br/>Associação por empresa"]
+    VERSION --> CHANGED{"O que mudou?"}
+    CHANGED -->|"Texto"| NEED["Necessidade durável<br/>de nova avaliação"]
+    CHANGED -->|"Mídia ou composição"| MEDIA["Job de aquisição de mídia"]
+    CHANGED -->|"Nada relevante"| KEEP["Preservar resultados válidos"]
+    MEDIA --> STREAM["Download limitado<br/>Streaming e backpressure"]
+    STREAM --> STORAGE["File Storage<br/>Consolidar bytes imutáveis"]
+    STORAGE --> ASSET["Asset versionado e fileId"]
+    ASSET --> DERIVED["Derivados necessários<br/>Thumbnail, frames ou transcrição"]
+    ASSET --> READY["Verificar prontidão e cobertura"]
+    DERIVED --> READY
+    NEED --> READY
+    METRICS -->|"Se a regra depender delas"| NEED
+    READY -->|"Entradas insuficientes"| PENDING["Pendência ou falha técnica<br/>Sem veredito fictício"]
+    READY -->|"Entradas prontas"| INPUT["Fechar entrada imutável<br/>Texto + assets + regras + avaliador"]
+    INPUT --> AI["Job de IA<br/>Mesmo protocolo de quota e tentativa"]
+    AI --> RESULT["Resultado imutável<br/>da versão analisada"]
+    RESULT --> CURRENT["Atualizar projeção corrente<br/>sem aceitar resultado obsoleto"]
+    CURRENT --> HUMAN["Revisão humana quando aplicável<br/>Histórico preservado"]

@@ -3,6 +3,7 @@
 Keep one persistent implementer per issue through build and compatible corrections.
 The root owns independent verification, countersigns, and audits.
 This playbook requires explicit autonomy and landing authority for the queue.
+Use `../references/delivery-operations.md` for root model selection, compact checkpoints, waiting, and recovery.
 
 1. **Honor operator gates.**
    Keep operator-named items under operator review and landing control.
@@ -13,7 +14,9 @@ This playbook requires explicit autonomy and landing authority for the queue.
    Pass the per-issue fields from `../references/delivery-contract.md` inside each Task prompt.
    Keep the accepted design, artifact identities, acceptance criteria, and verification owner attached through corrections.
    Start an uncommitted `decisions.tsv` and retain checks, findings, and the PR URL.
-   Resume the same implementer while its contract remains compatible.
+   Resume the same implementer while its contract remains compatible after verifying artifact reconstruction.
+   Diagnose repeated incomplete returns before another equivalent dispatch.
+   Update the checkpoint after each handoff, verdict, and publication.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
    If the owner must delegate, use `pstack-nested` within its depth limit.
    Keep external evidence collection, runtime preflight, telemetry, and evaluation utility at the root.
@@ -29,12 +32,13 @@ This playbook requires explicit autonomy and landing authority for the queue.
 
 4. **Build and verify the accepted artifact.**
    Run early risk probes and reuse the pinned harness through corrections.
+   Require a passing per-criterion self-proof matrix before promoting WIP to a verification candidate.
    Apply self-proof, skeptical Bugbot triage, deslop, and comment cleanup through the delivery contract.
    Assign one independent reviewer that never wrote the implementation.
    For combined static and live checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
-    For static-only review, use `role: "code review"` with read-only tools.
-    Select one permitted model from the required family, not every pool entry.
-    Preserve that role and contract on compatible corrections, and require one complete verdict.
+   For static-only review, use `role: "code review"` with read-only tools.
+   Select one permitted model from the required family, not every pool entry.
+   Preserve that role and contract on compatible corrections, and require one complete verdict.
    Before landing, verify load-bearing behavior, required gates, receipts, and the diff at the merge-ready head.
    Use `control-cli` or `control-ui` for the actual surface.
    Run the load-bearing regression on current trunk when that behavior exists.
@@ -47,7 +51,7 @@ This playbook requires explicit autonomy and landing authority for the queue.
 5. **Separate publication and landing.**
    Send the accepted patch to a separately scoped foreground publication Task for destination commit, push, and PR creation.
    Pass `role: "publication"` and `capability_profile: "pstack-leaf"` to publication.
-    Include commit and PR text in that operation without a separate prose-preparation Task.
+   Include commit and PR text in that operation without a separate prose-preparation Task.
    Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
    Rebase onto current trunk before babysit through `playbooks/babysit.md`.
    Apply the same foreground destination boundary to later rebases and landing operations.
@@ -62,7 +66,10 @@ This playbook requires explicit autonomy and landing authority for the queue.
    Require a fresh root countersign for a genuinely new increase in a pinned gate or budget.
    Absorbing a value already on main is drift, not an increase.
    Arm an audit with the installed `loop` skill, an event watcher when available, and a 30-minute heartbeat fallback.
-   At each audit, reread this playbook and the armed goal.
+   Use `TaskControl.wait` when no independent work remains, with the typed arguments from `../references/task-contracts.md`.
+   Never use shell `sleep` to await children or wait for the heartbeat after a completion.
+   At each audit, read the compact checkpoint and inspect changed evidence.
+   Reload this playbook only when its instructions change or a decision requires it.
    Inspect Task status, decision trails, real checks, commits, pushes, and PR changes.
    Do not infer progress or failure solely from token output or silence.
    If a lane exceeds its expected runtime without evidence, diagnose it before replacing the owner.

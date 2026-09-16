@@ -337,7 +337,11 @@ describe('pstack SDK child bootstrap', () => {
         expect(inventory.tools).not.toContain('write')
         const bootstrap = await loadPstackBootstrap()
         expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/SKILL.md`)
-        expect(inventory.prompt).toContain(`${bootstrap.root}/principle-prove-it-works/SKILL.md`)
+        expect(inventory.prompt).toContain('principle-prove-it-works/SKILL.md')
+        expect(inventory.prompt).toContain(
+          'Resolve every skill pointer below against that canonical base',
+        )
+        expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/references/worker.md`)
         expect(inventory.prompt).toContain('ask_parent is advisory only')
         expect(inventory.prompt).not.toContain('{{PSTACK_SKILLS_ROOT}}')
         await h.session.prompt('read:parent')
@@ -545,7 +549,7 @@ function policyInput(overrides = {}) {
     role: 'how explorer',
     capability_profile: 'pstack-leaf',
     subagent_type: 'generalPurpose',
-    readonly: true,
+    readonly: overrides.role !== 'runtime verification',
     run_in_background: false,
     ...overrides,
   }
@@ -553,7 +557,7 @@ function policyInput(overrides = {}) {
 
 describe('pstack runtime model policy', () => {
   it.each(['code review', 'runtime verification', 'publication'])(
-    'selects and retains the %s model through a read-only Task policy probe',
+    'selects and retains the %s model through a role-compatible Task policy probe',
     async (role) => {
       const plans = new Map()
       const h = await harness(
@@ -565,6 +569,7 @@ describe('pstack runtime model policy', () => {
         ].join('\n'),
       )
       try {
+        if (role === 'runtime verification') await initializeRepository(h)
         const input = policyInput({ role })
         if (role !== 'publication') input.model = 'pstack-test/configured:high'
         const result = await invoke(h, plans, 'delivery-role', 'Task', input)
@@ -573,14 +578,14 @@ describe('pstack runtime model policy', () => {
         expect(h.runtime.getRecord(result.agentId)).toMatchObject({
           role,
           model: role === 'publication' ? 'pstack-test/model' : 'pstack-test/configured',
-          execution: { role, readonly: true },
+          execution: { role, readonly: role !== 'runtime verification' },
         })
         expect(h.inventories.find((entry) => entry.action === 'read:policy').tools).not.toContain(
           'Task',
         )
-        expect(h.inventories.find((entry) => entry.action === 'read:policy').tools).not.toContain(
-          'bash',
-        )
+        expect(
+          h.inventories.find((entry) => entry.action === 'read:policy').tools.includes('bash'),
+        ).toBe(role === 'runtime verification')
         const resumed = await invoke(h, plans, 'resume-delivery', 'Task', {
           description: 'Continue the same scoped delivery role',
           prompt: 'read:delivery-resumed',
@@ -596,7 +601,23 @@ describe('pstack runtime model policy', () => {
         await h.close()
       }
     },
+    180_000,
   )
+
+  it('rejects a read-only runtime verifier before allocating a child', async () => {
+    const h = await harness(true)
+    try {
+      const result = await h.runtime.run({
+        ctx: h.ctx,
+        input: policyInput({ role: 'runtime verification', readonly: true }),
+      })
+      expect(result.kind).toBe('failed')
+      expect(result.details.error).toContain('requires unavailable effective tools: bash')
+      expect(h.runtime.listSnapshots()).toEqual([])
+    } finally {
+      await h.close()
+    }
+  })
 
   it('captures missing live policy evidence and dispatches through the SDK', async () => {
     const h = await harness(true)
@@ -655,21 +676,26 @@ describe('pstack runtime model policy', () => {
     },
   )
 
-  it.each(pstackRoles)('selects every documented role $role', async ({ role }) => {
-    const h = await harness(true, new Map(), `${role}: pstack-test/configured:high`)
-    try {
-      const result = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
-      expect(result.kind, JSON.stringify(result)).toBe('completed')
-      const record = h.runtime.getRecord(result.details.agentId)
-      expect(record.model).toBe('pstack-test/configured')
-      expect(record.effort).toBe('high')
-      expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
-        `${role}: pstack-test/configured:high`,
-      )
-    } finally {
-      await h.close()
-    }
-  })
+  it.each(pstackRoles)(
+    'selects every documented role $role',
+    async ({ role }) => {
+      const h = await harness(true, new Map(), `${role}: pstack-test/configured:high`)
+      try {
+        if (role === 'runtime verification') await initializeRepository(h)
+        const result = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
+        expect(result.kind, JSON.stringify(result)).toBe('completed')
+        const record = h.runtime.getRecord(result.details.agentId)
+        expect(record.model).toBe('pstack-test/configured')
+        expect(record.effort).toBe('high')
+        expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
+          `${role}: pstack-test/configured:high`,
+        )
+      } finally {
+        await h.close()
+      }
+    },
+    180_000,
+  )
 
   it.each([
     [undefined, undefined, 'pstack-test/model', 'off', false],
@@ -816,6 +842,7 @@ describe('pstack runtime model policy', () => {
         `${role}: pstack-test/configured:high, inherit-parent`,
       )
       try {
+        if (role === 'runtime verification') await initializeRepository(h)
         const omitted = await h.runtime.run({ ctx: h.ctx, input: policyInput({ role }) })
         expect(omitted.kind).toBe('failed')
         expect(omitted.details.error).toContain('distinct choices')
@@ -836,6 +863,7 @@ describe('pstack runtime model policy', () => {
         await h.close()
       }
     },
+    180_000,
   )
 
   it.each(['auto, inherit-parent', 'pstack-test/configured:high, pstack-test/configured:high'])(

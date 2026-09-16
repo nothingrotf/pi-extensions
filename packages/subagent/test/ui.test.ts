@@ -11,6 +11,7 @@ import {
   renderIntercomCard,
   transcriptIntercomLayout,
 } from '../src/cards.ts'
+import type { BatchItemResult } from '../src/coordinator.ts'
 import {
   activitySnippet,
   describeCall,
@@ -19,8 +20,10 @@ import {
   SubagentsWidget,
   type SubagentTheme,
 } from '../src/format.ts'
+import { operationalBatchItems } from '../src/index.ts'
 import { createPeekPane, eventLines } from '../src/peek.ts'
 import type { SubagentSnapshot } from '../src/runtime.ts'
+import { rowFromBatchItem, summaryLine } from '../src/task-render.ts'
 
 const theme: SubagentTheme = {
   bg: (_color, text) => text,
@@ -163,6 +166,7 @@ function snapshot(
   const running = status === 'running'
   return {
     agentId,
+    attempt: 1,
     background,
     contextState: undefined,
     description,
@@ -204,6 +208,32 @@ function snapshot(
 }
 
 describe('subagent TUI', () => {
+  it('preserves every batch identity while bounding operational previews', () => {
+    const items: BatchItemResult[] = Array.from({ length: 25 }, (_, index) => ({
+      agentId: `agent-${index}`,
+      artifact: undefined,
+      error: index === 24 ? 'last task failed' : undefined,
+      gateResults: [],
+      isolation: undefined,
+      output: 'x'.repeat(4_096),
+      status: index === 24 ? 'failed' : 'completed',
+      structuredOutput: undefined,
+      taskId: `task-${index}`,
+    }))
+    const operational = operationalBatchItems(items)
+    expect(operational).toHaveLength(25)
+    expect(operational.map((item) => item.agentId)).toEqual(items.map((item) => item.agentId))
+    expect(operational.map((item) => item.taskId)).toEqual(items.map((item) => item.taskId))
+    const rows = operational.map((item) => rowFromBatchItem(item, undefined, 'task'))
+    expect(summaryLine(rows, 0, theme)).toContain('24 succeeded · 1 failed')
+    expect(rows.at(-1)?.error).toBe('last task failed')
+    const transport = {
+      content: [{ text: 'x'.repeat(8 * 1_024), type: 'text' }],
+      details: { items: operational, runId: 'run', status: 'batch', total: items.length },
+    }
+    expect(Buffer.byteLength(JSON.stringify(transport))).toBeLessThanOrEqual(32 * 1_024)
+  })
+
   it('wraps full IRC text instead of losing content after eighty columns', () => {
     const message =
       'A complete report with enough text to cross the old fixed column limit. '.repeat(4) +

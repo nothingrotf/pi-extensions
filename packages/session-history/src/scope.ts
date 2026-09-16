@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
-import { lstat, realpath } from 'node:fs/promises'
-import { devNull } from 'node:os'
+import { createHash } from 'node:crypto'
+import { lstat, readFile, realpath } from 'node:fs/promises'
+import { devNull, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -69,6 +70,8 @@ export async function filterManagedWorktreeSessions<Session extends { cwd: strin
   if (sessions.length === 0) return []
   const boundary = await managedWorktreeBoundary(cwd, signal)
   if (boundary === null) return []
+  const temporaryRoot = await canonicalPath(tmpdir())
+  const registrations = new Map<string, boolean>()
   const visible: Session[] = []
   for (const session of sessions) {
     signal?.throwIfAborted()
@@ -77,7 +80,24 @@ export async function filterManagedWorktreeSessions<Session extends { cwd: strin
     const parts = relative(boundary, canonical).split(sep)
     if (canonical.startsWith(`${boundary}${sep}`) && parts.length >= 2 && parts[1] === 'root') {
       visible.push(session)
+      continue
     }
+    const executionName = relative(temporaryRoot, canonical).split(sep)[0] ?? ''
+    if (!/^pi-subagent-ws-[a-f0-9]{16}-[a-f0-9-]{36}-[A-Za-z0-9]{6}$/.test(executionName)) continue
+    const executionRoot = join(temporaryRoot, executionName)
+    let registered = registrations.get(executionRoot)
+    if (registered === undefined) {
+      const key = createHash('sha256').update(executionRoot).digest('hex')
+      const registration = join(dirname(boundary), 'execution-roots', `${key}.path`)
+      const info = await lstat(registration).catch(() => null)
+      registered =
+        info !== null &&
+        info.isFile() &&
+        info.size <= 4096 &&
+        (await readFile(registration, 'utf8').catch(() => null)) === executionRoot
+      registrations.set(executionRoot, registered)
+    }
+    if (registered) visible.push(session)
   }
   return visible
 }

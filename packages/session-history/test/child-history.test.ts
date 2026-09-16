@@ -8,6 +8,9 @@ import { SessionManager } from '@earendil-works/pi-coding-agent'
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test'
 
 import { createChildSessionManager } from '../../subagent/src/child.ts'
+import { createWriterWorkspace } from '../../subagent/src/git-isolation.ts'
+import { cleanupWorkspaceArtifacts } from '../../subagent/src/isolation.ts'
+import { createRootWorkspaceContext } from '../../subagent/src/workspace.ts'
 import { SessionHistoryStore } from '../src/sessions.ts'
 
 const directories: string[] = []
@@ -119,6 +122,42 @@ afterEach(async () => {
 })
 
 describe('SDK child history in a custom session store', () => {
+  it('audits external execution roots before and after workspace cleanup', async () => {
+    const state = await fixture()
+    const foreign = await fixture()
+    const workspace = await createWriterWorkspace({
+      integration: 'manual',
+      parent: await createRootWorkspaceContext(state.project, 'history-test'),
+      parentPhysicalRoot: state.project,
+      relativeCwd: '',
+      spawnOrdinal: 1,
+      writerId: 'history-test',
+    })
+    try {
+      const child = linkedChild(state.parent, workspace.rootWorktree)
+      const nested = linkedChild(child, join(workspace.rootWorktree, 'removed-subdirectory'))
+      const unrelated = linkedChild(foreign.parent, workspace.rootWorktree)
+      for (const removed of [false, true]) {
+        if (removed) expect(await cleanupWorkspaceArtifacts(workspace)).toBe(false)
+        const store = new SessionHistoryStore(state.parent)
+        const result = await store.execute({ action: 'list', include_children: true })
+        for (const manager of [child, nested]) {
+          expect(result.data).toContainEqual(
+            expect.objectContaining({ sessionId: manager.getSessionId() }),
+          )
+          const activity = await store.execute({
+            action: 'tool_activity',
+            session_id: manager.getSessionId(),
+          })
+          expect(JSON.stringify(activity.data)).toContain('write')
+        }
+        await expectHidden(new SessionHistoryStore(foreign.parent), unrelated)
+      }
+    } finally {
+      await cleanupWorkspaceArtifacts(workspace)
+    }
+  }, 30_000)
+
   it.each(['managed-owner', 'linked-root'])(
     'audits managed sibling descendants from a %s with a gitfile',
     async (mode) => {

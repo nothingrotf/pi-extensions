@@ -182,7 +182,10 @@ export default function hud(pi: ExtensionAPI): void {
   let railReplacementToolCallIds = new Set<string>()
   const railVoice = new RailVoice()
   let railPseudoIds = new Set<string>()
-  let persistedRailReports = new Map<string, string>()
+  const persistedRailReports = new Map<
+    string,
+    { observedStatus: RailActionReport['status']; signature: string }
+  >()
   let hiddenNarrationBlocks: HiddenTextBlocks = new Map()
   let currentHiddenNarrationBlocks: HiddenTextBlocks = new Map()
   let quietThinking = true
@@ -195,13 +198,22 @@ export default function hud(pi: ExtensionAPI): void {
     return historical?.has(contentIndex) !== true && current?.has(contentIndex) !== true
   }
   const thinkingQuiet = () => quietThinking && railEnabled
-  const persistRailReport = (report: RailActionReport) => {
+  const persistRailReport = (report: RailActionReport, checkpoint: 'stream' | 'turn-boundary') => {
+    const previous = persistedRailReports.get(report.toolCallId)
+    if (previous?.observedStatus === report.status && checkpoint === 'stream') return
     const signature = JSON.stringify(report)
-    if (persistedRailReports.get(report.toolCallId) === signature) return
-    persistedRailReports.set(report.toolCallId, signature)
+    if (previous?.signature === signature) return
+    persistedRailReports.set(report.toolCallId, {
+      observedStatus: report.status,
+      signature,
+    })
     pi.appendEntry(railStateEntryType, { report, turn: railTurn })
   }
-  const persistRailAction = (action: RailAction, parentToolCallId?: string): void => {
+  const persistRailAction = (
+    action: RailAction,
+    checkpoint: 'stream' | 'turn-boundary',
+    parentToolCallId?: string,
+  ): void => {
     if (isPseudo(action.kind)) return
     const report: RailActionReport = {
       argGlyphs: [...action.argGlyphs],
@@ -217,8 +229,10 @@ export default function hud(pi: ExtensionAPI): void {
     }
     if (action.durationMs !== undefined) report.durationMs = action.durationMs
     if (parentToolCallId !== undefined) report.parentToolCallId = parentToolCallId
-    persistRailReport(report)
-    for (const child of action.children ?? []) persistRailAction(child, action.toolCallId)
+    persistRailReport(report, checkpoint)
+    for (const child of action.children ?? []) {
+      persistRailAction(child, checkpoint, action.toolCallId)
+    }
   }
   let spacerFix: ThinkingSpacerFix | undefined
   let speakerSpacingFix: SpeakerSpacingFix | undefined
@@ -284,7 +298,7 @@ export default function hud(pi: ExtensionAPI): void {
     railVoice.reset()
     railPseudoIds = new Set<string>()
     fallbackToolCallIds = new Set<string>()
-    persistedRailReports = new Map<string, string>()
+    persistedRailReports.clear()
     restoreRailAnchors(ctx)
     requestRender?.()
   }
@@ -515,7 +529,7 @@ export default function hud(pi: ExtensionAPI): void {
     railVoice.reset()
     railPseudoIds = new Set<string>()
     fallbackToolCallIds = new Set<string>()
-    persistedRailReports = new Map<string, string>()
+    persistedRailReports.clear()
     currentHiddenNarrationBlocks = new Map()
     railTurn += 1
     railTurnPending = true
@@ -601,7 +615,7 @@ export default function hud(pi: ExtensionAPI): void {
     const action = target
       .values()
       .find((item) => item.toolCallId === targetId || item.toolCallId === toolCallId)
-    if (action !== undefined) persistRailAction(action)
+    if (action !== undefined) persistRailAction(action, 'stream')
     reconcileRailVoice()
   })
 
@@ -758,6 +772,10 @@ export default function hud(pi: ExtensionAPI): void {
         if (output.length > 0) patch.output = output
       }
       target.report(event.toolCallId, patch)
+      if (target === rail && !railTurnPending) {
+        const action = target.values().find((item) => item.toolCallId === event.toolCallId)
+        if (action !== undefined) persistRailAction(action, 'stream')
+      }
     }
     speakerSpacingFix?.markDirty()
     reconcileRailVoice()
@@ -772,7 +790,7 @@ export default function hud(pi: ExtensionAPI): void {
     liveUsageAssistantAt = undefined
     assistantUsageLines.clear()
     if (!railTurnPending) {
-      for (const action of rail.values()) persistRailAction(action)
+      for (const action of rail.values()) persistRailAction(action, 'turn-boundary')
       mergeHiddenTextBlocks(hiddenNarrationBlocks, currentHiddenNarrationBlocks)
     } else {
       rail.reset()
@@ -960,7 +978,11 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('session_shutdown', (_event, ctx) => {
+    if (agentWorking && !railTurnPending) {
+      for (const action of rail.values()) persistRailAction(action, 'turn-boundary')
+    }
     active = false
+    agentWorking = false
     generation += 1
     stop()
     if (ctx.hasUI && ctx.mode === 'tui' && footerOwned) {

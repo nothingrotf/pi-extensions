@@ -33,14 +33,16 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on her explicit go.
 - [ ] On her go, arm a `/goal` with this exact text. "<The plan path, the PR ids in order, the verification rule, who merges, and the done condition.>"
-- [ ] Read these from trunk at program start. Re-read them at every tick.
+- [ ] Read these from trunk at program start. Reload changed instructions or sections needed for a pending decision.
   - [ ] `playbooks/<execution playbook>.md` from the bundled `poteto-mode` skill.
   - [ ] `../swarm/SKILL.md` from the bundled skills.
   - [ ] The bundled `control-ui` or `control-cli` skill used by this program.
   - [ ] `playbooks/opening-a-pr.md` from the bundled `poteto-mode` skill.
   - [ ] `<each other bundled leaf skill path the program uses>`.
 - [ ] Arm the 30-minute audit tick. Use the installed `loop` skill with a watcher and heartbeat fallback. Never leave the cadence to memory.
-- [ ] Use this tick prompt, verbatim. "Re-read the execution playbook from trunk and the armed /goal. Audit the operation against both and fix drift in this tick. Probe every active lane and judge progress by side effects only. Stand down a stuck lane and dispatch its replacement now. Then send the operator a status message, whether or not anything changed, with the queue table of PR, owner, state, and head SHA, the verdicts since the last tick, what merged, open operator gates, and blockers."
+- [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the armed /goal and execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint and send a status message with changed verdicts, queue states, operator gates, and blockers."
+- [ ] Use `TaskControl.wait` when no independent work remains. Handle completion without waiting for the audit tick.
+- [ ] Follow `../references/delivery-operations.md` for reconstruction, runtime preflight, checkpoints, and stalled corrections.
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.
 
 ### Spawn owners
@@ -65,7 +67,9 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Verdict and merge, for every PR
 
 - [ ] At the merge-ready head SHA, run the swarm per the bundled `../swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. One audit lane that reads the diff and the receipts and distrusts the PR body.
-- [ ] Clean only when every lane is `PASS`. Findings go back to the owner. A new head gets a fresh swarm and a fresh verdict.
+- [ ] Clean only when every required lane is `PASS`. Return findings to the owner with the affected evidence.
+- [ ] For a changed head, invalidate affected evidence through `../references/delivery-contract.md` and issue a complete current verdict.
+- [ ] Reuse unaffected passing evidence only with explicit identity and applicability records. Preserve repository-required final gates.
 - [ ] <The merge or append rule from the execution playbook, with the patch-id rule from `playbooks/shipping.md`.>
 
 ### Boot recipe, for every live lane

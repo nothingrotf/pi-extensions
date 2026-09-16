@@ -4,50 +4,73 @@ import { join } from 'node:path'
 
 import type { CapabilityModelPolicy, RoleModelPolicyEntry } from '@nothingrotf/subagent'
 
+export type PstackDeliveryClass = 'implementation' | 'managed-support' | 'none'
+
 interface PstackRole {
   role: string
   panel: boolean
   aliases: readonly string[]
+  delivery: PstackDeliveryClass
   fallbackRoles?: readonly string[]
 }
 
 export const pstackRoles: readonly PstackRole[] = [
-  { role: 'feature', panel: false, aliases: [] },
-  { role: 'refactoring', panel: false, aliases: [] },
-  { role: 'bug-fix', panel: false, aliases: [] },
-  { role: 'perf-issue', panel: false, aliases: [] },
-  { role: 'hillclimb', panel: false, aliases: [] },
-  { role: 'judgment and prose', panel: false, aliases: [] },
+  { role: 'feature', panel: false, aliases: [], delivery: 'implementation' },
+  { role: 'refactoring', panel: false, aliases: [], delivery: 'implementation' },
+  { role: 'bug-fix', panel: false, aliases: [], delivery: 'implementation' },
+  { role: 'perf-issue', panel: false, aliases: [], delivery: 'implementation' },
+  { role: 'hillclimb', panel: false, aliases: [], delivery: 'implementation' },
+  { role: 'judgment and prose', panel: false, aliases: [], delivery: 'none' },
   {
     role: 'code review',
     panel: true,
     aliases: [],
+    delivery: 'managed-support',
     fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
   },
   {
     role: 'runtime verification',
     panel: true,
     aliases: [],
+    delivery: 'managed-support',
     fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
   },
-  { role: 'publication', panel: false, aliases: [], fallbackRoles: ['judgment and prose'] },
-  { role: 'hardest tasks', panel: false, aliases: [] },
-  { role: 'how explorer', panel: false, aliases: [] },
-  { role: 'how explainer', panel: false, aliases: [] },
-  { role: 'why investigators', panel: false, aliases: [] },
-  { role: 'why synthesizer', panel: false, aliases: [] },
-  { role: 'reflect tooling', panel: false, aliases: [] },
-  { role: 'reflect judgment', panel: false, aliases: [] },
-  { role: 'reflect divergent', panel: false, aliases: ['divergent'] },
-  { role: 'reflect synthesizer', panel: false, aliases: ['synthesizer'] },
-  { role: 'arena runners', panel: true, aliases: [] },
-  { role: 'arena cross-judge pool', panel: true, aliases: [] },
-  { role: 'swarm workers', panel: false, aliases: [] },
-  { role: 'architect runners', panel: true, aliases: [] },
-  { role: 'interrogate reviewers', panel: true, aliases: [] },
+  {
+    role: 'publication',
+    panel: false,
+    aliases: [],
+    delivery: 'managed-support',
+    fallbackRoles: ['judgment and prose'],
+  },
+  { role: 'hardest tasks', panel: false, aliases: [], delivery: 'managed-support' },
+  { role: 'how explorer', panel: false, aliases: [], delivery: 'none' },
+  { role: 'how explainer', panel: false, aliases: [], delivery: 'none' },
+  { role: 'why investigators', panel: false, aliases: [], delivery: 'none' },
+  { role: 'why synthesizer', panel: false, aliases: [], delivery: 'none' },
+  { role: 'reflect tooling', panel: false, aliases: [], delivery: 'none' },
+  { role: 'reflect judgment', panel: false, aliases: [], delivery: 'none' },
+  {
+    role: 'reflect divergent',
+    panel: false,
+    aliases: ['divergent'],
+    delivery: 'none',
+  },
+  {
+    role: 'reflect synthesizer',
+    panel: false,
+    aliases: ['synthesizer'],
+    delivery: 'none',
+  },
+  { role: 'arena runners', panel: true, aliases: [], delivery: 'none' },
+  { role: 'arena cross-judge pool', panel: true, aliases: [], delivery: 'none' },
+  { role: 'swarm workers', panel: false, aliases: [], delivery: 'none' },
+  { role: 'architect runners', panel: true, aliases: [], delivery: 'none' },
+  { role: 'interrogate reviewers', panel: true, aliases: [], delivery: 'none' },
 ]
 
-const legacyPstackRoles: readonly PstackRole[] = [{ role: 'how critics', panel: true, aliases: [] }]
+const legacyPstackRoles: readonly PstackRole[] = [
+  { role: 'how critics', panel: true, aliases: [], delivery: 'none' },
+]
 
 export interface PstackModelPolicyOptions {
   modelPolicyPath?: string

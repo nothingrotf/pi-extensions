@@ -8,6 +8,8 @@ import { Value } from 'typebox/value'
 
 import {
   type ArtifactRef,
+  type AttemptEvidence,
+  AttemptEvidenceSchema,
   type GateDefinition,
   type GateResult,
   decodeJsonValue,
@@ -150,6 +152,15 @@ function parseSchema(value: JsonValue): ParsedSchema {
     throw new Error('The output schema items keyword requires array type.')
   }
   const items = itemsValue === undefined ? undefined : parseSchema(itemsValue)
+  if (
+    typeValue === 'object' &&
+    additionalValue === false &&
+    [...required].some((name) => !properties.has(name))
+  ) {
+    throw new Error(
+      'The output schema requires a property that its additionalProperties policy forbids.',
+    )
+  }
   const parsed: ParsedSchema = {
     additionalProperties: additionalValue !== false,
     kind: 'typed',
@@ -158,6 +169,13 @@ function parseSchema(value: JsonValue): ParsedSchema {
     schemaType: typeValue,
   }
   if (items !== undefined) parsed.items = items
+  const enumConstraint = constraints.find((constraint) => constraint.kind === 'enum')
+  if (
+    enumConstraint?.kind === 'enum' &&
+    !enumConstraint.values.some((candidate) => validateParsed(parsed, candidate, '#') === undefined)
+  ) {
+    throw new Error('The output schema enum contradicts its type constraint.')
+  }
   constraints.push(parsed)
   return constraints.length === 1 ? parsed : { kind: 'all', schemas: constraints }
 }
@@ -244,8 +262,20 @@ function validateParsed(schema: ParsedSchema, value: JsonValue, path: string): s
   return isJsonNumber(value) && Number.isFinite(value) ? undefined : `${path} must be a number.`
 }
 
+function schemaCanMatch(schema: ParsedSchema): boolean {
+  if (schema.kind === 'boolean') return schema.value
+  if (schema.kind === 'all') return schema.schemas.every(schemaCanMatch)
+  if (schema.kind !== 'typed' || schema.schemaType !== 'object') return true
+  return [...schema.required].every((name) => {
+    const property = schema.properties.get(name)
+    return property === undefined || schemaCanMatch(property)
+  })
+}
+
 export function validateOutputSchema(schema: JsonValue): void {
-  parseSchema(schema)
+  if (!schemaCanMatch(parseSchema(schema))) {
+    throw new Error('The output schema rejects every possible output.')
+  }
 }
 
 function stripJsonFence(output: string): string {
@@ -271,7 +301,19 @@ export function resolveStructuredOutput(
       status: 'unavailable',
     }
   }
-  const validationError = validateParsed(parseSchema(schema), data, '#')
+  let parsed: ParsedSchema
+  try {
+    parsed = parseSchema(schema)
+  } catch (error) {
+    return {
+      data,
+      error: error instanceof Error ? error.message : String(error),
+      mode,
+      source: 'caller',
+      status: 'invalid',
+    }
+  }
+  const validationError = validateParsed(parsed, data, '#')
   if (validationError === undefined) {
     return { data, mode, source: 'caller', status: 'valid' }
   }
@@ -345,6 +387,39 @@ export function evaluateGates(
   return gates.map((gate) => evaluateGate(gate, status, structuredOutput, artifact))
 }
 
+async function publishArtifact(options: {
+  attempt: number
+  content: string
+  extension: string
+  mediaType: string
+  runId: string
+  sessionFile: string
+  suffix: string
+  taskId: string
+}): Promise<ArtifactRef> {
+  const directory = join(dirname(options.sessionFile), 'subagent-artifacts')
+  await mkdir(directory, { recursive: true })
+  const id = `${options.runId}-${options.taskId}-attempt-${options.attempt}-${randomUUID()}-${options.suffix}`
+  const destination = join(directory, `${id}.${options.extension}`)
+  const temporary = join(directory, `.${id}-${randomUUID()}.tmp`)
+  await writeFile(temporary, options.content, 'utf8')
+  await rename(temporary, destination)
+  const metadata = await stat(destination)
+  const byteLength = Buffer.byteLength(options.content, 'utf8')
+  if (metadata.size !== byteLength) throw new Error('The artifact byte count does not match.')
+  return {
+    attempt: options.attempt,
+    byteLength,
+    id,
+    lineCount: options.content.length === 0 ? 0 : options.content.split('\n').length,
+    mediaType: options.mediaType,
+    runId: options.runId,
+    sha256: createHash('sha256').update(options.content).digest('hex'),
+    taskId: options.taskId,
+    uri: pathToFileURL(destination).href,
+  }
+}
+
 export async function publishOutputArtifact(options: {
   attempt: number
   output: string
@@ -352,28 +427,34 @@ export async function publishOutputArtifact(options: {
   sessionFile: string
   taskId: string
 }): Promise<ArtifactRef> {
-  const directory = join(dirname(options.sessionFile), 'subagent-artifacts')
-  await mkdir(directory, { recursive: true })
-  const id = `${options.runId}-${options.taskId}-attempt-${options.attempt}-${randomUUID()}-output`
-  const destination = join(directory, `${id}.md`)
-  const temporary = join(directory, `.${id}-${randomUUID()}.tmp`)
-  await writeFile(temporary, options.output, 'utf8')
-  await rename(temporary, destination)
-  const metadata = await stat(destination)
-  const byteLength = Buffer.byteLength(options.output, 'utf8')
-  if (metadata.size !== byteLength)
-    throw new Error('The output artifact byte count does not match.')
-  return {
+  return publishArtifact({
     attempt: options.attempt,
-    byteLength,
-    id,
-    lineCount: options.output.length === 0 ? 0 : options.output.split('\n').length,
+    content: options.output,
+    extension: 'md',
     mediaType: 'text/markdown',
     runId: options.runId,
-    sha256: createHash('sha256').update(options.output).digest('hex'),
+    sessionFile: options.sessionFile,
+    suffix: 'output',
     taskId: options.taskId,
-    uri: pathToFileURL(destination).href,
-  }
+  })
+}
+
+export async function publishAttemptEvidence(options: {
+  evidence: AttemptEvidence
+  runId: string
+  sessionFile: string
+  taskId: string
+}): Promise<ArtifactRef> {
+  return publishArtifact({
+    attempt: options.evidence.attempt,
+    content: JSON.stringify(options.evidence),
+    extension: 'json',
+    mediaType: 'application/json',
+    runId: options.runId,
+    sessionFile: options.sessionFile,
+    suffix: 'evidence',
+    taskId: options.taskId,
+  })
 }
 
 export async function readArtifact(artifact: ArtifactRef): Promise<string> {
@@ -382,4 +463,11 @@ export async function readArtifact(artifact: ArtifactRef): Promise<string> {
   if (digest !== artifact.sha256)
     throw new Error(`Artifact "${artifact.id}" failed digest verification.`)
   return content
+}
+
+export async function readAttemptEvidence(artifact: ArtifactRef): Promise<AttemptEvidence> {
+  if (artifact.mediaType !== 'application/json') {
+    throw new Error(`Artifact "${artifact.id}" is not Task evidence.`)
+  }
+  return Value.Decode(AttemptEvidenceSchema, JSON.parse(await readArtifact(artifact)))
 }
