@@ -36,18 +36,20 @@ export function resolveTools(
   requested: readonly string[] | undefined,
   readonly: boolean,
   capabilityTools: readonly string[] = [],
+  overrides: readonly string[] = [],
 ): string[] {
   const available = new Set(PUBLIC_TOOLS)
+  const replaced = new Set(overrides)
   for (const name of capabilityTools) {
     if (PRIVATE_TOOLS.has(name)) {
       throw new Error(`Capability tool "${name}" is private and cannot be requested.`)
     }
-    if (available.has(name)) {
+    if (available.has(name) && !replaced.has(name)) {
       throw new Error(`Capability tool "${name}" conflicts with an existing tool.`)
     }
     available.add(name)
   }
-  const allowed = role.tools === undefined ? [...available] : [...role.tools]
+  const allowed = role.tools === undefined ? [...available] : [...new Set(role.tools)]
   const selected = requested === undefined ? allowed : [...requested]
   const seen = new Set<string>()
   for (const name of selected) {

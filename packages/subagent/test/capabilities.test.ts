@@ -282,6 +282,77 @@ describe('capability profiles', () => {
       registry.registerProfile({ id: 'too-deep', nested: { maxDepth: 17 }, registrations: [] }),
     ).toThrow('from 1 through 16')
   })
+
+  it('resolves an optional registration only while its provider is installed', () => {
+    const registry = new CapabilityRegistry()
+    registry.registerCapability({ extensions: [], id: 'plan', tools: [tool()], version: '1' })
+    registry.registerProfile({
+      id: 'owner',
+      optionalRegistrations: ['extra'],
+      registrations: ['plan'],
+    })
+
+    expect(registry.resolve('owner').tools).toEqual(['planning'])
+
+    registry.registerCapability({
+      extensions: [],
+      id: 'extra',
+      tools: [tool('inspect')],
+      version: '1',
+    })
+
+    expect(registry.resolve('owner').tools).toEqual(['planning', 'inspect'])
+    expect(registry.resolve('owner').contract.registrations.map((entry) => entry.id)).toEqual([
+      'plan',
+      'extra',
+    ])
+  })
+
+  it('rejects a registration listed as both required and optional', () => {
+    const registry = new CapabilityRegistry()
+
+    expect(() =>
+      registry.registerProfile({
+        id: 'owner',
+        optionalRegistrations: ['plan'],
+        registrations: ['plan'],
+      }),
+    ).toThrow('occurs more than once')
+  })
+
+  it('reports declared built-in overrides and rejects undeclared ones', () => {
+    const registry = new CapabilityRegistry()
+    registry.registerCapability({
+      extensions: [],
+      id: 'files',
+      overrides: ['read'],
+      readonlyTools: ['read'],
+      tools: [tool('read')],
+      version: '1',
+    })
+    registry.registerProfile({ id: 'owner', registrations: ['files'] })
+
+    expect(registry.resolve('owner').overrides).toEqual(['read'])
+    expect(registry.resolve('owner', true).tools).toEqual(['read'])
+    expect(() =>
+      registry.registerCapability({
+        extensions: [],
+        id: 'unknown-override',
+        overrides: ['read'],
+        tools: [tool('planning')],
+        version: '1',
+      }),
+    ).toThrow('is not a registered tool')
+    expect(() =>
+      registry.registerCapability({
+        extensions: [],
+        id: 'mutable-override',
+        overrides: ['write'],
+        tools: [tool('write')],
+        version: '1',
+      }),
+    ).toThrow('not an overridable built-in tool')
+  })
 })
 
 describe('configured model enforcement', () => {

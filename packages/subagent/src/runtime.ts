@@ -2337,6 +2337,7 @@ export class SubagentRuntime {
           input.tools,
           contract.readonly,
           capabilities.tools,
+          capabilities.overrides,
         )
         if (
           tools.length !== contract.tools.length ||
@@ -2420,7 +2421,13 @@ export class SubagentRuntime {
       discovered === undefined && role.tools !== undefined
         ? { ...role, tools: [...role.tools, ...capabilities.tools] }
         : role
-    let tools = resolveTools(toolPolicy, input.tools, readonly, capabilities.tools)
+    let tools = resolveTools(
+      toolPolicy,
+      input.tools,
+      readonly,
+      capabilities.tools,
+      capabilities.overrides,
+    )
     if (attenuation !== undefined) {
       const allowedTools = new Set(attenuation.tools)
       if (input.tools?.some((tool) => !allowedTools.has(tool)) === true) {

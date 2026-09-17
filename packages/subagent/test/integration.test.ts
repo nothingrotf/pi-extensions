@@ -18,6 +18,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import {
   createAgentSession,
   CustomMessageComponent,
+  defineTool,
   initTheme,
   DefaultResourceLoader,
   type ExtensionAPI,
@@ -441,6 +442,23 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
         .sort()
         .join(',') ?? ''
     return assistant(model, [{ text: `tools:${tools}`, type: 'text' }], 'stop')
+  }
+  if (prompt === 'READ_THROUGH_CAPABILITY') {
+    const read = toolResultText(context, 'read')
+    if (read !== undefined)
+      return assistant(model, [{ text: `read:${read}`, type: 'text' }], 'stop')
+    return assistant(
+      model,
+      [
+        {
+          arguments: { path: 'receipt.txt' },
+          id: `read-through-capability-${Date.now()}`,
+          name: 'read',
+          type: 'toolCall',
+        },
+      ],
+      'toolUse',
+    )
   }
   if (prompt === 'ASK_PARENT' || prompt === 'ASK_PARENT_BLOCK' || prompt === 'ASK_PARENT_SECRET') {
     const answer = toolResultText(context, 'ask_parent')
@@ -2744,6 +2762,52 @@ describe('subagent Task integration', () => {
       })
       expect(result).toContain('Task cwd targets Git metadata')
       expect(harness.runtime.listSnapshots()).toHaveLength(0)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('replaces a built-in child tool with a declared capability override', async () => {
+    const harness = await createHarness()
+    try {
+      await writeFile(join(harness.dir, 'receipt.txt'), 'native content\n', 'utf8')
+      const overridingRead = defineTool({
+        description: 'Read a file with a bounded window.',
+        async execute() {
+          return { content: [{ text: 'bounded read output', type: 'text' }], details: {} }
+        },
+        label: 'read',
+        name: 'read',
+        parameters: Type.Object({ path: Type.String() }),
+      })
+      harness.runtime.registerCapability({
+        extensions: [],
+        id: 'file-access',
+        overrides: ['read'],
+        readonlyTools: ['read'],
+        tools: [overridingRead],
+        version: '1',
+      })
+      harness.runtime.registerCapabilityProfiles([
+        { id: 'file-access-profile', optionalRegistrations: ['absent'], registrations: [] },
+        { id: 'file-access-active', optionalRegistrations: ['file-access'], registrations: [] },
+      ])
+
+      const withoutProvider = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'file-access-profile',
+        prompt: 'READ_THROUGH_CAPABILITY',
+        readonly: true,
+      })
+      const withProvider = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'file-access-active',
+        prompt: 'READ_THROUGH_CAPABILITY',
+        readonly: true,
+      })
+
+      expect(withoutProvider).toContain('native content')
+      expect(withProvider).toContain('bounded read output')
     } finally {
       await harness.close()
     }

@@ -46,8 +46,17 @@ describe('pstack extension', () => {
     expect(instance.capabilityRegistrations).toEqual([
       {
         profiles: [
-          { id: 'pstack-leaf', registrations: ['pstack-planning'] },
-          { id: 'pstack-nested', nested: { maxDepth: 3 }, registrations: ['pstack-planning'] },
+          {
+            id: 'pstack-leaf',
+            optionalRegistrations: ['filetools', 'tgrep'],
+            registrations: ['pstack-planning'],
+          },
+          {
+            id: 'pstack-nested',
+            nested: { maxDepth: 3 },
+            optionalRegistrations: ['filetools', 'tgrep'],
+            registrations: ['pstack-planning'],
+          },
         ],
         sourceId: '@nothingrotf/pstack',
       },

@@ -56,6 +56,18 @@
         "typebox": "*",
       },
     },
+    "packages/filetools": {
+      "name": "@nothingrotf/filetools",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
     "packages/goal": {
       "name": "@nothingrotf/goal",
       "version": "0.3.0",
@@ -407,6 +419,8 @@
     "@nothingrotf/compact": ["@nothingrotf/compact@workspace:packages/compact"],
 
     "@nothingrotf/fast-mode": ["@nothingrotf/fast-mode@workspace:packages/fast-mode"],
+
+    "@nothingrotf/filetools": ["@nothingrotf/filetools@workspace:packages/filetools"],
 
     "@nothingrotf/goal": ["@nothingrotf/goal@workspace:packages/goal"],
 

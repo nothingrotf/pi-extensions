@@ -69,6 +69,8 @@ export interface CapabilityRegistration {
   createTools?: () => readonly CapabilityToolDefinition[]
   extensions: readonly InlineExtension[]
   id: string
+  /** Built-in tool names this registration intentionally replaces in a child session. */
+  overrides?: readonly string[]
   readonlyTools?: readonly string[]
   systemPrompt?: string
   terminalValidation?: TerminalValidationPolicy
@@ -79,12 +81,15 @@ export interface CapabilityRegistration {
 export interface CapabilityProfile {
   id: string
   nested?: { maxDepth: number }
+  /** Registrations included only when their provider is installed. */
+  optionalRegistrations?: readonly string[]
   registrations: readonly string[]
 }
 
 export interface ResolvedCapabilities {
   modelPolicies: readonly CapabilityModelPolicy[]
   contract: CapabilityContract
+  overrides: readonly string[]
   roleToolRequirements: readonly RoleToolRequirement[]
   extensions: readonly InlineExtension[]
   terminalValidation?: TerminalValidationPolicy
@@ -123,6 +128,9 @@ const CapabilityProfileSchema = Type.Object(
         { maxDepth: Type.Integer({ maximum: MAX_NESTED_DEPTH, minimum: 1 }) },
         { additionalProperties: false },
       ),
+    ),
+    optionalRegistrations: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), { maxItems: 64, uniqueItems: true }),
     ),
     registrations: Type.Array(Type.String({ minLength: 1 }), {
       maxItems: 64,
@@ -292,6 +300,7 @@ const CapabilityRegistrationSchema = Type.Object(
     extensions: Type.Array(InlineExtensionSchema, { maxItems: 64 }),
     id: Type.String({ maxLength: 128, minLength: 1 }),
     modelPolicy: Type.Optional(CapabilityModelPolicySchema),
+    overrides: Type.Optional(Type.Array(Type.String(), { maxItems: 16, uniqueItems: true })),
     readonlyTools: Type.Optional(Type.Array(Type.String(), { maxItems: 64, uniqueItems: true })),
     roleToolRequirements: Type.Optional(Type.Array(RoleToolRequirementSchema, { maxItems: 128 })),
     systemPrompt: Type.Optional(Type.String({ maxLength: 256 * 1024 })),
@@ -366,6 +375,7 @@ function validateToolContract(
 }
 
 const KNOWN_MUTABLE_TOOLS = new Set(['bash', 'powershell', 'edit', 'write'])
+const OVERRIDABLE_TOOLS = new Set(['read', 'grep', 'find', 'ls'])
 const PRIVATE_TOOLS = new Set([
   'Task',
   'TaskControl',
@@ -404,6 +414,7 @@ export class CapabilityRegistry {
             extensions: entry.extensions.map((extension) => ({
               name: extension.name,
             })),
+            overrides: entry.overrides ?? [],
             readonlyTools: entry.readonlyTools ?? [],
             roleToolRequirements: entry.roleToolRequirements ?? [],
             terminalValidation:
@@ -477,6 +488,14 @@ export class CapabilityRegistry {
         }
       }
     }
+    for (const name of registration.overrides ?? []) {
+      if (!names.has(name)) {
+        throw new Error(`Capability override "${name}" is not a registered tool.`)
+      }
+      if (!OVERRIDABLE_TOOLS.has(name)) {
+        throw new Error(`Capability override "${name}" is not an overridable built-in tool.`)
+      }
+    }
     const readonlyTools = new Set<string>()
     for (const name of registration.readonlyTools ?? []) {
       if (!names.has(name)) {
@@ -493,6 +512,7 @@ export class CapabilityRegistry {
     const stored: CapabilityRegistration = {
       extensions: [...registration.extensions],
       id: registration.id,
+      overrides: [...(registration.overrides ?? [])],
       readonlyTools: [...readonlyTools],
       roleToolRequirements: (registration.roleToolRequirements ?? []).map((requirement) => ({
         ...requirement,
@@ -547,7 +567,10 @@ export class CapabilityRegistry {
         )
       }
       const registrations = new Set<string>()
-      for (const registration of profile.registrations) {
+      for (const registration of [
+        ...profile.registrations,
+        ...(profile.optionalRegistrations ?? []),
+      ]) {
         if (registrations.has(registration)) {
           throw new Error(
             `Capability registration "${registration}" occurs more than once in profile "${profile.id}".`,
@@ -558,6 +581,9 @@ export class CapabilityRegistry {
       const stored: CapabilityProfile = {
         id: profile.id,
         registrations: [...profile.registrations],
+      }
+      if (profile.optionalRegistrations !== undefined) {
+        stored.optionalRegistrations = [...profile.optionalRegistrations]
       }
       if (profile.nested !== undefined) stored.nested = { maxDepth: profile.nested.maxDepth }
       staged.set(profile.id, stored)
@@ -577,6 +603,7 @@ export class CapabilityRegistry {
           tools: [],
         },
         extensions: [],
+        overrides: [],
         roleToolRequirements: [],
         tools: [],
       }
@@ -587,10 +614,14 @@ export class CapabilityRegistry {
     const extensions: InlineExtension[] = []
     const tools: string[] = []
     const registrations: { id: string; version: string }[] = []
+    const overrides: string[] = []
     const requirements = new Map<string, Set<string>>()
     const names = new Set<string>()
     let terminalValidation: TerminalValidationPolicy | undefined
-    for (const registrationId of profile.registrations) {
+    const optional = (profile.optionalRegistrations ?? []).filter((id) =>
+      this.registrations.has(id),
+    )
+    for (const registrationId of [...profile.registrations, ...optional]) {
       const registration = this.registrations.get(registrationId)
       if (registration === undefined) {
         throw new Error(`Capability registration "${registrationId}" does not exist.`)
@@ -611,6 +642,7 @@ export class CapabilityRegistry {
         requirements.set(requirement.role, tools)
       }
       registrations.push({ id: registration.id, version: registration.version })
+      overrides.push(...(registration.overrides ?? []))
       if (!readonly) extensions.push(...registration.extensions)
       const definitions = registration.tools
       if (definitions.length > 0 || registration.systemPrompt !== undefined) {
@@ -651,7 +683,7 @@ export class CapabilityRegistry {
           tools: [...tools].sort(),
         }
         if (
-          profile.registrations.some((id) =>
+          [...profile.registrations, ...optional].some((id) =>
             this.registrations
               .get(id)
               ?.roleToolRequirements?.some(
@@ -677,6 +709,7 @@ export class CapabilityRegistry {
         tools,
       },
       extensions,
+      overrides,
       roleToolRequirements,
       tools,
     }
