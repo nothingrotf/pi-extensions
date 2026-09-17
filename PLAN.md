@@ -215,6 +215,35 @@ Reopen this decision only when a measured session shows single-command bash turn
 - I17, phase compaction.
 - I18, reasoning effort tuning.
 
+## Measured outcome
+
+Measured on 2026-09-17 with `session-metrics-cli`, over the complete lifecycle of each issue.
+A lifecycle is every worker session bound to that issue, across coordinator sessions.
+
+| Issue   | Stack  | Sessions | Turns | Generation |  Cost | patch/files | edit |
+| ------- | ------ | -------: | ----: | ---------: | ----: | ----------: | ---: |
+| SPT-189 | before |        6 |   275 |   53.2 min | 26.89 |         1/1 |   63 |
+| SPT-193 | before |        3 |   263 |   49.3 min | 26.96 |         0/0 |   79 |
+| SPT-161 | after  |        7 |   173 |   34.0 min | 18.27 |       18/58 |    5 |
+| SPT-197 | after  |        5 |   193 |   39.4 min | 21.91 |       17/38 |   20 |
+
+Averages move from 269 turns, 51.3 min, and 26.93 USD to 183 turns, 36.7 min, and 20.09 USD.
+That is 32% fewer turns, 28% less generation, and 25% less cost per issue.
+Normalized by files touched, 143 before and 121 after, the reduction is 20% of turns, 15% of
+generation, and 12% of cost per file.
+
+The measurement holds four qualifications:
+
+- Two issues per arm. The direction is consistent, the sample is small.
+- SPT-191 is excluded as contaminated: it started before the new tools and continued after them.
+- Coordinator time is shared across issues and is not attributed here.
+- Both later issues carry an extra static `code review` worker, about 25 turns and 6 USD each, that
+  the earlier issues did not have. The reduction happens despite that added review.
+
+Session health over the same delivery, 837 tool results: 28 dispatches with 28 results and no lost
+dispatch, 4 waits with no expiry, no terminal rejection, and 47 errors. Five of those errors were
+tool ergonomics, now fixed, and five were managed delivery guards failing closed by design.
+
 ## Invariants
 
 No item may reduce executed proof, criterion coverage, independent acceptance, or finding severity.
