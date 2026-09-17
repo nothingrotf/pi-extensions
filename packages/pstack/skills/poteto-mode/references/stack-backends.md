@@ -60,6 +60,11 @@ Always pass `--remote <name>` to supported `gh stack` commands when multiple rem
 
 Always use `gh stack view --json`. The command without `--json` opens an interactive interface.
 
+Read the existing stack with `gh stack view --json` before any mutating command.
+Initialize only a branch that no stack already contains, and give the accepted parent branch as the base.
+`gh stack init` exits with code 5 when a listed branch already belongs to a stack, and a second attempt fails the same way.
+When the branch is already tracked, link it to its parent and submit instead of initializing again.
+
 Always use `gh stack submit --auto`. The command without `--auto` can prompt for titles.
 
 ## Frontier
