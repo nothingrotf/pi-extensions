@@ -13,6 +13,7 @@ const eligibleTools = new Set([
   'editor_read',
   'genome_impact',
   'multi_edit',
+  'patch',
   'read',
   'refactor',
   'structural_edit',

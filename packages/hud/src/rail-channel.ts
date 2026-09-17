@@ -106,4 +106,4 @@ export function decodeRailAction<Input>(data: Input): RailActionReport | undefin
   return data
 }
 
-export const builtInRailToolNames = ['bash', 'edit', 'find', 'ls', 'read', 'write']
+export const builtInRailToolNames = ['bash', 'edit', 'find', 'ls', 'write']

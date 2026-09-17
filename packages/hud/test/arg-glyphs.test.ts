@@ -79,6 +79,30 @@ describe('argumentGlyphs', () => {
     expect(patch.argGlyphs).toEqual(['\uE628'])
   })
 
+  test('renders a provider patch call with its own label, detail, and glyphs', () => {
+    setIconMode('nerd')
+    const patch = railPatchForCall(
+      {
+        arguments: { files: [{ path: 'src/index.ts' }, { path: 'docs/notes.md' }] },
+        toolName: 'patch',
+      },
+      '',
+    )
+    expect(patch.doneLabel).toBe('Patched')
+    expect(patch.runningLabel).toBe('Patching')
+    expect(patch.category).toBe('edit')
+    expect(patch.detail).toBe('src/index.ts +1')
+    expect(patch.argGlyphs).toEqual(['\uE628', '\uE73E'])
+  })
+
+  test('renders a provider read call through the fallback metadata', () => {
+    setIconMode('nerd')
+    const patch = railPatchForCall({ arguments: { path: 'src/index.ts' }, toolName: 'read' }, '')
+    expect(patch.doneLabel).toBe('Read')
+    expect(patch.runningLabel).toBe('Reading')
+    expect(patch.detail).toBe('src/index.ts')
+  })
+
   test('emits nothing without Nerd Font mode', () => {
     setIconMode('ascii')
     expect(argumentGlyphs('read', { path: 'src/index.ts' })).toEqual([])

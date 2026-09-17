@@ -49,6 +49,7 @@ Read the [package documentation](packages/tgrep/README.md) for setup, limits, an
 ## File access
 
 The `filetools` package replaces Pi's native `read` tool and adds a `patch` tool.
+The HUD leaves both registrations to this provider and renders their calls through the fallback action rail.
 A large file read without an explicit window returns a bounded head plus a map of its declarations.
 The `patch` tool applies edits across many files in one all-or-nothing call.
 Subagents receive both tools through the optional `filetools` capability.
