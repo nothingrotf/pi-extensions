@@ -21,7 +21,15 @@ A file larger than 20 KB read without an explicit window returns:
 - a map of declarations, headings, and methods with their line numbers.
 
 The map lists at most 60 distinct entries and collapses repeated lines, so a generated file stays readable.
-The notice names the next step, so the model requests the exact window it needs instead of the whole file.
+The notice names the exact continuation offset, so the model requests the window it needs instead of the whole file.
+
+Two bounded extensions reduce the number of calls:
+
+- `paths` reads up to 32 files in one call, in order, under a 60,000 character budget. The result names any file left for a separate call.
+- `json` selects part of a JSON document before any truncation, for example `.report.verdict`, `.items[0:10]`, or `.items.length`.
+
+The selector language stays small on purpose. A field, an index, a `start:end` slice, a quoted key, and `length` are supported. Anything else fails instead of returning a wrong value.
+Incompatible combinations fail too: `path` with `paths`, `paths` with a window, and `json` with a window.
 
 ### `patch`
 
@@ -42,6 +50,11 @@ A patch that fails to match uniquely writes nothing, so a partial edit never rea
 
 The result reports the touched files, the applied edit count, and the line delta per file.
 
+Two guards protect the workspace:
+
+- A structural check reports an unbalanced delimiter with its line, and invalid JSON, right in the patch result. It skips strings, templates, comments, and regular expressions, and it never replaces a type check.
+- Content or replacement text that carries a bounded read marker is refused, because writing a bounded read back to disk deletes every line the read omitted.
+
 ## System prompt
 
 Both tools contribute a snippet and guidelines to the session system prompt, in the root session and in every child that receives the capability:
@@ -53,8 +66,9 @@ Available tools:
 Guidelines:
 - Use read to examine files instead of cat or sed.
 - Search before reading, and read a bounded window of a large file.
-- After a bounded head and file map, request the exact window with offset and limit.
-- Read a whole file only when the work depends on its full content.
+- After a bounded head and file map, continue at the offset the result names.
+- Read several files in one call with paths instead of one read call per file.
+- Select fields of a large JSON file with json instead of reading the whole document.
 - Use patch to change several files in one call instead of one edit call per file.
 - Give each file either exact-match edits or full content, never both.
 - A patch writes nothing when any edit fails to match exactly once.

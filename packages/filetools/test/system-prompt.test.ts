@@ -68,7 +68,13 @@ test('contributes its tools and guidelines to the session system prompt', async 
       )
       expect(prompt).toContain('A patch writes nothing when any edit fails to match exactly once.')
       expect(prompt).toContain(
-        'After a bounded head and file map, request the exact window with offset and limit.',
+        'After a bounded head and file map, continue at the offset the result names.',
+      )
+      expect(prompt).toContain(
+        'Read several files in one call with paths instead of one read call per file.',
+      )
+      expect(prompt).toContain(
+        'Select fields of a large JSON file with json instead of reading the whole document.',
       )
       expect(prompt).toContain('Use read to examine files instead of cat or sed.')
     } finally {

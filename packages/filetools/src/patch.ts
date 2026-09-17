@@ -1,9 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type, type Static } from 'typebox'
+
+import { readArtifact } from './artifacts.ts'
+import { structureProblem } from './structure.ts'
 
 const EditSchema = Type.Object(
   {
@@ -53,6 +56,7 @@ export interface PatchFileResult {
   edits: number
   lineDelta: number
   path: string
+  warning?: string
 }
 
 export interface PatchPlan {
@@ -73,6 +77,12 @@ function applyEdits(
 ): string {
   let content = original
   for (const [index, edit] of edits.entries()) {
+    const artifact = readArtifact(edit.newText)
+    if (artifact !== undefined) {
+      throw new PatchError(
+        `Edit ${index + 1} for ${path} carries the bounded read marker "${artifact}". Replacement text must be real file content.`,
+      )
+    }
     const first = content.indexOf(edit.oldText)
     if (first < 0) {
       throw new PatchError(
@@ -87,6 +97,11 @@ function applyEdits(
     content = `${content.slice(0, first)}${edit.newText}${content.slice(first + edit.oldText.length)}`
   }
   return content
+}
+
+function structureWarning(path: string, content: string): string | undefined {
+  const problem = structureProblem(content, extname(path))
+  return problem === undefined ? undefined : `${problem.kind}: ${problem.message}`
 }
 
 function lineCount(content: string): number {
@@ -124,29 +139,33 @@ export async function planPatch(input: PatchInput, cwd: string): Promise<PatchPl
         throw new PatchError(`File ${file.path} does not exist. Use content to create it.`)
       }
       const content = applyEdits(file.path, original, file.edits)
-      files.push({
-        absolutePath: target,
-        content,
-        result: {
-          created: false,
-          edits: file.edits.length,
-          lineDelta: lineCount(content) - lineCount(original),
-          path: file.path,
-        },
-      })
+      const result: PatchFileResult = {
+        created: false,
+        edits: file.edits.length,
+        lineDelta: lineCount(content) - lineCount(original),
+        path: file.path,
+      }
+      const warning = structureWarning(file.path, content)
+      if (warning !== undefined) result.warning = warning
+      files.push({ absolutePath: target, content, result })
       continue
     }
     const content = file.content ?? ''
-    files.push({
-      absolutePath: target,
-      content,
-      result: {
-        created: original === undefined,
-        edits: 1,
-        lineDelta: lineCount(content) - lineCount(original ?? ''),
-        path: file.path,
-      },
-    })
+    const artifact = readArtifact(content)
+    if (artifact !== undefined) {
+      throw new PatchError(
+        `File ${file.path} content carries the bounded read marker "${artifact}". Read the window you need and write real content, or use edits.`,
+      )
+    }
+    const result: PatchFileResult = {
+      created: original === undefined,
+      edits: 1,
+      lineDelta: lineCount(content) - lineCount(original ?? ''),
+      path: file.path,
+    }
+    const warning = structureWarning(file.path, content)
+    if (warning !== undefined) result.warning = warning
+    files.push({ absolutePath: target, content, result })
   }
   return { files }
 }
@@ -166,7 +185,8 @@ export function formatPatchResults(results: readonly PatchFileResult[]): string 
     const action = result.created
       ? 'created'
       : `${result.edits} edit${result.edits === 1 ? '' : 's'}`
-    return `${result.path}: ${action}, ${delta} lines`
+    const warning = result.warning === undefined ? '' : `\n  check: ${result.warning}`
+    return `${result.path}: ${action}, ${delta} lines${warning}`
   })
   return [`Patched ${results.length} file${results.length === 1 ? '' : 's'}.`, ...lines].join('\n')
 }
@@ -174,7 +194,7 @@ export function formatPatchResults(results: readonly PatchFileResult[]): string 
 export function createPatchTool(): ToolDefinition<typeof PatchSchema> {
   return defineTool({
     description:
-      'Apply edits across multiple files in one call. Each file takes either exact-match edits or full content. The patch is all or nothing: nothing is written when any edit fails to match uniquely. Prefer this tool over repeated single-file edits.',
+      'Apply edits across multiple files in one call. Each file takes either exact-match edits or full content. The patch is all or nothing: nothing is written when any edit fails to match uniquely. The result reports unbalanced delimiters and invalid JSON in the changed files. Prefer this tool over repeated single-file edits.',
     execute: async (_toolCallId, input, signal, _onUpdate, ctx) => {
       signal?.throwIfAborted()
       const plan = await planPatch(input, ctx.cwd)

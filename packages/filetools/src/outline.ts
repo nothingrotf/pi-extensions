@@ -58,10 +58,13 @@ export function outlineNotice(
     outline.entries.length === 0
       ? 'No declarations were detected.'
       : outline.entries.map((entry) => `${entry.line}: ${entry.text}`).join('\n')
+  const next = returnedLines + 1
   return [
     '',
     `[bounded read] ${path} has ${outline.lines} lines and ${bytes} bytes. Lines 1 through ${returnedLines} are shown.`,
-    'Pass offset and limit to read another window, or the full line count to read everything.',
+    next > outline.lines
+      ? 'Pass offset and limit to read another window.'
+      : `Continue with offset=${next}, or pass offset and limit for any other window.`,
     `File map${outline.truncatedEntries ? ` (first ${OUTLINE_ENTRIES} declarations)` : ''}:`,
     map,
   ].join('\n')

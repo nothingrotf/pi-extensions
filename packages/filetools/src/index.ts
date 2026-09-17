@@ -3,7 +3,10 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { createPatchTool } from './patch.ts'
 import { createBoundedReadTool } from './read.ts'
 
+export { readArtifact } from './artifacts.ts'
+export { selectJson, SelectorError, type JsonDocument } from './json-select.ts'
 export { fileOutline, FULL_READ_BYTES, HEAD_LINES, outlineNotice } from './outline.ts'
+export { structureProblem, STRUCTURE_CHECK_MAX_CHARS, type StructureProblem } from './structure.ts'
 export {
   createPatchTool,
   formatPatchResults,
@@ -12,7 +15,18 @@ export {
   planPatch,
   writePatch,
 } from './patch.ts'
-export { boundedReadPlan, createBoundedReadTool } from './read.ts'
+export {
+  assertReadInput,
+  boundedReadPlan,
+  createBoundedReadTool,
+  MAX_JSON_BYTES,
+  MAX_READ_PATHS,
+  MULTI_READ_BUDGET,
+  projectJson,
+  ReadInputError,
+  ReadSchema,
+  type ReadInput,
+} from './read.ts'
 
 const capabilityDiscoveryEvent = '@nothingrotf/subagent/discover-capabilities'
 const capabilityRegistrationEvent = '@nothingrotf/subagent/register-capabilities'
