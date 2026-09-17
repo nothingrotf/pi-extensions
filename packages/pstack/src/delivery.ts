@@ -11,18 +11,31 @@ const id = Type.String({ minLength: 1, maxLength: 256 })
 const digest = Type.String({ pattern: '^[a-f0-9]{64}$' })
 const gitId = Type.String({ pattern: '^[a-f0-9]{40,64}$' })
 const result = Type.Enum(['pass', 'fail', 'pending', 'blocked'])
+const reportKind = [
+  'implementation',
+  'technical-review',
+  'runtime-verification',
+  'comments',
+  'diagnosis',
+] as const
+const reportState = ['wip', 'candidate', 'blocked', 'accepted'] as const
+const reportFailureClass = [
+  'none',
+  'omitted-requirement',
+  'regression',
+  'environment',
+  'execution-contract',
+  'context',
+  'external-decision',
+] as const
+
+export const DELIVERY_REASON_LIMIT = 4096
 
 export const DeliveryReportSchema = Type.Object(
   {
     issue: id,
-    kind: Type.Enum([
-      'implementation',
-      'technical-review',
-      'runtime-verification',
-      'comments',
-      'diagnosis',
-    ]),
-    state: Type.Enum(['wip', 'candidate', 'blocked', 'accepted']),
+    kind: Type.Enum(reportKind),
+    state: Type.Enum(reportState),
     criteria: Type.Array(
       Type.Object(
         {
@@ -46,67 +59,88 @@ export const DeliveryReportSchema = Type.Object(
       ),
       { maxItems: 256 },
     ),
-    reason: Type.String({ maxLength: 4096 }),
-    failureClass: Type.Enum([
-      'none',
-      'omitted-requirement',
-      'regression',
-      'environment',
-      'execution-contract',
-      'context',
-      'external-decision',
-    ]),
+    reason: Type.String({ maxLength: DELIVERY_REASON_LIMIT }),
+    failureClass: Type.Enum(reportFailureClass),
   },
   { additionalProperties: false },
 )
 
 export type DeliveryReport = Static<typeof DeliveryReportSchema>
 
+const semanticCriteria = Type.Array(
+  Type.Object(
+    { id: Type.String(), result, evidence: Type.Array(Type.String()) },
+    { additionalProperties: false },
+  ),
+)
+const semanticFindings = Type.Array(
+  Type.Object(
+    {
+      id: Type.String(),
+      blocking: Type.Boolean(),
+      disposition: Type.Enum(['open', 'corrected', 'rejected']),
+      evidence: Type.Array(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+)
+
 export const DeliveryReportSemanticSchema = Type.Object(
   {
     issue: Type.String(),
-    kind: Type.Enum([
-      'implementation',
-      'technical-review',
-      'runtime-verification',
-      'comments',
-      'diagnosis',
-    ]),
-    state: Type.Enum(['wip', 'candidate', 'blocked', 'accepted']),
-    criteria: Type.Array(
-      Type.Object(
-        {
-          id: Type.String(),
-          result,
-          evidence: Type.Array(Type.String()),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    findings: Type.Array(
-      Type.Object(
-        {
-          id: Type.String(),
-          blocking: Type.Boolean(),
-          disposition: Type.Enum(['open', 'corrected', 'rejected']),
-          evidence: Type.Array(Type.String()),
-        },
-        { additionalProperties: false },
-      ),
-    ),
+    kind: Type.Enum(reportKind),
+    state: Type.Enum(reportState),
+    criteria: semanticCriteria,
+    findings: semanticFindings,
     reason: Type.String(),
-    failureClass: Type.Enum([
-      'none',
-      'omitted-requirement',
-      'regression',
-      'environment',
-      'execution-contract',
-      'context',
-      'external-decision',
-    ]),
+    failureClass: Type.Enum(reportFailureClass),
   },
   { additionalProperties: false },
 )
+
+const DeliveryReportDraftSchema = Type.Object(
+  {
+    issue: Type.String(),
+    kind: Type.Enum(reportKind),
+    state: Type.Enum(reportState),
+    criteria: semanticCriteria,
+    findings: semanticFindings,
+    reason: Type.String(),
+    failureClass: Type.Optional(Type.Enum(reportFailureClass)),
+  },
+  { additionalProperties: false },
+)
+
+export interface DeliveryReportDraft {
+  failureClassProvided: boolean
+  report: DeliveryReport
+}
+
+function claimsNoFailure(report: Static<typeof DeliveryReportDraftSchema>): boolean {
+  return (
+    (report.state === 'accepted' || report.state === 'candidate') &&
+    report.criteria.every((criterion) => criterion.result === 'pass') &&
+    report.findings.every((finding) => finding.disposition !== 'open')
+  )
+}
+
+export function deliveryReportDraft(value: JsonValue | undefined): DeliveryReportDraft | undefined {
+  if (value === undefined) return undefined
+  if (Value.Check(DeliveryReportSemanticSchema, value)) {
+    return { failureClassProvided: true, report: value }
+  }
+  if (!Value.Check(DeliveryReportDraftSchema, value) || !claimsNoFailure(value)) return undefined
+  return { failureClassProvided: false, report: { ...value, failureClass: 'none' } }
+}
+
+export function normalizeDeliveryReportProse(report: DeliveryReport): DeliveryReport {
+  if (report.reason.length <= DELIVERY_REASON_LIMIT) return report
+  const marker = ' [reason truncated]'
+  return {
+    ...report,
+    reason: `${report.reason.slice(0, DELIVERY_REASON_LIMIT - marker.length).trimEnd()}${marker}`,
+  }
+}
 
 function outputSchema(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(outputSchema)
@@ -608,6 +642,17 @@ export function deliveryReportDiagnostics(
         )
       }
     }
+  }
+  if (
+    report.kind === 'implementation' &&
+    (report.state === 'candidate' || report.state === 'accepted') &&
+    !submission.evidence.some(
+      (entry) => entry.kind === 'command' && entry.passed && !entry.id.startsWith('read:'),
+    )
+  ) {
+    diagnostics.push(
+      'An implementation candidate requires at least one successful command receipt from this attempt.',
+    )
   }
   for (const finding of report.findings) {
     for (const reference of finding.evidence) {

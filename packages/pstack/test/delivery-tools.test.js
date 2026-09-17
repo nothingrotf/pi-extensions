@@ -933,7 +933,23 @@ describe('pstack delivery tool interception', () => {
       prompt,
       readonly: false,
       role: 'feature',
-      toolExecutionReceipts: [],
+      toolExecutionReceipts: [
+        {
+          callId: 'command',
+          completedAt: 2,
+          command: 'bun run test',
+          isError: false,
+          output: {
+            byteLength: 1,
+            mediaType: 'text/plain',
+            sha256: 'e'.repeat(64),
+            uri: 'artifact://command',
+          },
+          startedAt: 1,
+          status: 'success',
+          tool: 'bash',
+        },
+      ],
       workspaceIdentity: {
         baselineTree: 'a'.repeat(40),
         snapshot,
@@ -1255,9 +1271,39 @@ describe('pstack delivery tool interception', () => {
     if (runtimeResult.status !== 'rejected')
       throw new Error('Integrated runtime review was accepted.')
     expect(runtimeResult.error).toContain('manual isolation')
+
+    const blockedReport = {
+      ...runtimeReport,
+      state: 'blocked',
+      criteria: [{ id: 'receipt', result: 'fail', evidence: ['command:1'] }],
+      findings: [
+        {
+          id: 'runtime-regression',
+          blocking: true,
+          disposition: 'open',
+          evidence: ['command:1'],
+        },
+      ],
+      reason: 'The runtime verifier reproduced a regression.',
+      failureClass: 'regression',
+    }
+    const longCommandResult = validateDeliveryTerminal({
+      ...base,
+      isolation: isolationReceipt(snapshot, 'not-requested'),
+      readonly: false,
+      role: 'runtime verification',
+      structuredOutput: {
+        data: blockedReport,
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [{ ...base.toolExecutionReceipts[0], command: 'x'.repeat(5000) }],
+    })
+    expect(longCommandResult.status).toBe('accepted')
   })
 
-  it('rejects oversized reports and errored current receipt references with diagnostics', () => {
+  it('normalizes oversized prose and reports errored current receipt references', () => {
     const issue = emptyDeliveryIssue('owner', 'terminal-validation')
     const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
     const result = validateDeliveryTerminal({
@@ -1313,8 +1359,163 @@ describe('pstack delivery tool interception', () => {
     })
     expect(result.status).toBe('rejected')
     if (result.status !== 'rejected') throw new Error('Invalid report was accepted.')
-    expect(result.error).toContain('/reason 4097 >4096')
+    expect(result.error).not.toContain('/reason')
+    expect(result.error).toContain('Criterion receipt references command:1 with status error')
     expect(result.correctionPrompt).toContain('command:1 status=error')
+  })
+
+  it('accepts an oversized reason by truncating prose without another correction turn', () => {
+    const issue = emptyDeliveryIssue('owner', 'reason-normalization')
+    const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
+    const result = validateDeliveryTerminal({
+      agentId: 'worker',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'worker',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      output: '{}',
+      previousOutputs: [],
+      prompt,
+      readonly: true,
+      role: 'code review',
+      structuredOutput: {
+        data: {
+          issue: issue.issue,
+          kind: 'comments',
+          state: 'wip',
+          criteria: [],
+          findings: [],
+          reason: 'x'.repeat(5000),
+          failureClass: 'none',
+        },
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [],
+    })
+    expect(result.status).toBe('accepted')
+    if (result.status !== 'accepted') throw new Error('Oversized prose blocked the report.')
+    if (result.normalizedOutput === undefined) throw new Error('Missing normalized output.')
+    const normalized = JSON.parse(result.normalizedOutput)
+    expect(normalized.reason.length).toBe(4096)
+    expect(normalized.reason.endsWith(' [reason truncated]')).toBe(true)
+  })
+
+  it('keeps an all-passing verdict when the first draft omits its failure class', () => {
+    const issue = emptyDeliveryIssue('owner', 'inferred-failure-class')
+    const prompt = deliveryReviewerPacket(issue)
+    const snapshot = {
+      repositories: [
+        {
+          base: 'a'.repeat(40),
+          patch: { byteLength: 1, sha256: 'b'.repeat(64), uri: 'artifact://patch' },
+          relativePath: '',
+          root: '/repo',
+          tree: 'c'.repeat(40),
+        },
+      ],
+    }
+    const draft = {
+      issue: issue.issue,
+      kind: 'implementation',
+      state: 'candidate',
+      criteria: [{ id: 'receipt', result: 'pass', evidence: ['patch:.', 'command:1'] }],
+      findings: [],
+      reason: 'Every registered criterion passed with executed proof.',
+    }
+    const result = validateDeliveryTerminal({
+      agentId: 'worker',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'worker',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      isolation: isolationReceipt(snapshot, 'not-requested'),
+      output: '{}',
+      previousOutputs: [],
+      prompt,
+      readonly: false,
+      role: 'feature',
+      structuredOutput: { data: draft, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [
+        {
+          callId: 'command',
+          completedAt: 2,
+          command: 'bun run test',
+          isError: false,
+          output: {
+            byteLength: 1,
+            mediaType: 'text/plain',
+            sha256: 'e'.repeat(64),
+            uri: 'artifact://command',
+          },
+          startedAt: 1,
+          status: 'success',
+          tool: 'bash',
+        },
+      ],
+      workspaceIdentity: { baselineTree: 'a'.repeat(40), snapshot },
+    })
+    if (result.status !== 'accepted') throw new Error(`REJECTED: ${result.error}`)
+    if (result.normalizedOutput === undefined) throw new Error('Missing normalized output.')
+    expect(JSON.parse(result.normalizedOutput)).toMatchObject({
+      failureClass: 'none',
+      state: 'candidate',
+    })
+  })
+
+  it('keeps an incomplete draft rejected when it omits its failure class', () => {
+    const issue = emptyDeliveryIssue('owner', 'missing-failure-class')
+    const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
+    const draft = {
+      issue: issue.issue,
+      kind: 'comments',
+      state: 'wip',
+      criteria: [],
+      findings: [],
+      reason: 'Work remains.',
+    }
+    const result = validateDeliveryTerminal({
+      agentId: 'worker',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'worker',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      output: '{}',
+      previousOutputs: [],
+      prompt,
+      readonly: true,
+      role: 'code review',
+      structuredOutput: { data: draft, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [],
+    })
+    expect(result.status).toBe('rejected')
+    if (result.status !== 'rejected') throw new Error('An unclassified incomplete draft passed.')
+    expect(result.error).toContain('failureClass')
   })
   it('injects the supported delivery schema into the real Task tool call', async () => {
     const harness = await sessionWithDeliveryTool()

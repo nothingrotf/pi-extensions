@@ -48,7 +48,7 @@ export interface TerminalValidationInput {
 }
 
 export type TerminalValidationResult =
-  | { status: 'accepted' }
+  | { normalizedOutput?: string; status: 'accepted' }
   | {
       correctionAllowed?: boolean
       correctionPrompt: string

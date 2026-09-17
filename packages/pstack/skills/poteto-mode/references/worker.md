@@ -19,6 +19,20 @@ Delegate only a named independent slice or an explicitly required perspective, a
 Return missing capabilities or contested design decisions to the actual coordinator.
 Do not silently skip required review or reopen an accepted design for an ordinary local implementation choice.
 
+## Bounded reading and gate output
+
+Every tool result stays in context for the rest of the task and is re-read on each later turn.
+Search before reading. Read a bounded range when a file or document exceeds about 20,000 characters.
+Read a complete file only when the change depends on its whole content.
+
+Run each repository gate once. Write its output to a log and print only the tail in the same command:
+
+```sh
+bun run check > /tmp/<issue>-check.log 2>&1; echo "EXIT=$?"; tail -40 /tmp/<issue>-check.log
+```
+
+Read a wider slice of the retained log only after a failure. Never rerun a passing gate to obtain a different summary.
+
 ## Preserve evidence and ownership
 
 Keep the original request, every acceptance criterion, reproduction, decisive source references, rejected hypotheses, current artifact, harness, and open findings together.
@@ -39,6 +53,9 @@ Never write through an absolute source-checkout path or recover WIP by resetting
 ## Verification and boundaries
 
 Read `delivery-contract.md` for managed delivery criteria, independent acceptance, and evidence invalidation.
+Run an executable probe before broad implementation, not after it.
+Reach the first executed command within the first few turns, even when the probe only reproduces the current failure.
+An implementation candidate requires at least one successful command receipt from its own attempt, so unexecuted work cannot become a candidate.
 Before broad implementation, retain a minimal connected probe across the affected runtime boundaries.
 Use the real entry point, authorization, application role, persistence, and readback when applicable.
 A new feature starts with a minimal vertical slice, not a complete implementation before its first integrated probe.

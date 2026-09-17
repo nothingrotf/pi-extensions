@@ -5217,6 +5217,52 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  it('persists a normalized terminal report without spending a correction turn', async () => {
+    const harness = await createHarness()
+    try {
+      await runTask(harness, { ...baseInput, prompt: 'context seed' })
+      let validations = 0
+      harness.runtime.registerCapability({
+        extensions: [],
+        id: 'terminal-normalization',
+        terminalValidation: {
+          maxCorrections: 1,
+          validate: () => {
+            validations += 1
+            return { normalizedOutput: '{"ok":true}', status: 'accepted' }
+          },
+        },
+        tools: [],
+        version: '1',
+      })
+      harness.runtime.registerCapabilityProfile({
+        id: 'terminal-normalization-profile',
+        registrations: ['terminal-normalization'],
+      })
+      const result = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'terminal-normalization-profile',
+        outputSchema: {
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+          type: 'object',
+        },
+        prompt: 'REPORT_CORRECTION',
+        schemaMode: 'strict',
+      })
+      expect(validations).toBe(1)
+      const record = latestState(harness).records.find((entry) => entry.agentId === agentId(result))
+      expect(record?.status).toBe('completed')
+      expect(record?.output).toBe('{"ok":true}')
+      expect(record?.structuredOutput?.data).toEqual({ ok: true })
+      expect(record?.terminalOutputRevisions).toHaveLength(1)
+      expect(record?.terminalOutputRevisions?.[0]?.structuredOutput?.data).toEqual({ ok: true })
+      expect(record?.terminalOutputRevisions?.[0]?.validationError).toBeUndefined()
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
   it('fails after the configured terminal correction bound', async () => {
     const harness = await createHarness()
     try {
@@ -5292,7 +5338,7 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
-  it('removes every tool during correction and restores the session tool set', async () => {
+  it('blocks correction tool calls while keeping the session tool set installed', async () => {
     const harness = await createHarness()
     try {
       await runTask(harness, { ...baseInput, prompt: 'context seed' })
@@ -5304,7 +5350,7 @@ describe('subagent Task integration', () => {
           maxCorrections: 1,
           validate: (input) => {
             validations += 1
-            return input.output === 'tools-after-attempt:'
+            return input.output.startsWith('tools-after-attempt:')
               ? { status: 'accepted' }
               : {
                   status: 'rejected',
@@ -5328,7 +5374,9 @@ describe('subagent Task integration', () => {
       const record = latestState(harness).records.find((entry) => entry.agentId === agentId(result))
       expect(validations).toBe(2)
       expect(record?.status).toBe('completed')
-      expect(record?.output).toBe('tools-after-attempt:')
+      expect(record?.output).toContain('tools-after-attempt:')
+      expect(record?.output).toContain('read')
+      expect(record?.output).not.toBe('tools-after-attempt:')
       expect(record?.toolExecutionReceipts).toHaveLength(0)
       await expect(readFile(join(harness.dir, 'correction-write.txt'), 'utf8')).rejects.toThrow(
         /ENOENT/,

@@ -54,6 +54,8 @@ Checkpoint persistence alone does not reduce the current context.
 When independent work remains, do that work before waiting.
 Otherwise, wait through `TaskControl.wait` using the typed example in the Task contract.
 Omit `timeout_ms` unless a shorter liveness deadline is required.
+A re-issued wait costs a full coordinator turn and can miss the provider prompt cache.
+Prefer one open wait over repeated short windows.
 A completion or decision request is the next scheduling event.
 Use the loop heartbeat only to audit liveness, not to delay completion handling.
 Never substitute shell `sleep`, polling loops, or repeated status requests for completion-driven waiting.

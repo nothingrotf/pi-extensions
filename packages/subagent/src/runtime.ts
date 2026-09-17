@@ -167,6 +167,7 @@ interface ActiveRun {
   partialMessage: AssistantMessage | undefined
   pendingQuestion: ReturnType<typeof runParentSideTurn> | undefined
   metrics: RunMetrics
+  reportCorrection: boolean
   parentScopeCompletion:
     | { promise: Promise<RuntimeTerminalResult>; resolve: (value: RuntimeTerminalResult) => void }
     | undefined
@@ -2099,6 +2100,7 @@ export class SubagentRuntime {
         partialMessage: undefined,
         pendingQuestion: undefined,
         parentScopeCompletion,
+        reportCorrection: false,
         retryFailure: undefined,
         retryState: undefined,
         scope: new DescendantScope(`scope-${record.agentId}`, (agentId, retained) => {
@@ -2126,6 +2128,7 @@ export class SubagentRuntime {
       if (record !== undefined) throw new ChildSessionError(errorMessage(error), record.agentId)
       throw error
     }
+    this.installToolAdmission(active)
     this.active.set(record.agentId, active)
     const turn = Promise.resolve().then(() =>
       this.completeRun(
@@ -2163,6 +2166,21 @@ export class SubagentRuntime {
         transcriptPath: record.sessionFile,
       },
       kind: 'background',
+    }
+  }
+
+  private installToolAdmission(active: ActiveRun): void {
+    const delegate = active.session.agent.beforeToolCall
+    active.session.agent.beforeToolCall = async (context, signal) => {
+      if (active.reportCorrection) {
+        return {
+          block: true,
+          reason:
+            'Tools are unavailable during a report-only terminal correction. Return only the corrected report.',
+        }
+      }
+      await active.workspace?.dependencies
+      return delegate === undefined ? undefined : delegate(context, signal)
     }
   }
 
@@ -2626,6 +2644,7 @@ export class SubagentRuntime {
     active.lastActivity = 'Capturing isolated changes'
     this.emitChange()
     const workspace = active.workspace
+    await workspace.dependencies
     await this.transitionWorkspace(workspace, 'closing', 'pending')
     const receipt = await captureIsolation(workspace)
     active.isolationReceipt = receipt
@@ -3115,6 +3134,16 @@ export class SubagentRuntime {
             validationInput.workspaceIdentity = record.execution.workspaceIdentity
           }
           const validation = await terminalValidation.validate(validationInput)
+          if (
+            validation.status === 'accepted' &&
+            validation.normalizedOutput !== undefined &&
+            validation.normalizedOutput !== fullOutput
+          ) {
+            text = validation.normalizedOutput
+            fullOutput = text
+            output = truncateOutput(fullOutput)
+            outputState = await this.createOutputState(record, fullOutput, 'completed')
+          }
           const revision: TerminalOutputRevision = {
             artifact: outputState.artifact,
             correction,
@@ -3137,15 +3166,14 @@ export class SubagentRuntime {
             correction === terminalValidation.maxCorrections
           )
             break
-          const correctionTools = active.session.agent.state.tools
-          active.session.agent.state.tools = []
+          active.reportCorrection = true
           try {
             await Promise.race([
               active.session.prompt(validation.correctionPrompt, { expandPromptTemplates: false }),
               timeoutPromise,
             ])
           } finally {
-            active.session.agent.state.tools = correctionTools
+            active.reportCorrection = false
           }
           this.assertRunContinuing(active)
           const correctionFailure = stopError(active.messages.at(-1))

@@ -28,6 +28,7 @@ import {
   nestedRepositories,
   promoteCommit,
   repositoryRoot,
+  SHARED_TASK_CACHE_PATHS,
 } from '../src/git-isolation.ts'
 import {
   captureIsolation,
@@ -218,6 +219,7 @@ describe('writer isolation', () => {
       await writeFile(join(directory, 'node_modules', 'dependency.txt'), 'dependency\n')
       process.env.PATH = `${bin}:${originalPath ?? ''}`
       const isolation = await writer(directory, 'partial-clone')
+      await isolation.dependencies
       expect(
         await readFile(join(isolation.rootWorktree, 'node_modules', 'dependency.txt'), 'utf8'),
       ).toBe('dependency\n')
@@ -225,6 +227,58 @@ describe('writer isolation', () => {
     } finally {
       if (originalPath === undefined) delete process.env.PATH
       else process.env.PATH = originalPath
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('returns the workspace before dependency materialization finishes', async () => {
+    const directory = await repository()
+    try {
+      await mkdir(join(directory, 'node_modules', 'bulk'), { recursive: true })
+      for (let index = 0; index < 400; index += 1) {
+        await writeFile(
+          join(directory, 'node_modules', 'bulk', `module-${index}.txt`),
+          'dependency\n'.repeat(64),
+          'utf8',
+        )
+      }
+      const isolation = await writer(directory, 'deferred-dependencies')
+      try {
+        expect(await readFile(join(isolation.rootWorktree, 'tracked.txt'), 'utf8')).toBe('base\n')
+        await isolation.dependencies
+        expect(
+          await readFile(
+            join(isolation.rootWorktree, 'node_modules', 'bulk', 'module-399.txt'),
+            'utf8',
+          ),
+        ).toContain('dependency')
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('shares one task cache directory across writers of the same repository', async () => {
+    const directory = await repository()
+    try {
+      await mkdir(join(directory, 'node_modules'), { recursive: true })
+      const first = await writer(directory, 'cache-first')
+      await first.dependencies
+      const cachePath = join(first.rootWorktree, SHARED_TASK_CACHE_PATHS[0] ?? '')
+      const sharedTarget = await realpath(cachePath)
+      expect(sharedTarget.startsWith(first.rootWorktree)).toBe(false)
+      await writeFile(join(cachePath, 'entry.bin'), 'cached\n', 'utf8')
+      const second = await writer(directory, 'cache-second')
+      await second.dependencies
+      const secondCache = join(second.rootWorktree, SHARED_TASK_CACHE_PATHS[0] ?? '')
+      expect(await realpath(secondCache)).toBe(sharedTarget)
+      expect(await readFile(join(secondCache, 'entry.bin'), 'utf8')).toBe('cached\n')
+      await cleanupWorkspaceArtifacts(first)
+      await cleanupWorkspaceArtifacts(second)
+      expect(await readFile(join(sharedTarget, 'entry.bin'), 'utf8')).toBe('cached\n')
+    } finally {
       await rm(directory, { force: true, recursive: true })
     }
   }, 180_000)
@@ -239,6 +293,7 @@ describe('writer isolation', () => {
       expect(await readFile(join(isolation.rootWorktree, 'tracked.txt'), 'utf8')).toBe(
         'base\nwip\n',
       )
+      await isolation.dependencies
       expect(
         await readFile(join(isolation.rootWorktree, 'node_modules', 'dependency.txt'), 'utf8'),
       ).toBe('dependency\n')

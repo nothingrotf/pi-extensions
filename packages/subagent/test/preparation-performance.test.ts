@@ -44,6 +44,7 @@ it('measures preparation with four dirty repositories and private dependencies',
       durableCommonDir,
     }
     const timings: number[] = []
+    const dependencyTimings: number[] = []
     const discoveryTimings: number[] = []
     for (let trial = 0; trial < 3; trial += 1) {
       const discoveryStart = performance.now()
@@ -59,6 +60,9 @@ it('measures preparation with four dirty repositories and private dependencies',
         writerId: `preparation-${trial}`,
       })
       timings.push(performance.now() - start)
+      const dependencyStart = performance.now()
+      await isolation.dependencies
+      dependencyTimings.push(performance.now() - dependencyStart)
       expect(isolation.repositories.map((entry) => entry.relativePath)).toEqual(paths)
       for (const entry of isolation.repositories) {
         expect(await readFile(join(entry.worktree, 'tracked.txt'), 'utf8')).toBe('dirty\n')
@@ -84,7 +88,7 @@ it('measures preparation with four dirty repositories and private dependencies',
       await cleanupWorkspaceArtifacts(isolation)
     }
     process.stdout.write(
-      `${JSON.stringify({ preparationMs: timings, discoveryMs: discoveryTimings })}\n`,
+      `${JSON.stringify({ dependencyMs: dependencyTimings, discoveryMs: discoveryTimings, preparationMs: timings })}\n`,
     )
   } finally {
     await rm(directory, { force: true, recursive: true })
