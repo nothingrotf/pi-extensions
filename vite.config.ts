@@ -56,7 +56,8 @@ export default defineConfig({
   },
   staged: {
     '*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}': 'vp check --fix',
-    '*.{css,html,json,jsonc,md,mdx,toml,yaml,yml}': 'vp fmt --write',
+    '*.{css,html,json,jsonc,md,mdx,toml,yaml,yml}':
+      'vp fmt --write --no-error-on-unmatched-pattern',
   },
   test: {
     exclude: ['**/node_modules/**', '**/.git/**', '**/.verification/**'],
