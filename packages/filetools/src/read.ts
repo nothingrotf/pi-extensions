@@ -49,6 +49,12 @@ export function createBoundedReadTool(cwd: string): ReturnType<typeof createRead
   return {
     ...native,
     description: `${native.description} Large files return a bounded head plus a map of declarations; pass offset and limit for another window.`,
+    promptGuidelines: [
+      ...(native.promptGuidelines ?? []),
+      'Search before reading, and read a bounded window of a large file.',
+      'After a bounded head and file map, request the exact window with offset and limit.',
+      'Read a whole file only when the work depends on its full content.',
+    ],
     async execute(toolCallId, input, signal, onUpdate, ctx) {
       const plan = await boundedReadPlan(input, ctx.cwd)
       if (plan === undefined) return native.execute(toolCallId, input, signal, onUpdate, ctx)

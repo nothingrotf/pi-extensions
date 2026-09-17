@@ -42,6 +42,24 @@ A patch that fails to match uniquely writes nothing, so a partial edit never rea
 
 The result reports the touched files, the applied edit count, and the line delta per file.
 
+## System prompt
+
+Both tools contribute a snippet and guidelines to the session system prompt, in the root session and in every child that receives the capability:
+
+```text
+Available tools:
+- patch: Edit several files in one call
+
+Guidelines:
+- Use read to examine files instead of cat or sed.
+- Search before reading, and read a bounded window of a large file.
+- After a bounded head and file map, request the exact window with offset and limit.
+- Read a whole file only when the work depends on its full content.
+- Use patch to change several files in one call instead of one edit call per file.
+- Give each file either exact-match edits or full content, never both.
+- A patch writes nothing when any edit fails to match exactly once.
+```
+
 ## Subagents
 
 The extension publishes a `filetools` capability to `@nothingrotf/subagent`.
