@@ -56,6 +56,7 @@ describe('selectJson', () => {
   const document = {
     value: {
       'dotted.key': 'quoted',
+      scripts: { 'test:domain': 'vp test run' },
       items: [{ id: 0 }, { id: 1 }, { id: 2 }],
       report: { total: 3, verdict: 'pass' },
     },
@@ -69,6 +70,7 @@ describe('selectJson', () => {
     expect(selectJson(document, '.items[5:9]').value).toEqual([])
     expect(selectJson(document, '.items.length').value).toBe(3)
     expect(selectJson(document, '.["dotted.key"]').value).toBe('quoted')
+    expect(selectJson(document, '.scripts.test:domain').value).toBe('vp test run')
   })
 
   it('fails instead of returning a silently wrong value', () => {

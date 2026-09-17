@@ -41,6 +41,22 @@ describe('read in a real session', () => {
     expect(text.length).toBeLessThan(6000)
   })
 
+  it('caps every file of a multi-path read with one limit', async () => {
+    harness = await createFiletoolsHarness([
+      { content: 'a1\na2\na3\n', name: 'a.ts' },
+      { content: 'b1\nb2\nb3\n', name: 'b.ts' },
+    ])
+
+    const text = resultText(
+      await harness.tool('read').execute('call-11', { limit: 1, paths: ['a.ts', 'b.ts'] }),
+    )
+
+    expect(text).toContain('a1')
+    expect(text).not.toContain('a2')
+    expect(text).toContain('b1')
+    expect(text).not.toContain('b2')
+  })
+
   it('projects JSON before any truncation', async () => {
     harness = await createFiletoolsHarness([{ content: report, name: 'report.json' }])
 
@@ -65,7 +81,7 @@ describe('read in a real session', () => {
       /either path or paths/,
     )
     await expect(read.execute('call-4', { offset: 2, paths: ['a.ts'] })).rejects.toThrow(
-      /no offset or limit/,
+      /no offset/,
     )
     await expect(
       read.execute('call-5', { json: '.verdict', paths: ['report.json'] }),

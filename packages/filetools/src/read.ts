@@ -28,7 +28,7 @@ export const ReadSchema = Type.Object(
     paths: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          'Read several files in one call, in order. Use it instead of one read call per file.',
+          'Read several files in one call, in order. Use it instead of one read call per file. An optional limit caps the lines returned per file.',
         maxItems: MAX_READ_PATHS,
         minItems: 1,
       }),
@@ -88,9 +88,9 @@ export function assertReadInput(input: ReadInput): void {
     throw new ReadInputError('Pass either path or paths, not both.')
   }
   if (input.paths !== undefined) {
-    if (input.offset !== undefined || input.limit !== undefined) {
+    if (input.offset !== undefined) {
       throw new ReadInputError(
-        'A multi-path read takes no offset or limit. Read one file for a window.',
+        'A multi-path read takes no offset, because one offset cannot address several files. Pass limit for a per-file cap, or read one path for a window.',
       )
     }
     if (input.json !== undefined) {
@@ -200,8 +200,10 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
       for (const path of paths) {
         if (used >= MULTI_READ_BUDGET) break
         let result: { blocks: readonly Block[] }
+        const window =
+          input.limit === undefined ? { path } : { limit: input.limit, offset: 1, path }
         try {
-          result = await readOne(toolCallId, { path }, signal, onUpdate, ctx)
+          result = await readOne(toolCallId, window, signal, onUpdate, ctx)
         } catch (error) {
           throw new Error(
             `Cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`,

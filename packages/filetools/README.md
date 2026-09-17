@@ -25,11 +25,12 @@ The notice names the exact continuation offset, so the model requests the window
 
 Two bounded extensions reduce the number of calls:
 
-- `paths` reads up to 32 files in one call, in order, under a 60,000 character budget. The result names any file left for a separate call.
+- `paths` reads up to 32 files in one call, in order, under a 60,000 character budget. An optional `limit` caps the lines returned per file. The result names any file left for a separate call.
 - `json` selects part of a JSON document before any truncation, for example `.report.verdict`, `.items[0:10]`, or `.items.length`.
 
 The selector language stays small on purpose. A field, an index, a `start:end` slice, a quoted key, and `length` are supported. Anything else fails instead of returning a wrong value.
-Incompatible combinations fail too: `path` with `paths`, `paths` with a window, and `json` with a window.
+Incompatible combinations fail too: `path` with `paths`, `paths` with an `offset`, and `json` with a window.
+A key that is not a plain identifier uses the quoted form, for example `.["test:domain"]`, and the error names that form.
 
 ### `patch`
 

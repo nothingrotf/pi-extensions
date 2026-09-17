@@ -49,10 +49,10 @@ function parseSteps(selector: string): readonly Step[] {
       steps.push({ index: Number(inner), kind: 'index' })
       continue
     }
-    const match = /^[A-Za-z_$][\w$-]*/.exec(selector.slice(position))
+    const match = /^[A-Za-z_$][\w$:@/-]*/.exec(selector.slice(position))
     if (match === null) {
       throw new SelectorError(
-        `Selector "${selector}" has an invalid field at position ${position}.`,
+        `Selector "${selector}" has an invalid field at position ${position}. Wrap an unusual key as .["key"].`,
       )
     }
     const field = match[0]
@@ -60,7 +60,7 @@ function parseSteps(selector: string): readonly Step[] {
     if (selector[position] === '.') position += 1
     else if (position < selector.length && selector[position] !== '[') {
       throw new SelectorError(
-        `Selector "${selector}" has an invalid field at position ${position}.`,
+        `Selector "${selector}" has an invalid field at position ${position}. Wrap an unusual key as .["key"].`,
       )
     }
     steps.push(field === 'length' ? { kind: 'length' } : { key: field, kind: 'key' })
