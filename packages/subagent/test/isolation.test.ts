@@ -260,6 +260,51 @@ describe('writer isolation', () => {
     }
   }, 180_000)
 
+  it('completes root dependencies before nested repository dependencies', async () => {
+    const directory = await repository()
+    try {
+      const nested = join(directory, 'nested')
+      await mkdir(nested, { recursive: true })
+      await command(nested, ['git', 'init', '-q', '-b', 'main'])
+      await command(nested, ['git', 'config', 'user.name', 'Test User'])
+      await command(nested, ['git', 'config', 'user.email', 'test@example.com'])
+      await writeFile(join(nested, '.gitignore'), 'node_modules/\n', 'utf8')
+      await writeFile(join(nested, 'tracked.txt'), 'base\n', 'utf8')
+      await command(nested, ['git', 'add', '.'])
+      await command(nested, ['git', 'commit', '-q', '-m', 'base'])
+      await writeFile(join(directory, '.gitignore'), 'node_modules/\nnested/\n', 'utf8')
+      await mkdir(join(directory, 'node_modules'), { recursive: true })
+      await writeFile(join(directory, 'node_modules', 'root.txt'), 'root\n', 'utf8')
+      await mkdir(join(nested, 'node_modules', 'bulk'), { recursive: true })
+      for (let index = 0; index < 300; index += 1) {
+        await writeFile(
+          join(nested, 'node_modules', 'bulk', `module-${index}.txt`),
+          'dependency\n'.repeat(64),
+          'utf8',
+        )
+      }
+      const isolation = await writer(directory, 'root-first')
+      try {
+        await isolation.rootDependencies
+        expect(
+          await readFile(join(isolation.rootWorktree, 'node_modules', 'root.txt'), 'utf8'),
+        ).toBe('root\n')
+        await isolation.dependencies
+        const nestedWorktree = isolation.repositories.find(
+          (entry) => entry.relativePath === 'nested',
+        )?.worktree
+        if (nestedWorktree === undefined) throw new Error('Missing nested worktree')
+        expect(
+          await readFile(join(nestedWorktree, 'node_modules', 'bulk', 'module-299.txt'), 'utf8'),
+        ).toContain('dependency')
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
   it('shares one task cache directory across writers of the same repository', async () => {
     const directory = await repository()
     try {

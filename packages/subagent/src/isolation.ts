@@ -885,6 +885,7 @@ function workspaceFromManifest(manifest: WorkspaceManifest, path: string): Write
       workspaceId: manifest.workspaceId,
     },
     dependencies: Promise.resolve(),
+    rootDependencies: Promise.resolve(),
     durableCommonDir: manifest.repositories[0]?.durableCommonDir ?? manifest.storeRoot,
     integration: manifest.integration ?? 'manual',
     manifest,

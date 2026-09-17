@@ -33,6 +33,15 @@ bun run check > /tmp/<issue>-check.log 2>&1; echo "EXIT=$?"; tail -40 /tmp/<issu
 
 Read a wider slice of the retained log only after a failure. Never rerun a passing gate to obtain a different summary.
 
+Match the gate to the phase:
+
+- During implementation, run only the focused type check and the focused test for the code you changed.
+- At the end of implementation, run every repository-required gate once.
+- During a correction, run the focused test that proves each finding, then one final repository-required gate.
+
+Batch related edits of the same file or feature into one call.
+Every extra turn re-reads the entire retained context, so many small edits cost more than the edits themselves.
+
 ## Preserve evidence and ownership
 
 Keep the original request, every acceptance criterion, reproduction, decisive source references, rejected hypotheses, current artifact, harness, and open findings together.
@@ -63,6 +72,9 @@ Keep the harness in the repository so the independent reviewer can reuse it.
 Before expanding implementation, retain the probe receipt, observed result, affected boundary, and unresolved setup gaps.
 Reject zero-assertion success, skipped required scenarios, swallowed failures, and mocks of the boundary under verification.
 Use separate-request durable readback, denied actors, and divergent revision counters when the behavior depends on those distinctions.
+List every bound and every derived counter the change introduces, and prove each one with its own executed scenario.
+A bound needs an over-limit rejection case. A derived counter needs a duplicate or repeated input case.
+A failed command never proves a passing criterion. Re-run it after the fix and cite the successful receipt instead.
 Run affected checks after a correction and every repository-required gate before commit.
 Preserve command exit status and immutable logs with their artifact, harness, configuration, and runtime identities.
 Read a retained log instead of rerunning an unchanged passing gate to obtain a different summary.

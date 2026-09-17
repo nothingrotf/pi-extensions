@@ -57,6 +57,7 @@ export interface WriterWorkspace {
   context: WorkspaceContext
   dependencies: Promise<void>
   durableCommonDir: string
+  rootDependencies: Promise<void>
   integration: IsolationIntegration
   manifest: WorkspaceManifest
   manifestPath: string
@@ -419,29 +420,50 @@ async function bindSharedTaskCaches(
   }
 }
 
-async function materializeWorkspaceDependencies(
+async function materializeRepositoryDependencies(
+  repositories: RepositoryIsolation[],
+  index: number,
+  storeRoot: string,
+): Promise<void> {
+  const repository = repositories[index]
+  if (repository === undefined) return
+  const dependencies = await materializeDependencyDirectories(
+    repository.physicalRepoRoot,
+    repository.worktree,
+  )
+  await bindSharedTaskCaches(storeRoot, repository, dependencies.paths)
+  repositories[index] = {
+    ...repository,
+    dependencyMode: dependencies.dependencyMode,
+    dependencyPaths: dependencies.paths,
+  }
+}
+
+function materializeWorkspaceDependencies(
   manifest: WorkspaceManifest,
   repositories: RepositoryIsolation[],
   storeRoot: string,
-): Promise<void> {
-  try {
-    await Promise.all(
-      repositories.map(async (repository, index) => {
-        const dependencies = await materializeDependencyDirectories(
-          repository.physicalRepoRoot,
-          repository.worktree,
-        )
-        await bindSharedTaskCaches(storeRoot, repository, dependencies.paths)
-        repositories[index] = {
-          ...repository,
-          dependencyMode: dependencies.dependencyMode,
-          dependencyPaths: dependencies.paths,
-        }
-      }),
-    )
-    manifest.repositories = repositories.map((repository) => ({ ...repository }))
-    await writeManifest(manifest)
-  } catch {}
+): { dependencies: Promise<void>; rootDependencies: Promise<void> } {
+  const rootIndex = repositories.findIndex((repository) => repository.relativePath.length === 0)
+  const rootDependencies =
+    rootIndex < 0
+      ? Promise.resolve()
+      : materializeRepositoryDependencies(repositories, rootIndex, storeRoot).catch(() => undefined)
+  const dependencies = (async () => {
+    try {
+      await rootDependencies
+      await Promise.all(
+        repositories.map(async (_repository, index) =>
+          index === rootIndex
+            ? undefined
+            : materializeRepositoryDependencies(repositories, index, storeRoot),
+        ),
+      )
+      manifest.repositories = repositories.map((repository) => ({ ...repository }))
+      await writeManifest(manifest)
+    } catch {}
+  })()
+  return { dependencies, rootDependencies }
 }
 
 async function sparseCheckoutState(
@@ -634,7 +656,11 @@ export async function createWriterWorkspace(options: {
 
     manifest.state = 'active'
     const updatedPath = await writeManifest(manifest)
-    const dependencies = materializeWorkspaceDependencies(manifest, repositories, storeRoot)
+    const { dependencies, rootDependencies } = materializeWorkspaceDependencies(
+      manifest,
+      repositories,
+      storeRoot,
+    )
 
     const context: WorkspaceContext = {
       logicalCwd: options.parent.logicalCwd,
@@ -654,6 +680,7 @@ export async function createWriterWorkspace(options: {
       dependencies,
       durableCommonDir,
       integration: options.integration,
+      rootDependencies,
       manifest,
       manifestPath: updatedPath,
       repositories,

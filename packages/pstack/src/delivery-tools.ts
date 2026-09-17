@@ -44,6 +44,7 @@ import {
   deliveryReportDiagnostics,
   deliveryReportDraft,
   normalizeDeliveryReportProse,
+  pruneFailedPassEvidence,
   parseDeliveryIssue,
   recordDelivery,
   refreshDeliveryIntegration,
@@ -782,6 +783,7 @@ export function deliveryReviewerPacket(issue: DeliveryIssue): string {
     'Cite shell receipts as command:1, command:2, and later values in execution order. Read-only static reviews and diagnoses may cite read:1, read:2, and later values in read execution order. Cite patch:<repository relative path, or .> for captured patches. Never invent a receipt reference.',
     'Receipt numbering belongs to the current attempt. A resume does not transfer previous command:n references into the new attempt.',
     'An implementation candidate requires at least one successful command receipt from this attempt.',
+    'A failed command receipt never proves a passing criterion. Re-run the command after the fix and cite the successful alias, or report the criterion as not passing.',
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,
   ].join('\n')
@@ -890,7 +892,9 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
   const diagnostics: string[] = []
   const structured = input.structuredOutput
   const draft = reportDraft(structured)
-  const report = draft?.report
+  const evidenceEntries = terminalEvidence(input, draft?.report)
+  const report =
+    draft === undefined ? undefined : pruneFailedPassEvidence(draft.report, evidenceEntries).report
   const normalized =
     report !== undefined && !jsonEquals(decodeJsonValue(report), structured?.data ?? null)
   const fullSchemaValid = report !== undefined && Value.Check(DeliveryReportSchema, report)
@@ -917,7 +921,7 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
     const submission: DeliverySubmission = {
       agentId: input.agentId,
       attempt: input.attempt,
-      evidence: terminalEvidence(input, report),
+      evidence: evidenceEntries,
       execution: 'completed',
       integration: 'captured',
       recordedAt: Date.now(),
@@ -961,7 +965,10 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
       ? { normalizedOutput: JSON.stringify(report), status: 'accepted' }
       : { status: 'accepted' }
   }
-  const evidence = terminalEvidence(input, report)
+  const failedAliases = evidenceEntries
+    .filter((entry) => !entry.passed || entry.kind === 'failure')
+    .map((entry) => entry.id)
+  const evidence = evidenceEntries
     .map(
       (entry) =>
         `${entry.id} status=${entry.status ?? (entry.passed ? 'success' : 'error')} sha256=${entry.sha256} reference=${entry.reference}`,
@@ -977,6 +984,7 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
       'This is a report-only correction. No tools are available. Do not claim new work or invent proof.',
       `Diagnostics: ${error}`,
       `Return a shorter report. Keep /reason at or below ${DELIVERY_REASON_LIMIT} characters, preferably below 2048, while retaining concrete conclusions. Keep exact receipt IDs in evidence arrays.`,
+      `Failed current-attempt receipts: ${failedAliases.join(', ') || 'none'}. Never cite them for a passing criterion.`,
       `Immutable current-attempt receipt index:\n${evidence || 'none'}`,
       'Preserve the original kind and failure class. Never promote readiness or criterion outcomes, erase findings, weaken blocking severity, or close an open finding. When immutable proof is unavailable, conservatively return WIP with non-passing criteria or open blockers. Only serialization, prose, exact receipt references, and conservative downgrades may be repaired.',
     ].join('\n'),
