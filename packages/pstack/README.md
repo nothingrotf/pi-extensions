@@ -217,6 +217,7 @@ Publication sets `run_in_background: false`. It requires independent acceptance 
 The protocol governs direct Task calls from a coordinator that loads this extension.
 Delegated coordinators do not inherit this session's ledger or managed preflight hooks.
 `TaskControl` can steer, cancel, join, or inspect a Task. Parent-session shell commands are also outside the managed delivery boundary. Neither action creates a managed command receipt or changes delivery acceptance.
+Managed preflight removes a `wait` deadline shorter than 15 minutes, because a completion-driven wait settles on the child and a short window only spends coordinator turns. An explicit longer deadline is preserved.
 For the personal Sol-based coordinator policy, start a new session with `pi --model openai-codex/gpt-5.6-sol:medium`.
 Existing sessions, global defaults, and active children remain unchanged.
 
@@ -229,6 +230,18 @@ bun src/throughput-cli.ts /absolute/path/to/measurements.json
 The report groups acceptance time by implementation model and complexity.
 It retains unfinished work and rejects unsupported comparisons.
 Synthetic tests validate the reporting tool, not actual savings for a product backlog.
+
+Derive per-session latency directly from a recorded session:
+
+```sh
+bun src/session-metrics-cli.ts /absolute/path/to/session.jsonl
+bun src/session-metrics-cli.ts --json /absolute/path/to/session.jsonl
+```
+
+The report separates generation time from tool time, counts turns that carried a single tool call,
+and totals read output, cache reads, cost, and terminal report rejections.
+Generation time is the wall gap before each assistant message and tool time is the wall gap before
+each tool result, so concurrent tool calls count once instead of once per call.
 
 ## Stack backends
 

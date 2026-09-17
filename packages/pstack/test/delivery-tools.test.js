@@ -20,6 +20,8 @@ import { describe, expect, it } from 'vite-plus/test'
 import { readDeliveryJournal } from '../src/delivery-journal.ts'
 import {
   deliveryReviewerPacket,
+  MINIMUM_COMPLETION_WAIT_MS,
+  normalizeCompletionWait,
   registerDeliveryProtocol,
   validateDeliveryTerminal,
 } from '../src/delivery-tools.ts'
@@ -500,6 +502,25 @@ async function sessionWithDeliveryTool(options = {}) {
           name: 'Task',
           parameters: taskSchema(),
         })
+        pi.registerTool({
+          description: 'Validate the actual TaskControl input after extension preflight.',
+          execute(_toolCallId, input) {
+            observed.push(input)
+            return {
+              content: [{ text: 'TaskControl preflight completed.', type: 'text' }],
+              details: {},
+            }
+          },
+          name: 'TaskControl',
+          parameters: Type.Object(
+            {
+              action: Type.String(),
+              agent_ids: Type.Optional(Type.Array(Type.String())),
+              timeout_ms: Type.Optional(Type.Integer()),
+            },
+            { additionalProperties: false },
+          ),
+        })
       },
     ],
     noExtensions: true,
@@ -516,7 +537,7 @@ async function sessionWithDeliveryTool(options = {}) {
     modelRuntime: runtime,
     resourceLoader: loader,
     sessionManager,
-    tools: ['pstack_delivery', 'Task'],
+    tools: ['pstack_delivery', 'Task', 'TaskControl'],
   })
   return {
     close: async () => {
@@ -528,6 +549,47 @@ async function sessionWithDeliveryTool(options = {}) {
     sessionManager,
   }
 }
+
+describe('completion wait normalization', () => {
+  it('drops a short wait window so the wait settles on child completion', () => {
+    const input = { action: 'wait', agent_ids: ['child'], timeout_ms: 300000 }
+    expect(normalizeCompletionWait(input)).toBe(true)
+    expect(input).toEqual({ action: 'wait', agent_ids: ['child'] })
+  })
+
+  it('strips a short wait window from the live TaskControl call', async () => {
+    const harness = await sessionWithDeliveryTool({
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: { action: 'wait', agent_ids: ['child'], timeout_ms: 300000 },
+              id: 'wait',
+              name: 'TaskControl',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('wait for the child')
+      expect(harness.observed).toEqual([{ action: 'wait', agent_ids: ['child'] }])
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('keeps an explicit long liveness deadline and an absent deadline unchanged', () => {
+    const long = { action: 'wait', timeout_ms: MINIMUM_COMPLETION_WAIT_MS }
+    expect(normalizeCompletionWait(long)).toBe(false)
+    expect(long.timeout_ms).toBe(MINIMUM_COMPLETION_WAIT_MS)
+    const open = { action: 'wait', agent_ids: ['child'] }
+    expect(normalizeCompletionWait(open)).toBe(false)
+    expect(open).toEqual({ action: 'wait', agent_ids: ['child'] })
+  })
+})
 
 describe('pstack delivery tool interception', () => {
   it.each([

@@ -36,8 +36,21 @@ Read a wider slice of the retained log only after a failure. Never rerun a passi
 Match the gate to the phase:
 
 - During implementation, run only the focused type check and the focused test for the code you changed.
+- Scope the focused type check to the changed package, not to the whole repository.
 - At the end of implementation, run every repository-required gate once.
 - During a correction, run the focused test that proves each finding, then one final repository-required gate.
+
+Start independent gates together in one command and collect their exit codes:
+
+```sh
+bun run check > /tmp/<issue>-check.log 2>&1 & check=$!
+bun run test:e2e > /tmp/<issue>-e2e.log 2>&1 & e2e=$!
+wait $check; echo "CHECK=$?"; wait $e2e; echo "E2E=$?"
+tail -40 /tmp/<issue>-check.log; tail -40 /tmp/<issue>-e2e.log
+```
+
+Each background gate still produces its own log and its own exit status, so the proof stays complete.
+Serialize only gates that share a database, a port, or a build directory.
 
 Batch related edits of the same file or feature into one call.
 Every extra turn re-reads the entire retained context, so many small edits cost more than the edits themselves.

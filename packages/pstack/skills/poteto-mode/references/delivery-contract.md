@@ -54,6 +54,10 @@ Do not create a separate cleanup agent or verdict-reducer Task for each pass.
 A verdict names the artifact, findings, executed checks, evidence, and unresolved blockers.
 
 Use `code review` for static review and `runtime verification` for combined static and executable acceptance checks.
+Dispatch both reviewers in the same turn as background Tasks, then wait once for the pair.
+Their inputs are the same immutable candidate, so the review clock is the longer reviewer, not the sum.
+Scope the static reviewer to reading, style, and structure. Scope the runtime reviewer to executed acceptance.
+When only one reviewer is required, dispatch only that one.
 Only `feature`, `bug-fix`, `refactoring`, `perf-issue`, and `hillclimb` can own an implementation submission.
 Architecture, diagnosis, review, verification, publication, synthesis, and investigation roles never replace the implementation owner.
 If one of those roles returns an implementation-shaped report, retain it as non-owning WIP or reject it without changing candidate identity.
