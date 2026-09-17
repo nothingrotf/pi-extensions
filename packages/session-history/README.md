@@ -19,6 +19,9 @@ The tool supports these actions:
 
 Successful responses identify the action and include limits, pagination data, truncation status, redaction status, and skipped session counts.
 
+This tool serves the model inside the current project. It does not report latency and it never accepts an arbitrary session path.
+For cross-repository latency analysis of a recorded session file, use the `session-metrics` report in `@nothingrotf/pstack`.
+
 Failures throw JSON error messages that preserve the action and error code. Pi records these executions as errors instead of successful tool results.
 
 ## Scope

@@ -242,6 +242,11 @@ The report separates generation time from tool time, counts turns that carried a
 and totals read output, cache reads, cost, and terminal report rejections.
 Generation time is the wall gap before each assistant message and tool time is the wall gap before
 each tool result, so concurrent tool calls count once instead of once per call.
+Only the active branch is measured, so a fork, a rewind, or a compaction does not inflate the totals.
+
+This report reads a session file path directly and stays outside the project scope, because delivery
+reviews compare sessions across repositories. Use `session_history` instead for model-facing,
+project-scoped retrieval with stable references, redaction, and pagination.
 
 ## Stack backends
 

@@ -22,6 +22,15 @@ function entry(timestamp: string, message: TranscriptMessage): string {
   return JSON.stringify({ message, timestamp, type: 'message' })
 }
 
+function linkedEntry(
+  id: string,
+  parentId: string | null,
+  timestamp: string,
+  message: TranscriptMessage,
+): string {
+  return JSON.stringify({ id, message, parentId, timestamp, type: 'message' })
+}
+
 const transcript = [
   entry('2026-09-17T00:00:00.000Z', { content: [{ text: 'work', type: 'text' }], role: 'user' }),
   entry('2026-09-17T00:00:10.000Z', {
@@ -106,6 +115,39 @@ describe('session metrics', () => {
     expect(metrics.assistantTurns).toBe(3)
     expect(formatSessionMetrics(metrics)).toContain('turns 3')
     expect(formatSessionMetrics(metrics)).toContain('single-call turns 1')
+  })
+
+  it('measures the active branch and ignores abandoned entries', () => {
+    const branched = [
+      linkedEntry('1', null, '2026-09-17T00:00:00.000Z', {
+        content: [{ text: 'work', type: 'text' }],
+        role: 'user',
+      }),
+      linkedEntry('2', '1', '2026-09-17T00:00:10.000Z', {
+        content: [{ id: 'x', name: 'read', type: 'toolCall' }],
+        model: 'gpt-5.6-sol',
+        role: 'assistant',
+        usage: { output: 100 },
+      }),
+      linkedEntry('3', '1', '2026-09-17T00:00:20.000Z', {
+        content: [{ id: 'y', name: 'bash', type: 'toolCall' }],
+        model: 'gpt-5.6-sol',
+        role: 'assistant',
+        usage: { output: 7 },
+      }),
+      linkedEntry('4', '3', '2026-09-17T00:00:26.000Z', {
+        content: [{ text: 'EXIT=0', type: 'text' }],
+        role: 'toolResult',
+        toolCallId: 'y',
+        toolName: 'bash',
+      }),
+    ].join('\n')
+    const metrics = sessionMetrics(branched)
+    expect(metrics.assistantTurns).toBe(1)
+    expect(metrics.outputTokens).toBe(7)
+    expect(metrics.tools.map((tool) => tool.name)).toEqual(['bash'])
+    expect(metrics.modelMs).toBe(20_000)
+    expect(metrics.toolMs).toBe(6_000)
   })
 
   it('reports an empty session without inventing a window', () => {

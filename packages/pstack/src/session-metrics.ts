@@ -39,7 +39,12 @@ const MessageSchema = Type.Object(
 )
 
 const EntrySchema = Type.Object(
-  { message: Type.Optional(MessageSchema), timestamp: Type.Optional(Type.String()) },
+  {
+    id: Type.Optional(Type.String()),
+    message: Type.Optional(MessageSchema),
+    parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    timestamp: Type.Optional(Type.String()),
+  },
   { additionalProperties: true },
 )
 
@@ -114,10 +119,33 @@ function usageOf(message: SessionMessage): Static<typeof UsageSchema> {
 }
 
 /**
+ * Keep the lineage of the final entry, the same active-branch rule the session history uses.
+ *
+ * A fork, a rewind, or a compaction leaves abandoned entries in the file. Measuring them would
+ * count work that the session no longer contains.
+ */
+function activeEntries(entries: readonly SessionEntry[]): readonly SessionEntry[] {
+  const byId = new Map<string, SessionEntry>()
+  for (const entry of entries) {
+    if (entry.id !== undefined) byId.set(entry.id, entry)
+  }
+  if (byId.size === 0) return entries
+  const active = new Set<string>()
+  let leaf = entries.at(-1)
+  while (leaf !== undefined && leaf.id !== undefined && !active.has(leaf.id)) {
+    active.add(leaf.id)
+    const parentId = leaf.parentId
+    leaf = parentId === undefined || parentId === null ? undefined : byId.get(parentId)
+  }
+  return entries.filter((entry) => entry.id === undefined || active.has(entry.id))
+}
+
+/**
  * Derive latency and context metrics from one recorded Pi session.
  *
  * Model time is the wall gap before each assistant message and tool time is the wall gap before
  * each tool result, so concurrent tool calls count once rather than per call.
+ * Only the active branch is measured.
  */
 export function sessionMetrics(content: string): SessionMetrics {
   const usage = new Map<string, MutableToolUsage>()
@@ -138,9 +166,13 @@ export function sessionMetrics(content: string): SessionMetrics {
   let previousMs: number | undefined
   const models = new Set<string>()
 
+  const parsed: SessionEntry[] = []
   for (const line of content.split('\n')) {
     const entry = parseEntry(line)
-    if (entry === undefined) continue
+    if (entry !== undefined) parsed.push(entry)
+  }
+
+  for (const entry of activeEntries(parsed)) {
     const currentMs = epochMs(entry.timestamp)
     if (entry.timestamp !== undefined) {
       startedAt ??= entry.timestamp

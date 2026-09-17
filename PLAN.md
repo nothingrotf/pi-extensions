@@ -44,27 +44,28 @@ Native in-process tooling, faster shells, and faster search change 12% of the cl
 
 Gain is the expected reduction of the 45.7 min issue clock. Program-level items are marked separately.
 
-| #   | Item                                                                 | Gap   | Where                       | Gain                  | Share             | Confidence  | Effort      | Risk           |
-| --- | -------------------------------------------------------------------- | ----- | --------------------------- | --------------------- | ----------------- | ----------- | ----------- | -------------- |
-| I1  | Multi-file `patch` tool and multi-target read and search for workers | G1    | `subagent` capability tools | 11.7 min              | 26%               | medium-high | medium      | low            |
-| I2  | Bounded reads and summarized read results through tool interception  | G2    | `pstack` or new extension   | 3.9 min               | 8%                | medium      | medium      | medium         |
-| I3  | Static review and runtime verification dispatched in parallel        | G4    | poteto playbooks            | 5.8 min               | 13%               | medium      | low         | low            |
-| I4  | Independent gates grouped into one command inside the verifier       | G4    | `worker.md`                 | 1.8 min               | 4%                | medium-high | low         | low            |
-| I5  | Wait normalization in the managed preflight                          | G3    | `pstack` preflight          | 0.8 min               | 2%                | high        | low         | low            |
-| I5b | Lost dispatch recovery                                               | G3    | undetermined                | 0.5 min               | 1%                | none yet    | unknown     | high           |
-| I6  | Fast mode on implementation roles, measured                          | extra | `pstack-models.md`          | 3.4 min               | 7%                | low         | trivial     | usage cost     |
-| I7  | Cheap model for re-verification after a correction                   | extra | policy plus contract        | 2.5 min               | 5%                | medium      | trivial     | low            |
-| I8  | Stream rules that abort and inject on violation                      | G6    | new extension               | 5-7 min expected      | 11-15%            | low         | medium-high | medium         |
-| I9  | Package-scoped type check during implementation                      | G4    | `worker.md`                 | 0.3 min               | 0.7%              | high        | trivial     | none           |
-| I10 | Verifier harness retained and reused across rounds                   | G4    | delivery contract           | 2.0 min               | 4%                | low-medium  | low         | low            |
-| I11 | Workspace prewarm before dispatch                                    | G3    | `subagent`                  | 0.5 min               | 1%                | medium      | low         | low            |
-| I12 | Session metrics extractor                                            | G7    | `pstack` throughput         | 0                     | 0%                | high        | low         | none           |
-| I13 | Two independent lanes across issues                                  | G5    | operator decision           | program-level         | 35-45% of program | medium      | none        | lane conflicts |
-| I14 | Code mode `exec` tool with nested tool bridge                        | G1    | new package                 | 9 min after I1 and I2 | 20% of residual   | medium      | high        | high           |
-| I15 | Nested tool receipts                                                 | G1    | `subagent`                  | 0                     | 0%                | high        | medium      | medium         |
-| I16 | Action tree in the HUD for nested calls                              | G1    | `hud`                       | 0                     | 0%                | medium      | medium      | low            |
-| I17 | Phase compaction inside the child                                    | G2    | `subagent`                  | 0-3 min               | 0-6%              | low         | medium      | high           |
-| I18 | Reasoning effort tuning per phase                                    | extra | policy                      | unknown               | unknown           | low         | trivial     | quality        |
+| #   | Item                                                           | Gap   | Where                                   | Gain                  | Share             | Confidence  | Effort      | Risk           |
+| --- | -------------------------------------------------------------- | ----- | --------------------------------------- | --------------------- | ----------------- | ----------- | ----------- | -------------- |
+| I1  | Multi-file `patch` tool for workers                            | G1    | new `filetools` package plus capability | 11.7 min              | 26%               | medium-high | medium      | low            |
+| I2  | Bounded `read` replacement with a file outline                 | G2    | new `filetools` package plus capability | 3.9 min               | 8%                | medium      | medium      | medium         |
+| I2b | Publish tgrep to workers as a capability                       | G2    | `tgrep` plus capability                 | 0.4 min               | 1%                | medium      | low         | low            |
+| I3  | Static review and runtime verification dispatched in parallel  | G4    | poteto playbooks                        | 5.8 min               | 13%               | medium      | low         | low            |
+| I4  | Independent gates grouped into one command inside the verifier | G4    | `worker.md`                             | 1.8 min               | 4%                | medium-high | low         | low            |
+| I5  | Wait normalization in the managed preflight                    | G3    | `pstack` preflight                      | 0.8 min               | 2%                | high        | low         | low            |
+| I5b | Lost dispatch recovery                                         | G3    | undetermined                            | 0.5 min               | 1%                | none yet    | unknown     | high           |
+| I6  | Fast mode on implementation roles, measured                    | extra | `pstack-models.md`                      | 3.4 min               | 7%                | low         | trivial     | usage cost     |
+| I7  | Cheap model for re-verification after a correction             | extra | policy plus contract                    | 2.5 min               | 5%                | medium      | trivial     | low            |
+| I8  | Stream rules that abort and inject on violation                | G6    | new extension                           | 5-7 min expected      | 11-15%            | low         | medium-high | medium         |
+| I9  | Package-scoped type check during implementation                | G4    | `worker.md`                             | 0.3 min               | 0.7%              | high        | trivial     | none           |
+| I10 | Verifier harness retained and reused across rounds             | G4    | delivery contract                       | 2.0 min               | 4%                | low-medium  | low         | low            |
+| I11 | Workspace prewarm before dispatch                              | G3    | `subagent`                              | 0.5 min               | 1%                | medium      | low         | low            |
+| I12 | Session metrics extractor                                      | G7    | `pstack` throughput                     | 0                     | 0%                | high        | low         | none           |
+| I13 | Two independent lanes across issues                            | G5    | operator decision                       | program-level         | 35-45% of program | medium      | none        | lane conflicts |
+| I14 | Code mode `exec` tool with nested tool bridge                  | G1    | new package                             | 9 min after I1 and I2 | 20% of residual   | medium      | high        | high           |
+| I15 | Nested tool receipts                                           | G1    | `subagent`                              | 0                     | 0%                | high        | medium      | medium         |
+| I16 | Action tree in the HUD for nested calls                        | G1    | `hud`                                   | 0                     | 0%                | medium      | medium      | low            |
+| I17 | Phase compaction inside the child                              | G2    | `subagent`                              | 0-3 min               | 0-6%              | low         | medium      | high           |
+| I18 | Reasoning effort tuning per phase                              | extra | policy                                  | unknown               | unknown           | low         | trivial     | quality        |
 
 Items I1 through I11 overlap by roughly 15%. Applying that discount, the issue clock moves from **45.7 min to about 25 min**.
 
@@ -81,9 +82,14 @@ Each call remains one receipt, so managed delivery is unaffected.
 
 ### I2, context
 
-Pi allows an extension to mutate `event.input` in place during `tool_call` and to replace result content during `tool_result`.
-A read without a limit against a large file becomes a bounded read plus a file outline, without forking Pi and without replacing the `read` tool.
+Replacing the tool beats intercepting its result. `packages/tgrep` already replaces the native `grep` by re-registering the same name with `createGrepToolDefinition` and its own `execute`, so the pattern is proven in this repository.
+Keeping the name `read` also preserves evidence: managed receipts are mapped by tool name, and only `bash`, `powershell`, and `read` produce them.
+A read without a limit against a large file becomes a bounded read plus a file outline, with an explicit escape for full content.
 Phase compaction inside the child was rejected as the primary option because it destroys retained evidence ordering.
+
+Child sessions build their own resource loader with `noExtensions: true` and load only capability extensions, so an installed extension never reaches a worker.
+Worker-facing tools must ship as a subagent capability registration, which `pstack-leaf` and `pstack-nested` reference by id.
+The same gap means the workers of SPT-189 searched with the native `grep` rather than tgrep, which is item I2b.
 
 ### I3 and I4, verification
 
@@ -124,14 +130,19 @@ It also requires I15 and I16 before it can be used by a managed worker.
 
 I5b stays open pending a reproducible cause.
 The extractor reproduces the manual SPT-189 analysis exactly: 117 turns, 104 single-call turns, 22.8 min of generation, 481090 read characters, 20.6M cache reads, and 14.16 USD.
+It measures the active branch with the same lineage rule as `session-history`, so a fork, a rewind, or a compaction cannot inflate a total.
+It stays in `pstack` rather than in `session-history`, because delivery reviews compare sessions across repositories while `session_history` is project-scoped by design.
 Expected: about 8 min per issue, plus automatic measurement for every later tranche.
 
 ### Tranche 2, the main lever
 
-- I1, multi-file patch and multi-target read and search.
-- I2, bounded and summarized reads.
+- I1, multi-file `patch` tool.
+- I2, bounded `read` replacement with a file outline.
+- I2b, tgrep published to workers.
 
-These share one interception point and one receipt regression suite, so they ship together.
+These ship as one new package, `packages/filetools`, registered in the root session like `tgrep` and published to workers as a subagent capability.
+`pstack` only adds the capability id to its two profiles.
+Search stays in `tgrep`; this package never registers a competing search tool.
 Expected: about 15 min per issue.
 
 ### Tranche 3, decisions rather than engineering
