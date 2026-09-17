@@ -83,15 +83,16 @@ function applyEdits(
         `Edit ${index + 1} for ${path} carries the bounded read marker "${artifact}". Replacement text must be real file content.`,
       )
     }
+    const applied = index === 0 ? 'no earlier edit applied' : `edits 1 through ${index} matched`
     const first = content.indexOf(edit.oldText)
     if (first < 0) {
       throw new PatchError(
-        `Edit ${index + 1} for ${path} does not match. The oldText must match exactly, including whitespace.`,
+        `Edit ${index + 1} for ${path} does not match. The oldText must match exactly, including whitespace. Nothing was written, and ${applied}: read the current text and resend the whole patch.`,
       )
     }
     if (content.indexOf(edit.oldText, first + 1) >= 0) {
       throw new PatchError(
-        `Edit ${index + 1} for ${path} matches more than once. Extend oldText until it is unique.`,
+        `Edit ${index + 1} for ${path} matches more than once. Extend oldText until it is unique. Nothing was written, and ${applied}.`,
       )
     }
     content = `${content.slice(0, first)}${edit.newText}${content.slice(first + edit.oldText.length)}`
