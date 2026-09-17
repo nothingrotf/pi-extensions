@@ -184,7 +184,23 @@ Those characters sit in the cached prompt prefix, so the gain is cost and prefil
 
 Not adopted: the entity graph evidence ranker, the citation elision ledger that its own author
 disables by default, and the frecency file index, which `tgrep` already covers.
-The bash family stays open, because only a command-list executor or Code Mode can collapse it.
+
+### The bash family, measured and decided
+
+A command-list executor was considered for the 1443 collapsible bash turns and rejected on evidence.
+Across the same six sessions, 2993 turns carried only bash:
+
+| Shape                                     | Turns | Share |
+| ----------------------------------------- | ----: | ----: |
+| Already chained with `&&`, `\|\|`, or `;` |  2163 |   72% |
+| One single command                        |   830 |   28% |
+
+The models already chain most shell work, so a tool that accepts a command list would duplicate a
+mechanism in use and add a second execution surface to approve, sandbox, and render.
+The remaining consecutive runs are gate sequences and read-only inspections, which `worker.md`
+already groups. The residual gain is guidance, not a tool.
+
+Reopen this decision only when a measured session shows single-command bash turns above 40%.
 
 ### Tranche 3, decisions rather than engineering
 
