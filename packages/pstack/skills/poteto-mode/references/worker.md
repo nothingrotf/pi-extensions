@@ -60,6 +60,14 @@ Serialize only gates that share a database, a port, or a build directory.
 Batch related edits of the same file or feature into one call.
 Every extra turn re-reads the entire retained context, so many small edits cost more than the edits themselves.
 
+Collect independent read-only shell inspections into one call and label each section:
+
+```sh
+echo '== status =='; git status --short; echo '== diff =='; git diff --stat; echo '== log =='; git log --oneline -5
+```
+
+Keep a separate call whenever the next command depends on what the previous one returned.
+
 ## Preserve evidence and ownership
 
 Keep the original request, every acceptance criterion, reproduction, decisive source references, rejected hypotheses, current artifact, harness, and open findings together.
