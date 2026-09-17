@@ -24,8 +24,11 @@ Do not silently skip required review or reopen an accepted design for an ordinar
 Every tool result stays in context for the rest of the task and is re-read on each later turn.
 Search before reading. Read a bounded range when a file or document exceeds about 20,000 characters.
 Read a complete file only when the change depends on its whole content.
-When `read` returns a bounded head and a file map, request the exact window you need instead of the whole file.
+When `read` returns a bounded head and a file map, continue at the offset the result names.
+When `read` accepts `paths`, read several files in one call instead of one read call per file.
+When `read` accepts `json`, select the fields you need from a large JSON document instead of reading it whole.
 When `patch` is available, change several files in one call instead of one edit call per file.
+A `patch` result reports unbalanced delimiters and invalid JSON, so read that line before running a gate.
 
 Run each repository gate once. Write its output to a log and print only the tail in the same command:
 

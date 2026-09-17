@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vite-plus/test'
 
-import { formatSessionMetrics, sessionMetrics } from '../src/session-metrics.ts'
+import {
+  compareSessionMetrics,
+  formatSessionComparison,
+  formatSessionMetrics,
+  sessionMetrics,
+} from '../src/session-metrics.ts'
 
 interface TranscriptPart {
   id?: string
@@ -156,5 +161,25 @@ describe('session metrics', () => {
     expect(metrics.durationMs).toBe(0)
     expect(metrics.startedAt).toBeUndefined()
     expect(formatSessionMetrics(metrics)).toContain('window unknown -> unknown')
+  })
+
+  it('compares a candidate against a baseline without hiding a regression', () => {
+    const baseline = sessionMetrics(transcript)
+    const candidate = sessionMetrics(`${transcript}\n${transcript}`)
+    const comparison = compareSessionMetrics(baseline, candidate)
+
+    const turns = comparison.metrics.find((entry) => entry.name === 'turns')
+    expect(turns).toMatchObject({ baseline: 3, candidate: 6, changePercent: 100 })
+    const read = comparison.tools.find((entry) => entry.name === 'read')
+    expect(read).toMatchObject({ baseline: 2, candidate: 4, changePercent: 100 })
+    expect(formatSessionComparison(comparison)).toContain('read')
+  })
+
+  it('reports an absent baseline value as an unavailable change', () => {
+    const comparison = compareSessionMetrics(sessionMetrics(''), sessionMetrics(transcript))
+    const turns = comparison.metrics.find((entry) => entry.name === 'turns')
+
+    expect(turns).toMatchObject({ baseline: 0, candidate: 3, changePercent: undefined })
+    expect(formatSessionComparison(comparison)).toContain('n/a')
   })
 })
