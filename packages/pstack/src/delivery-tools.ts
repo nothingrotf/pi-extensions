@@ -720,6 +720,24 @@ function terminalDeliveryPacket(issue: DeliveryIssue): TerminalDeliveryPacket {
   return packet
 }
 
+export const MINIMUM_COMPLETION_WAIT_MS = 900_000
+
+const CompletionWaitSchema = Type.Object(
+  { action: Type.Literal('wait'), timeout_ms: Type.Optional(Type.Integer()) },
+  { additionalProperties: true },
+)
+
+/**
+ * A wait window shorter than a quarter hour settles on its own timeout rather than on the
+ * child's completion. Each expiry costs a full coordinator turn and can miss the provider
+ * prompt cache, so the managed preflight restores the completion-driven default.
+ */
+export function normalizeCompletionWait(input: Static<typeof CompletionWaitSchema>): boolean {
+  if (input.timeout_ms === undefined || input.timeout_ms >= MINIMUM_COMPLETION_WAIT_MS) return false
+  delete input.timeout_ms
+  return true
+}
+
 export function deliveryReviewerPacket(issue: DeliveryIssue): string {
   const summary = summarizeDelivery(issue)
   const latest = issue.submissions.at(-1)
@@ -1389,6 +1407,10 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
       event.details.attemptStarted !== false
     )
       bind(event.input, event.details.agentId)
+  })
+  pi.on('tool_call', (event) => {
+    if (event.toolName !== 'TaskControl') return
+    if (Value.Check(CompletionWaitSchema, event.input)) normalizeCompletionWait(event.input)
   })
   pi.on('tool_call', async (event, ctx) => {
     if (event.toolName !== 'Task') return
