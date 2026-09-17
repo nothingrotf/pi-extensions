@@ -7,7 +7,6 @@ import {
   createEditToolDefinition,
   createFindToolDefinition,
   createLsToolDefinition,
-  createReadToolDefinition,
   createWriteToolDefinition,
   type ExtensionAPI,
   type ToolDefinition,
@@ -46,6 +45,9 @@ const PathArgs = Type.Object({ path: Type.String() })
 const CommandArgs = Type.Object({ command: Type.String() })
 const PatternArgs = Type.Object({ pattern: Type.String() })
 const EditArgs = Type.Object({ edits: Type.Array(Type.Unknown()), path: Type.String() })
+const PatchArgs = Type.Object({
+  files: Type.Array(Type.Object({ path: Type.String() }, { additionalProperties: true })),
+})
 const TextResultBlockSchema = Type.Object({ text: Type.String(), type: Type.Literal('text') })
 const ImageResultBlockSchema = Type.Object({ type: Type.Literal('image') })
 const ToolExecutionResultSchema = Type.Object({
@@ -72,6 +74,7 @@ type BuiltInMeta = {
 
 const builtInMeta = new Map<string, BuiltInMeta>([
   ['read', { category: 'read', doneLabel: 'Read', iconKey: 'read', runningLabel: 'Reading' }],
+  ['patch', { category: 'edit', doneLabel: 'Patched', iconKey: 'edit', runningLabel: 'Patching' }],
   ['write', { category: 'edit', doneLabel: 'Wrote', iconKey: 'edit', runningLabel: 'Writing' }],
   ['edit', { category: 'edit', doneLabel: 'Edited', iconKey: 'edit', runningLabel: 'Editing' }],
   ['bash', { category: 'other', doneLabel: 'Ran', iconKey: 'shell', runningLabel: 'Running' }],
@@ -97,6 +100,14 @@ export function railDetail(call: RailCallInput, cwd: string): string {
       return Value.Check(PathArgs, args) ? shortPath(args.path, cwd) : ''
     case 'edit':
       return Value.Check(EditArgs, args) ? shortPath(args.path, cwd) : ''
+    case 'patch': {
+      if (!Value.Check(PatchArgs, args)) return ''
+      const first = args.files[0]
+      if (first === undefined) return ''
+      const rest = args.files.length - 1
+      const path = shortPath(first.path, cwd)
+      return rest > 0 ? `${path} +${rest}` : path
+    }
     case 'bash':
       return Value.Check(CommandArgs, args)
         ? truncateDetail(sanitizeScalar(args.command), 60, 57)
@@ -439,10 +450,6 @@ function builtInRegistrations(
   return [
     {
       create: (cwd) =>
-        pi.registerTool(railTool(createReadToolDefinition(cwd), storeFor, specFor('read', cwd))),
-    },
-    {
-      create: (cwd) =>
         pi.registerTool(railTool(createWriteToolDefinition(cwd), storeFor, specFor('write', cwd))),
     },
     {
@@ -471,7 +478,6 @@ export function applyRailTools(
   enabled: boolean,
 ): void {
   if (!enabled) {
-    pi.registerTool(createReadToolDefinition(cwd))
     pi.registerTool(createWriteToolDefinition(cwd))
     pi.registerTool(createEditToolDefinition(cwd))
     pi.registerTool(createBashToolDefinition(cwd))

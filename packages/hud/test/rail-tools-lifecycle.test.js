@@ -9,16 +9,19 @@ import { RailStore } from '../src/rail.ts'
 afterEach(() => setIconMode('auto'))
 
 describe('rail tool lifecycle', () => {
-  test('leaves grep ownership and rendering to the fallback across rail toggles', () => {
+  test('leaves search and file access ownership to their providers across rail toggles', () => {
     const registered = []
     const pi = { registerTool: (tool) => registered.push(tool.name) }
     const store = new RailStore()
     for (const enabled of [true, false, true]) {
       applyRailTools(pi, () => store, process.cwd(), enabled)
     }
-    expect(registered).not.toContain('grep')
-    expect(builtInRailToolNames).not.toContain('grep')
-    expect(registered).toContain('read')
+    for (const name of ['grep', 'read', 'patch']) {
+      expect(registered).not.toContain(name)
+      expect(builtInRailToolNames).not.toContain(name)
+    }
+    expect(registered).toContain('write')
+    expect(registered).toContain('edit')
   })
 
   test('adds argument glyphs during the call render', () => {
