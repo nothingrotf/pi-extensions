@@ -26,6 +26,7 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 | [`@nothingrotf/ask`](packages/ask)                         | Interactive question forms with selectable and freeform answers                   |
 | [`@nothingrotf/compact`](packages/compact)                 | Structured compaction with optional semantic enrichment and history recall        |
 | [`@nothingrotf/fast-mode`](packages/fast-mode)             | Catalog-aware Fast Mode for OpenAI Codex sessions and subagents                   |
+| [`@nothingrotf/filetools`](packages/filetools)             | Bounded file reads and all-or-nothing multi-file patches                          |
 | [`@nothingrotf/goal`](packages/goal)                       | Durable autonomous goal lifecycle for Pi sessions                                 |
 | [`@nothingrotf/hud`](packages/hud)                         | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
 | [`@nothingrotf/loop`](packages/loop)                       | Session loop for recurring and self-paced prompts or skills                       |
@@ -44,6 +45,15 @@ Use `pi --tgrep-indexed` to opt into indexes, which can omit hidden files and re
 The HUD leaves `grep` registration to the search provider and displays its calls through the fallback action rail.
 
 Read the [package documentation](packages/tgrep/README.md) for setup, limits, and compatibility.
+
+## File access
+
+The `filetools` package replaces Pi's native `read` tool and adds a `patch` tool.
+A large file read without an explicit window returns a bounded head plus a map of its declarations.
+The `patch` tool applies edits across many files in one all-or-nothing call.
+Subagents receive both tools through the optional `filetools` capability.
+
+Read the [package documentation](packages/filetools/README.md) for limits and the subagent contract.
 
 ## Workflow skills
 

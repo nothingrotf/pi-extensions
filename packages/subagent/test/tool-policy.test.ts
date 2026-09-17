@@ -33,6 +33,26 @@ describe('Task capability tool selection', () => {
     )
   })
 
+  it('replaces a built-in tool only when the capability declares the override', () => {
+    const overriding = { name: 'workflow', tools: ['read', 'write'] }
+    expect(resolveTools(agent, undefined, false, ['read'], ['read'])).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'bash',
+      'powershell',
+      'edit',
+      'write',
+    ])
+    expect(resolveTools(overriding, undefined, false, ['read'], ['read'])).toEqual([
+      'read',
+      'write',
+    ])
+    expect(resolveTools(overriding, ['read'], false, ['read'], ['read'])).toEqual(['read'])
+    expect(() => resolveTools(agent, undefined, false, ['read'], ['ls'])).toThrow(/conflicts/)
+  })
+
   it('rejects capability collisions and preserves built-in read-only filtering', () => {
     expect(() => resolveTools(agent, undefined, false, ['read'])).toThrow(/conflicts/)
     expect(() => resolveTools(agent, undefined, false, ['todo_read', 'todo_read'])).toThrow(

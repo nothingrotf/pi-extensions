@@ -134,16 +134,25 @@ It measures the active branch with the same lineage rule as `session-history`, s
 It stays in `pstack` rather than in `session-history`, because delivery reviews compare sessions across repositories while `session_history` is project-scoped by design.
 Expected: about 8 min per issue, plus automatic measurement for every later tranche.
 
-### Tranche 2, the main lever
+### Tranche 2, the main lever. Delivered.
 
-- I1, multi-file `patch` tool.
-- I2, bounded `read` replacement with a file outline.
-- I2b, tgrep published to workers.
+- I1, multi-file `patch` tool: `packages/filetools/src/patch.ts`.
+- I2, bounded `read` replacement with a file outline: `packages/filetools/src/read.ts`.
+- I2b, tgrep published to workers: `packages/tgrep/src/index.ts`.
 
-These ship as one new package, `packages/filetools`, registered in the root session like `tgrep` and published to workers as a subagent capability.
-`pstack` only adds the capability id to its two profiles.
+The tools ship as one new package, `packages/filetools`, registered in the root session like `tgrep` and published to workers as the `filetools` subagent capability.
+`pstack` lists `filetools` and `tgrep` as optional registrations on `pstack-leaf` and `pstack-nested`, so a missing provider degrades to the built-in tool instead of failing the profile.
 Search stays in `tgrep`; this package never registers a competing search tool.
+
+Two mechanisms in `packages/subagent` made this possible without load-order coupling:
+
+- `CapabilityProfile.optionalRegistrations` binds a registration at dispatch time and skips it while its provider is absent.
+- `CapabilityRegistration.overrides` declares the built-in tool names a capability replaces in a child, limited to `read`, `grep`, `find`, and `ls`.
+
+Measured on a 3002-line, 51034-byte file: an unbounded `read` returns 3700 characters instead of 34061, an 89% reduction, and still reports the file map and the exact next window.
 Expected: about 15 min per issue.
+
+Evidence: `packages/subagent/test/integration.test.ts` runs a child session whose `read` resolves to the capability implementation, and to the built-in tool when the provider is absent.
 
 ### Tranche 3, decisions rather than engineering
 
