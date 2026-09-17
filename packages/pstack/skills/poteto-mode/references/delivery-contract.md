@@ -58,6 +58,11 @@ Dispatch both reviewers in the same turn as background Tasks, then wait once for
 Their inputs are the same immutable candidate, so the review clock is the longer reviewer, not the sum.
 Scope the static reviewer to reading, style, and structure. Scope the runtime reviewer to executed acceptance.
 When only one reviewer is required, dispatch only that one.
+
+A read-only static reviewer has no shell, so it cannot run Git, materialize a diff, or confirm a patch-id.
+Write the exact diff to a readable file before dispatching one, then name that path and its digest in the prompt.
+State the base and head commits as context, and route every check that must execute Git to the runtime reviewer.
+A static verdict that reviews the working tree instead of the named candidate is scope drift, not a review.
 Only `feature`, `bug-fix`, `refactoring`, `perf-issue`, and `hillclimb` can own an implementation submission.
 Architecture, diagnosis, review, verification, publication, synthesis, and investigation roles never replace the implementation owner.
 If one of those roles returns an implementation-shaped report, retain it as non-owning WIP or reject it without changing candidate identity.
@@ -192,6 +197,8 @@ Inspect actual tool descriptors instead of guessing fields.
 Tool parameter schemas require an explicit object root.
 Nested workflow owners need `pstack-nested`, while bounded implementation against an accepted design can use `pstack-leaf`.
 A runtime verifier needs shell access and manual isolation, not a read-only tool policy.
+A read-only Task never receives `bash`, `edit`, or `write`, whatever the prompt asks of it.
+Supply a readable artifact for every check a read-only reviewer must perform.
 Integrate the accepted patch into the destination before dispatching an isolated verifier from that destination.
 Never target another managed workspace beneath `.git` as an isolated Task directory.
 
