@@ -187,6 +187,11 @@ export function createPatchTool(): ToolDefinition<typeof PatchSchema> {
     label: 'patch',
     name: 'patch',
     parameters: PatchSchema,
+    promptGuidelines: [
+      'Use patch to change several files in one call instead of one edit call per file.',
+      'Give each file either exact-match edits or full content, never both.',
+      'A patch writes nothing when any edit fails to match exactly once.',
+    ],
     promptSnippet: 'Edit several files in one call',
   })
 }

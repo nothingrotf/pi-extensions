@@ -2779,6 +2779,8 @@ describe('subagent Task integration', () => {
         label: 'read',
         name: 'read',
         parameters: Type.Object({ path: Type.String() }),
+        promptGuidelines: ['BOUNDED_READ_GUIDELINE'],
+        promptSnippet: 'BOUNDED_READ_SNIPPET',
       })
       harness.runtime.registerCapability({
         extensions: [],
@@ -2808,6 +2810,9 @@ describe('subagent Task integration', () => {
 
       expect(withoutProvider).toContain('native content')
       expect(withProvider).toContain('bounded read output')
+      const childPrompt = harness.state.childSystemPrompts.at(-1) ?? ''
+      expect(childPrompt).toContain('BOUNDED_READ_GUIDELINE')
+      expect(childPrompt).toContain('BOUNDED_READ_SNIPPET')
     } finally {
       await harness.close()
     }
