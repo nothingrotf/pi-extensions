@@ -97,7 +97,7 @@ describe('fileOutline', () => {
     const notice = outlineNotice('big.ts', fileOutline(large), 200, 34_000)
 
     expect(notice).toContain('big.ts has 2002 lines and 34000 bytes')
-    expect(notice).toContain('Pass offset and limit')
+    expect(notice).toContain('Continue with offset=201')
     expect(notice).toContain('export function target(): void {}')
   })
 })

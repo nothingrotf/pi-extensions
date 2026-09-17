@@ -154,6 +154,38 @@ Expected: about 15 min per issue.
 
 Evidence: `packages/subagent/test/integration.test.ts` runs a child session whose `read` resolves to the capability implementation, and to the built-in tool when the provider is absent.
 
+### Tranche 4, mechanisms adapted from pi-supernova. Delivered.
+
+Source: `AdityaVG13/pi-stack/packages/pi-supernova`, a Code Mode implementation for Pi.
+Code Mode itself stays parked: its primitives emit no native `tool_call` events, which blinds the
+pstack receipt validation and the HUD action rail, exactly the cost recorded for I15 and I16.
+
+Measured on the six largest sessions of this repository, 7402 tool turns:
+
+| Family                         | Calls | Consecutive same-family turns |
+| ------------------------------ | ----: | ----------------------------: |
+| bash                           |  3225 |                          1443 |
+| inspect, read, grep, find, ls  |  3198 |                          1030 |
+| mutate, edit, write            |  1781 |                           765 |
+| Total collapsible, upper bound |       |       3238, 44% of tool turns |
+
+Delivered against the inspect and mutate families:
+
+- Multi-path `read`, up to 32 files under a 60,000 character budget: `packages/filetools/src/read.ts`.
+- JSON projection before truncation: `packages/filetools/src/json-select.ts`.
+- Explicit continuation offset in the bounded read notice: `packages/filetools/src/outline.ts`.
+- Structural check on every patched file: `packages/filetools/src/structure.ts`.
+- Refusal to write bounded read output back to disk: `packages/filetools/src/artifacts.ts`.
+- Tool definition cost report: `packages/pstack/src/tool-cost.ts`.
+
+The definition report measures 36,594 characters across 19 tools for the installed extension set.
+`Task`, `todo_write`, `pstack_delivery`, `TaskControl`, and `session_history` hold 62% of it.
+Those characters sit in the cached prompt prefix, so the gain is cost and prefill, not generation time.
+
+Not adopted: the entity graph evidence ranker, the citation elision ledger that its own author
+disables by default, and the frecency file index, which `tgrep` already covers.
+The bash family stays open, because only a command-list executor or Code Mode can collapse it.
+
 ### Tranche 3, decisions rather than engineering
 
 - I6, fast mode experiment with before and after measurement from I12.

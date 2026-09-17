@@ -248,6 +248,20 @@ This report reads a session file path directly and stays outside the project sco
 reviews compare sessions across repositories. Use `session_history` instead for model-facing,
 project-scoped retrieval with stable references, redaction, and pagination.
 
+### Tool definition cost
+
+Every registered tool definition is serialized into each model request, so a verbose description is
+paid on every turn of every session. Rank that fixed overhead:
+
+```sh
+bun src/tool-cost-cli.ts ../subagent/src/index.ts ../pstack/src/index.ts
+bun src/tool-cost-cli.ts --json ../filetools/src/index.ts
+```
+
+The report loads the named extensions beside the Pi built-in tools and ranks each tool by the
+characters it contributes, separating the serialized definition from its system prompt snippet and
+guidelines. Characters are not tokenizer counts.
+
 ## Stack backends
 
 Poteto supports Graphite `gt` and GitHub `github/gh-stack`.
