@@ -1362,6 +1362,85 @@ describe('pstack delivery tool interception', () => {
     expect(result.error).not.toContain('/reason')
     expect(result.error).toContain('Criterion receipt references command:1 with status error')
     expect(result.correctionPrompt).toContain('command:1 status=error')
+    expect(result.correctionPrompt).toContain('Failed current-attempt receipts: command:1')
+  })
+
+  it('drops a failed receipt from a passing criterion when successful proof remains', () => {
+    const issue = emptyDeliveryIssue('owner', 'failed-receipt-prune')
+    const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
+    const snapshot = {
+      repositories: [
+        {
+          base: 'a'.repeat(40),
+          patch: { byteLength: 1, sha256: 'b'.repeat(64), uri: 'artifact://patch' },
+          relativePath: '',
+          root: '/repo',
+          tree: 'c'.repeat(40),
+        },
+      ],
+    }
+    const receipt = (callId, uri, failed) => ({
+      callId,
+      command: 'bun run test',
+      completedAt: 2,
+      isError: failed,
+      output: {
+        byteLength: 1,
+        mediaType: 'text/plain',
+        sha256: 'b'.repeat(64),
+        uri,
+      },
+      startedAt: 1,
+      status: failed ? 'error' : 'success',
+      tool: 'bash',
+    })
+    const result = validateDeliveryTerminal({
+      agentId: 'worker',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'worker',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      isolation: isolationReceipt(snapshot, 'not-requested'),
+      output: '{}',
+      previousOutputs: [],
+      prompt,
+      readonly: false,
+      role: 'feature',
+      workspaceIdentity: { baselineTree: 'a'.repeat(40), snapshot },
+      structuredOutput: {
+        data: {
+          issue: issue.issue,
+          kind: 'implementation',
+          state: 'candidate',
+          criteria: [
+            { id: 'receipt', result: 'pass', evidence: ['patch:.', 'command:1', 'command:2'] },
+          ],
+          findings: [],
+          reason: 'The retry proves the criterion.',
+          failureClass: 'none',
+        },
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [
+        receipt('failed', 'artifact://failed-command', true),
+        receipt('passed', 'artifact://passed-command', false),
+      ],
+    })
+    if (result.status !== 'accepted') throw new Error(`REJECTED: ${result.error}`)
+    if (result.normalizedOutput === undefined) throw new Error('Missing normalized output.')
+    expect(JSON.parse(result.normalizedOutput).criteria).toEqual([
+      { id: 'receipt', result: 'pass', evidence: ['patch:.', 'command:2'] },
+    ])
   })
 
   it('accepts an oversized reason by truncating prose without another correction turn', () => {

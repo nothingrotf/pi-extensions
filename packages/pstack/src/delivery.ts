@@ -133,6 +133,30 @@ export function deliveryReportDraft(value: JsonValue | undefined): DeliveryRepor
   return { failureClassProvided: false, report: { ...value, failureClass: 'none' } }
 }
 
+export function pruneFailedPassEvidence(
+  report: DeliveryReport,
+  evidence: readonly DeliveryEvidence[],
+): { pruned: readonly string[]; report: DeliveryReport } {
+  const failed = new Set(
+    evidence.filter((entry) => !entry.passed || entry.kind === 'failure').map((entry) => entry.id),
+  )
+  if (failed.size === 0) return { pruned: [], report }
+  const succeeded = new Set(
+    evidence.filter((entry) => entry.passed && entry.kind !== 'failure').map((entry) => entry.id),
+  )
+  const pruned: string[] = []
+  const criteria = report.criteria.map((criterion) => {
+    if (criterion.result !== 'pass') return criterion
+    const removed = criterion.evidence.filter((reference) => failed.has(reference))
+    if (removed.length === 0) return criterion
+    const kept = criterion.evidence.filter((reference) => !failed.has(reference))
+    if (!kept.some((reference) => succeeded.has(reference))) return criterion
+    pruned.push(...removed)
+    return { ...criterion, evidence: kept }
+  })
+  return pruned.length === 0 ? { pruned: [], report } : { pruned, report: { ...report, criteria } }
+}
+
 export function normalizeDeliveryReportProse(report: DeliveryReport): DeliveryReport {
   if (report.reason.length <= DELIVERY_REASON_LIMIT) return report
   const marker = ' [reason truncated]'

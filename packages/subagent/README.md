@@ -363,7 +363,7 @@ Each writer receives a private Git directory and common directory. Child branche
 
 The runtime uses object alternates for baseline reads. It promotes result commits into durable root storage before workspace cleanup.
 
-Ignored dependency directories use copy-on-write copies when available. The runtime uses regular copies as the safe fallback. Dependency materialization runs in the background after the workspace becomes usable, so the child starts before large copies finish. The first tool call, isolation capture, and workspace cleanup await that barrier. Repeated task caches under an ignored dependency directory bind to one shared store per repository, so every writer reuses the warm cache instead of copying it.
+Ignored dependency directories use copy-on-write copies when available. The runtime uses regular copies as the safe fallback. Dependency materialization runs in the background after the workspace becomes usable, so the child starts before large copies finish. The product repository completes first and exposes its own barrier. The first tool call awaits only the product repository, while isolation capture and workspace cleanup await every repository. Repeated task caches under an ignored dependency directory bind to one shared store per repository, so every writer reuses the warm cache instead of copying it.
 
 Each physical attempt uses a unique workspace, attempt identity, atomic owner manifest, and cross-process lock owner.
 

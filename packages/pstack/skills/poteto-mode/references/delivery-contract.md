@@ -97,6 +97,9 @@ Keep `reason` at or below 4096 characters and always set `failureClass`.
 The runtime truncates oversized `reason` prose and infers `failureClass: none` for an all-passing candidate or accepted report.
 It rejects oversized evidence arrays, missing criteria, and any other contract defect, so a long report still costs a correction turn.
 An implementation candidate requires at least one successful `command:n` receipt from its own attempt.
+A failed receipt never proves a passing criterion.
+The runtime drops a failed reference from a passing criterion when successful proof remains, and rejects the report when it does not.
+Re-run the command after the fix and cite the successful alias, or lower the criterion result.
 
 A resumed attempt has its own receipt numbering.
 Previous `command:n` references do not automatically identify evidence in the new attempt.

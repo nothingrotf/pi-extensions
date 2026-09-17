@@ -2179,7 +2179,7 @@ export class SubagentRuntime {
             'Tools are unavailable during a report-only terminal correction. Return only the corrected report.',
         }
       }
-      await active.workspace?.dependencies
+      await active.workspace?.rootDependencies
       return delegate === undefined ? undefined : delegate(context, signal)
     }
   }
