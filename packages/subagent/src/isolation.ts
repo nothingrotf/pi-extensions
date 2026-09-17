@@ -333,6 +333,7 @@ function parseChangedFiles(output: string): IsolationChangedFile[] {
 }
 
 export async function captureIsolation(workspace: WriterWorkspace): Promise<IsolationReceipt> {
+  await workspace.dependencies
   const owner = await currentLockOwner(workspace.writerId, workspace.attemptId)
   const expectedNested = workspace.repositories
     .filter((repository) => repository.relativePath.length > 0)
@@ -764,6 +765,7 @@ export async function recaptureRetainedIsolation(options: {
 
 export async function cleanupWorkspaceArtifacts(workspace: WriterWorkspace): Promise<boolean> {
   try {
+    await workspace.dependencies
     if (!(await hasValidWorkspaceLocation(workspace))) return true
     await rm(workspace.rootWorktree, { force: true, recursive: true })
     await rm(workspace.baseDir, { force: true, recursive: true })
@@ -882,6 +884,7 @@ function workspaceFromManifest(manifest: WorkspaceManifest, path: string): Write
       spawnOrdinal: 0,
       workspaceId: manifest.workspaceId,
     },
+    dependencies: Promise.resolve(),
     durableCommonDir: manifest.repositories[0]?.durableCommonDir ?? manifest.storeRoot,
     integration: manifest.integration ?? 'manual',
     manifest,

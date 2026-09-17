@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -45,6 +55,7 @@ export interface WriterWorkspace {
   attemptId: string
   baseDir: string
   context: WorkspaceContext
+  dependencies: Promise<void>
   durableCommonDir: string
   integration: IsolationIntegration
   manifest: WorkspaceManifest
@@ -54,6 +65,8 @@ export interface WriterWorkspace {
   storeRoot: string
   writerId: string
 }
+
+export const SHARED_TASK_CACHE_PATHS: readonly string[] = ['node_modules/.vite/task-cache']
 
 export function safeSegment(value: string): string {
   return digest(value).slice(0, 16)
@@ -361,6 +374,76 @@ async function materializeDependencyDirectories(
   return { dependencyMode, paths: copied }
 }
 
+async function ignoredInWorktree(worktree: string, relativePath: string): Promise<boolean> {
+  try {
+    await git(worktree, ['check-ignore', '-q', '--no-index', '--', relativePath])
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function bindSharedTaskCaches(
+  storeRoot: string,
+  repository: RepositoryIsolation,
+  dependencyPaths: readonly string[],
+): Promise<void> {
+  for (const relativePath of SHARED_TASK_CACHE_PATHS) {
+    const inDependencyDirectory = dependencyPaths.some(
+      (path) => relativePath === path || relativePath.startsWith(`${path}/`),
+    )
+    if (!inDependencyDirectory) continue
+    if (!(await ignoredInWorktree(repository.worktree, relativePath))) continue
+    const target = join(repository.worktree, relativePath)
+    const shared = join(
+      storeRoot,
+      'task-cache',
+      repository.repositoryId,
+      digest(relativePath).slice(0, 16),
+    )
+    try {
+      if (await pathExists(shared)) {
+        await rm(target, { force: true, recursive: true })
+      } else {
+        await mkdir(dirname(shared), { recursive: true })
+        if (await pathExists(target)) {
+          await copyDirectory(target, shared)
+          await rm(target, { force: true, recursive: true })
+        } else {
+          await mkdir(shared, { recursive: true })
+        }
+      }
+      await mkdir(dirname(target), { recursive: true })
+      await symlink(shared, target)
+    } catch {}
+  }
+}
+
+async function materializeWorkspaceDependencies(
+  manifest: WorkspaceManifest,
+  repositories: RepositoryIsolation[],
+  storeRoot: string,
+): Promise<void> {
+  try {
+    await Promise.all(
+      repositories.map(async (repository, index) => {
+        const dependencies = await materializeDependencyDirectories(
+          repository.physicalRepoRoot,
+          repository.worktree,
+        )
+        await bindSharedTaskCaches(storeRoot, repository, dependencies.paths)
+        repositories[index] = {
+          ...repository,
+          dependencyMode: dependencies.dependencyMode,
+          dependencyPaths: dependencies.paths,
+        }
+      }),
+    )
+    manifest.repositories = repositories.map((repository) => ({ ...repository }))
+    await writeManifest(manifest)
+  } catch {}
+}
+
 async function sparseCheckoutState(
   repoRoot: string,
 ): Promise<{ enabled: boolean; patterns?: string }> {
@@ -540,19 +623,18 @@ export async function createWriterWorkspace(options: {
         await rm(target, { force: true, recursive: true })
       }
       await materializeRepository(entry, target)
-      const dependencies = await materializeDependencyDirectories(entry.physicalRepoRoot, target)
       repositories.push({
         ...entry,
-        dependencyMode: dependencies.dependencyMode,
-        dependencyPaths: dependencies.paths,
+        dependencyMode: 'omitted',
+        dependencyPaths: [],
         worktree: target,
       })
-      manifest.repositories = repositories.map((repository) => ({ ...repository }))
-      await writeManifest(manifest)
     }
+    manifest.repositories = repositories.map((repository) => ({ ...repository }))
 
     manifest.state = 'active'
     const updatedPath = await writeManifest(manifest)
+    const dependencies = materializeWorkspaceDependencies(manifest, repositories, storeRoot)
 
     const context: WorkspaceContext = {
       logicalCwd: options.parent.logicalCwd,
@@ -569,6 +651,7 @@ export async function createWriterWorkspace(options: {
       attemptId,
       baseDir,
       context,
+      dependencies,
       durableCommonDir,
       integration: options.integration,
       manifest,
@@ -597,7 +680,7 @@ export async function captureResultTree(
   try {
     await gitWithIndex(repository.worktree, indexPath, ['read-tree', repository.baselineCommit])
     await gitWithIndex(repository.worktree, indexPath, ['add', '-A', '--', '.'])
-    for (const path of repository.dependencyPaths) {
+    for (const path of [...repository.dependencyPaths, ...SHARED_TASK_CACHE_PATHS]) {
       await gitWithIndex(repository.worktree, indexPath, [
         'update-index',
         '--force-remove',

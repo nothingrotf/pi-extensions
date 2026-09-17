@@ -10,6 +10,7 @@ import {
   jsonEquals,
   readSubagentState,
   type RunRecord,
+  type StructuredOutput,
   type TerminalValidationInput,
   type TerminalValidationResult,
   type WorkspaceSnapshot,
@@ -25,21 +26,24 @@ import {
 import { isDeliveryRole, isImplementationRole } from './delivery-roles.ts'
 import { DeliveryReadSchema, deliveryView } from './delivery-views.ts'
 import {
+  DELIVERY_REASON_LIMIT,
   DeliveryArtifactSchema,
   DeliveryIssueSchema,
   DeliveryOutputSchema,
   DeliveryReportSchema,
-  DeliveryReportSemanticSchema,
   DeliveryRejected,
   type DeliveryArtifact,
   type DeliveryEvidence,
   type DeliveryIssue,
   type DeliveryReport,
+  type DeliveryReportDraft,
   type DeliveryResult,
   type DeliverySubmission,
   currentDeliveryReport,
   deliveryRepairIdentity,
   deliveryReportDiagnostics,
+  deliveryReportDraft,
+  normalizeDeliveryReportProse,
   parseDeliveryIssue,
   recordDelivery,
   refreshDeliveryIntegration,
@@ -312,6 +316,12 @@ function includesReadReceipts(
   )
 }
 
+function evidenceCommand(command: string | undefined): string | undefined {
+  if (command === undefined || command.length <= 4096) return command
+  const marker = ' [command truncated]'
+  return `${command.slice(0, 4096 - marker.length).trimEnd()}${marker}`
+}
+
 async function evidenceFromRun(
   record: RunRecord,
   citedEvidence: readonly string[],
@@ -374,7 +384,8 @@ async function evidenceFromRun(
       sha256: receipt.output.sha256,
       status: passed ? 'success' : 'error',
     }
-    if (receipt.command !== undefined) entry.command = receipt.command
+    const command = evidenceCommand(receipt.command)
+    if (command !== undefined) entry.command = command
     evidence.push(entry)
   }
   if (includeReadReceipts) {
@@ -407,7 +418,8 @@ async function evidenceFromRun(
         sha256: receipt.output.sha256,
         status: passed ? 'success' : 'error',
       }
-      if (receipt.command !== undefined) entry.command = receipt.command
+      const command = evidenceCommand(receipt.command)
+      if (command !== undefined) entry.command = command
       evidence.push(entry)
     }
   }
@@ -750,6 +762,7 @@ export function deliveryReviewerPacket(issue: DeliveryIssue): string {
   )
   return [
     `Managed issue: ${issue.issue}. Delivery: ${summary.state}.`,
+    `Report limits: issue id 256 characters, reason ${DELIVERY_REASON_LIMIT}, 128 criteria, 256 findings, and 16 evidence references per criterion or finding. Oversized prose is truncated; oversized evidence arrays are rejected.`,
     `Registered criterion IDs: ${issue.criteria.map((criterion) => criterion.id).join(', ')}.`,
     'Report every registered criterion, including previously passing criteria. Do not rename criteria or add finding IDs as criteria.',
     `Open criteria: ${summary.unresolvedCriteria.join(', ') || 'none'}.`,
@@ -768,7 +781,7 @@ export function deliveryReviewerPacket(issue: DeliveryIssue): string {
     'Evidence arrays contain recorded receipt IDs, not prose or file paths. Put explanations and file-line references in reason.',
     'Cite shell receipts as command:1, command:2, and later values in execution order. Read-only static reviews and diagnoses may cite read:1, read:2, and later values in read execution order. Cite patch:<repository relative path, or .> for captured patches. Never invent a receipt reference.',
     'Receipt numbering belongs to the current attempt. A resume does not transfer previous command:n references into the new attempt.',
-    'Report limits: issue id 256 characters, reason 4096, 128 criteria, 256 findings, and 16 evidence references per criterion or finding.',
+    'An implementation candidate requires at least one successful command receipt from this attempt.',
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,
   ].join('\n')
@@ -848,20 +861,27 @@ function terminalEvidence(
       sha256: receipt.output.sha256,
       status: passed ? 'success' : 'error',
     }
-    if (receipt.command !== undefined) entry.command = receipt.command
+    const command = evidenceCommand(receipt.command)
+    if (command !== undefined) entry.command = command
     evidence.push(entry)
   }
   return evidence
 }
 
-function semanticReport(input: TerminalValidationInput): DeliveryReport | undefined {
-  const source =
+function reportDraft(output: StructuredOutput | undefined): DeliveryReportDraft | undefined {
+  if (output?.status !== 'valid') return undefined
+  const draft = deliveryReportDraft(output.data)
+  return draft === undefined
+    ? undefined
+    : { ...draft, report: normalizeDeliveryReportProse(draft.report) }
+}
+
+function semanticReport(input: TerminalValidationInput): DeliveryReportDraft | undefined {
+  return reportDraft(
     input.previousOutputs.length === 0
       ? input.structuredOutput
-      : input.previousOutputs[0]?.structuredOutput
-  return source?.status === 'valid' && Value.Check(DeliveryReportSemanticSchema, source.data)
-    ? source.data
-    : undefined
+      : input.previousOutputs[0]?.structuredOutput,
+  )
 }
 
 export function validateDeliveryTerminal(input: TerminalValidationInput): TerminalValidationResult {
@@ -869,20 +889,16 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
   if (packet === undefined) return { status: 'accepted' }
   const diagnostics: string[] = []
   const structured = input.structuredOutput
-  const report =
-    structured?.status === 'valid' && Value.Check(DeliveryReportSemanticSchema, structured.data)
-      ? structured.data
-      : undefined
-  const fullSchemaValid =
-    structured?.status === 'valid' && Value.Check(DeliveryReportSchema, structured.data)
+  const draft = reportDraft(structured)
+  const report = draft?.report
+  const normalized =
+    report !== undefined && !jsonEquals(decodeJsonValue(report), structured?.data ?? null)
+  const fullSchemaValid = report !== undefined && Value.Check(DeliveryReportSchema, report)
   if (!fullSchemaValid) {
     if (structured?.status !== 'valid') {
       diagnostics.push(structured?.error ?? 'The structured delivery report is unavailable.')
     } else {
-      if (report !== undefined && report.reason.length > 4096) {
-        diagnostics.push(`/reason ${report.reason.length} >4096.`)
-      }
-      for (const error of Value.Errors(DeliveryReportSchema, structured.data)) {
+      for (const error of Value.Errors(DeliveryReportSchema, report ?? structured.data)) {
         diagnostics.push(`${error.instancePath || '/'}: ${error.message}`)
       }
     }
@@ -919,7 +935,7 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
       submissions: [],
     }
     diagnostics.push(...deliveryReportDiagnostics(issue, submission))
-    if (fullSchemaValid) {
+    if (fullSchemaValid && diagnostics.length === 0) {
       const result = recordDelivery(issue, submission)
       if (!result.ok) diagnostics.push(result.error.reason)
     }
@@ -929,13 +945,22 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
         diagnostics.push(
           'The original report semantics are unavailable, so correction must remain WIP.',
         )
-      } else if (original !== undefined && !sameDeliveryTechnicalVerdict(original, report)) {
-        diagnostics.push('Correction cannot change the original technical verdict.')
+      } else if (original !== undefined) {
+        const basis = original.failureClassProvided
+          ? original.report
+          : { ...original.report, failureClass: report.failureClass }
+        if (!sameDeliveryTechnicalVerdict(basis, report)) {
+          diagnostics.push('Correction cannot change the original technical verdict.')
+        }
       }
     }
   }
   const unique = [...new Set(diagnostics)]
-  if (unique.length === 0) return { status: 'accepted' }
+  if (unique.length === 0) {
+    return normalized && report !== undefined
+      ? { normalizedOutput: JSON.stringify(report), status: 'accepted' }
+      : { status: 'accepted' }
+  }
   const evidence = terminalEvidence(input, report)
     .map(
       (entry) =>
@@ -951,7 +976,7 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
       'Your terminal delivery report was rejected. Return only a corrected JSON report.',
       'This is a report-only correction. No tools are available. Do not claim new work or invent proof.',
       `Diagnostics: ${error}`,
-      'Return a shorter report. Keep /reason at or below 4096 characters, preferably below 2048, while retaining concrete conclusions. Keep exact receipt IDs in evidence arrays.',
+      `Return a shorter report. Keep /reason at or below ${DELIVERY_REASON_LIMIT} characters, preferably below 2048, while retaining concrete conclusions. Keep exact receipt IDs in evidence arrays.`,
       `Immutable current-attempt receipt index:\n${evidence || 'none'}`,
       'Preserve the original kind and failure class. Never promote readiness or criterion outcomes, erase findings, weaken blocking severity, or close an open finding. When immutable proof is unavailable, conservatively return WIP with non-passing criteria or open blockers. Only serialization, prose, exact receipt references, and conservative downgrades may be repaired.',
     ].join('\n'),

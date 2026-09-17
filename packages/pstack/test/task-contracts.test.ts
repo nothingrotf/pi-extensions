@@ -45,10 +45,9 @@ describe('pstack executable Task contracts', () => {
   it('publishes a typed completion wait instead of invalid polling arguments', () => {
     const wait = contracts()[3]
     expect(Value.Check(TaskControlInputSchema, wait)).toBe(true)
-    expect(wait).toMatchObject({
+    expect(wait).toEqual({
       action: 'wait',
       agent_ids: ['<agent-id from the dispatch receipt>'],
-      timeout_ms: 300000,
     })
     for (const invalid of [
       { action: 'wait', agent_id: 'child', timeout_ms: 300000 },

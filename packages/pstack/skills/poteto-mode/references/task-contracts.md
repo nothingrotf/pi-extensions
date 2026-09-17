@@ -165,10 +165,13 @@ Use `TaskControl wait` only when no independent work remains. A `completed` stat
 ```json
 {
   "action": "wait",
-  "agent_ids": ["<agent-id from the dispatch receipt>"],
-  "timeout_ms": 300000
+  "agent_ids": ["<agent-id from the dispatch receipt>"]
 }
 ```
+
+Omit `timeout_ms`. The wait settles on the child's completion, so a short window only adds coordinator turns.
+Each extra turn re-reads the whole coordinator context and can miss the provider prompt cache, which costs far more than the wait itself.
+Set `timeout_ms` only for an explicit liveness deadline shorter than the default hour.
 
 Use `agent_ids`, not `agent_id`, for wait.
 Keep numbers, booleans, arrays, and isolation objects typed, not JSON-encoded strings.

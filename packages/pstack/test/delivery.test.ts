@@ -665,6 +665,39 @@ describe('managed delivery acceptance', () => {
     expect(summarizeDelivery(stale).unresolvedFindings).toEqual(['late'])
   })
 
+  it('rejects an implementation candidate whose only receipts are read receipts', () => {
+    const readOnlyEvidence: DeliveryEvidence[] = [
+      {
+        id: 'read:1',
+        kind: 'command',
+        passed: true,
+        reference: 'file:///read-output',
+        sha256: 'e'.repeat(64),
+      },
+    ]
+    const readOnly: DeliverySubmission = {
+      ...implementation,
+      evidence: readOnlyEvidence,
+      report: {
+        ...implementation.report,
+        criteria: [{ id: 'replay', result: 'pass', evidence: ['read:1'] }],
+      },
+    }
+    expect(deliveryReportDiagnostics(issue, readOnly)).toContain(
+      'An implementation candidate requires at least one successful command receipt from this attempt.',
+    )
+    expect(
+      deliveryReportDiagnostics(issue, {
+        ...readOnly,
+        evidence: [...readOnlyEvidence, ...evidence],
+        report: {
+          ...implementation.report,
+          criteria: [{ id: 'replay', result: 'pass', evidence: ['test'] }],
+        },
+      }),
+    ).toEqual([])
+  })
+
   it('diagnoses omitted open blocking finding IDs by their full field identity', () => {
     const blocked = save(save(issue, implementation), {
       ...verifier,
