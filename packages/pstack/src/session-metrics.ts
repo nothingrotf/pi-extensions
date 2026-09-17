@@ -253,6 +253,84 @@ function minutes(value: number): string {
   return `${(value / 60_000).toFixed(1)} min`
 }
 
+export interface MetricComparison {
+  baseline: number
+  candidate: number
+  /** Signed change as a percentage of the baseline, or undefined when the baseline is zero. */
+  changePercent: number | undefined
+  name: string
+}
+
+export interface SessionComparison {
+  metrics: readonly MetricComparison[]
+  tools: readonly MetricComparison[]
+}
+
+function compareValue(name: string, baseline: number, candidate: number): MetricComparison {
+  const entry: MetricComparison = { baseline, candidate, changePercent: undefined, name }
+  if (baseline !== 0) {
+    entry.changePercent = Math.round(((candidate - baseline) / baseline) * 1000) / 10
+  }
+  return entry
+}
+
+/**
+ * Compare a candidate session against a frozen baseline.
+ *
+ * A workflow change is only proven when a real session moves the same metrics the plan claimed, so
+ * the comparison keeps every counter side by side instead of reporting one aggregate score.
+ */
+export function compareSessionMetrics(
+  baseline: SessionMetrics,
+  candidate: SessionMetrics,
+): SessionComparison {
+  const metrics = [
+    compareValue('model min', baseline.modelMs / 60_000, candidate.modelMs / 60_000),
+    compareValue('tool min', baseline.toolMs / 60_000, candidate.toolMs / 60_000),
+    compareValue('wall min', baseline.durationMs / 60_000, candidate.durationMs / 60_000),
+    compareValue('turns', baseline.assistantTurns, candidate.assistantTurns),
+    compareValue('single-call turns', baseline.singleCallTurns, candidate.singleCallTurns),
+    compareValue('tool calls', baseline.toolCalls, candidate.toolCalls),
+    compareValue('read result chars', baseline.readResultChars, candidate.readResultChars),
+    compareValue('cache read tokens', baseline.cacheReadTokens, candidate.cacheReadTokens),
+    compareValue('output tokens', baseline.outputTokens, candidate.outputTokens),
+    compareValue('cost usd', baseline.costUsd, candidate.costUsd),
+    compareValue('terminal rejections', baseline.terminalRejections, candidate.terminalRejections),
+  ]
+  const names = new Set([
+    ...baseline.tools.map((tool) => tool.name),
+    ...candidate.tools.map((tool) => tool.name),
+  ])
+  const callsOf = (metrics: SessionMetrics, name: string) =>
+    metrics.tools.find((tool) => tool.name === name)?.calls ?? 0
+  const tools = [...names]
+    .map((name) => compareValue(name, callsOf(baseline, name), callsOf(candidate, name)))
+    .sort((left, right) => right.baseline - left.baseline || left.name.localeCompare(right.name))
+  return { metrics, tools }
+}
+
+function comparisonRow(entry: MetricComparison): string {
+  const format = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1))
+  const change =
+    entry.changePercent === undefined
+      ? 'n/a'
+      : `${entry.changePercent > 0 ? '+' : ''}${entry.changePercent}%`
+  return `  ${entry.name.padEnd(20)} ${format(entry.baseline).padStart(10)} ${format(entry.candidate).padStart(10)} ${change.padStart(8)}`
+}
+
+export function formatSessionComparison(comparison: SessionComparison): string {
+  const lines = [
+    `  ${'metric'.padEnd(20)} ${'baseline'.padStart(10)} ${'candidate'.padStart(10)} ${'change'.padStart(8)}`,
+  ]
+  for (const entry of comparison.metrics) lines.push(comparisonRow(entry))
+  lines.push(
+    '',
+    `  ${'tool calls'.padEnd(20)} ${'baseline'.padStart(10)} ${'candidate'.padStart(10)} ${'change'.padStart(8)}`,
+  )
+  for (const entry of comparison.tools.slice(0, 10)) lines.push(comparisonRow(entry))
+  return lines.join('\n')
+}
+
 /** Render one metrics record as the compact latency report used for delivery reviews. */
 export function formatSessionMetrics(metrics: SessionMetrics): string {
   const perTurn =

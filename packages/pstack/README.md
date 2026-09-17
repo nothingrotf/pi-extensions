@@ -236,6 +236,7 @@ Derive per-session latency directly from a recorded session:
 ```sh
 bun src/session-metrics-cli.ts /absolute/path/to/session.jsonl
 bun src/session-metrics-cli.ts --json /absolute/path/to/session.jsonl
+bun src/session-metrics-cli.ts --compare /path/to/baseline.jsonl /path/to/candidate.jsonl
 ```
 
 The report separates generation time from tool time, counts turns that carried a single tool call,
@@ -243,6 +244,10 @@ and totals read output, cache reads, cost, and terminal report rejections.
 Generation time is the wall gap before each assistant message and tool time is the wall gap before
 each tool result, so concurrent tool calls count once instead of once per call.
 Only the active branch is measured, so a fork, a rewind, or a compaction does not inflate the totals.
+
+The comparison mode places a candidate session beside a frozen baseline and reports the signed change
+of every counter, including calls per tool. It reports an absent baseline value as unavailable rather
+than as an improvement, so a workflow change is judged against measured numbers instead of estimates.
 
 This report reads a session file path directly and stays outside the project scope, because delivery
 reviews compare sessions across repositories. Use `session_history` instead for model-facing,
