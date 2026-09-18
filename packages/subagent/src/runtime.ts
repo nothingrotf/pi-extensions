@@ -575,6 +575,18 @@ function emptyUsage(durationMs: number): RunUsage {
   }
 }
 
+function retainedNothing(receipt: IsolationReceipt): boolean {
+  return (
+    receipt.repositories.length > 0 &&
+    receipt.repositories.every(
+      (repository) =>
+        repository.status === 'captured' &&
+        repository.resultTree === repository.baselineTree &&
+        repository.changedFiles.length === 0,
+    )
+  )
+}
+
 function errorMessage<Input>(error: Input): string {
   if (error instanceof Error) return error.message
   return String(error)
@@ -1730,12 +1742,17 @@ export class SubagentRuntime {
   }
 
   private continuationError(reason: string, receipt: IsolationReceipt): Error {
+    if (retainedNothing(receipt)) {
+      return new Error(
+        `${reason} The previous attempt retained no work-in-progress. Do not resume it again; dispatch a fresh Task from the saved brief and evidence.`,
+      )
+    }
     const references = receipt.repositories.map(
       (repository) =>
         `${repository.relativePath || '.'}: ${repository.patch.uri} (sha256 ${repository.patch.sha256}, ref ${repository.durableRef ?? 'unavailable'})`,
     )
     return new Error(
-      `${reason} Retained WIP: ${references.join('; ') || receipt.manifestUri}. Reconcile the retained artifact in a fresh authorized isolation. Do not discard it or reset the source workspace.`,
+      `${reason} Retained WIP: ${references.join('; ') || receipt.manifestUri}. Do not resume it again against a moved baseline; dispatch a fresh Task that reconciles the retained patch in its own isolation. Do not discard it or reset the source workspace.`,
     )
   }
 
@@ -1783,6 +1800,7 @@ export class SubagentRuntime {
         throw this.continuationError(errorMessage(error), receipt)
       }
     }
+    if (receipt.captureStatus === 'captured' && retainedNothing(receipt)) return undefined
     if (receipt.captureStatus !== 'captured') {
       throw this.continuationError(
         'The previous isolated attempt has no captured durable artifact to reconstruct.',
@@ -2143,12 +2161,14 @@ export class SubagentRuntime {
     )
     const completion = turn.then(
       (result) => this.finalizeRun(record, active, background, result),
-      (error) =>
-        this.finalizeRun(record, active, background, {
+      (error) => {
+        this.abandonRun(record, active, errorMessage(error))
+        return this.finalizeRun(record, active, background, {
           details: { agentId: record.agentId, error: errorMessage(error), status: 'error' },
           kind: 'failed',
           outcome: 'failed',
-        }),
+        })
+      },
     )
     active.completion = completion
 
@@ -3399,7 +3419,10 @@ export class SubagentRuntime {
       const output = truncateOutput(fullOutput)
       const durationMs = Date.now() - active.startedAt
       const usage = collectUsage(active.messages, active.metrics, durationMs)
-      const toolExecutionReceipts = await this.publishToolExecutionReceipts(record, active)
+      let toolExecutionReceipts: ToolExecutionReceipt[] = []
+      try {
+        toolExecutionReceipts = await this.publishToolExecutionReceipts(record, active)
+      } catch {}
       const status = active.abortReason === undefined ? 'failed' : 'aborted'
       try {
         await this.abortDescendantScope(active)
@@ -3482,6 +3505,29 @@ export class SubagentRuntime {
     active.parentScopeCompletion?.resolve(finalResult)
     this.cleanupRun(record, active)
     return finalResult
+  }
+
+  private abandonRun(record: RunRecord, active: ActiveRun, error: string): void {
+    const current = this.state.get(record.agentId)
+    if (current === undefined || current.status !== 'running') return
+    const now = Date.now()
+    active.timing.executionEndedAt ??= Math.max(active.startedAt, now)
+    active.timing.settledAt = Math.max(active.timing.executionEndedAt, now)
+    this.state.update({
+      ...current,
+      durationMs: now - active.startedAt,
+      error: `The run ended before its terminal state was recorded: ${error}`,
+      status: 'failed',
+      timing: { ...active.timing },
+      updatedAt: now,
+    })
+    try {
+      this.pi.appendEntry('pi-subagent-evidence-error', {
+        agentId: record.agentId,
+        attempt: record.runGeneration ?? 1,
+        error,
+      })
+    } catch {}
   }
 
   private cleanupRun(record: RunRecord, active: ActiveRun): void {

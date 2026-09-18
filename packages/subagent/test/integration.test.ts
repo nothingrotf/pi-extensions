@@ -1743,6 +1743,65 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  it('records a failed terminal state when artifact publication throws', async () => {
+    const harness = await createHarness()
+    try {
+      await mkdir(join(harness.dir, 'sessions'), { recursive: true })
+      await writeFile(join(harness.dir, 'sessions', 'subagent-artifacts'), 'blocker', 'utf8')
+      const result = await runTask(harness, {
+        description: 'Publish into a blocked artifact directory',
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+      })
+      expect(result).toContain('Task failed')
+      const id = agentId(result)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.status).toBe('failed')
+      expect(record?.error).toContain('EEXIST')
+      const canceled = await runTaskControl(harness, {
+        action: 'cancel',
+        agent_id: id,
+        reason: 'Clear the abandoned record.',
+      })
+      expect(canceled).toContain('"outcome": "already-terminal"')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('resumes a captured attempt that retained nothing after the baseline moved', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const first = await runTask(harness, {
+        description: 'Fail without writing',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'RETURN_CORRECTION_FAILURE',
+        subagent_type: 'generalPurpose',
+      })
+      expect(first).toContain('Task failed')
+      const id = agentId(first)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.isolation?.status).toBe('captured')
+      expect(record?.isolation?.repositories[0]?.changedFiles).toEqual([])
+
+      await writeFile(join(harness.dir, 'moved.txt'), 'baseline moved\n', 'utf8')
+      await execFileAsync('git', ['add', 'moved.txt'], { cwd: harness.dir })
+      await execFileAsync('git', ['commit', '-q', '-m', 'move baseline'], { cwd: harness.dir })
+
+      const resumed = await runTask(harness, {
+        description: 'Resume on the moved baseline',
+        prompt: 'RETURN_TOOLS',
+        resume: id,
+        subagent_type: 'generalPurpose',
+      })
+      expect(resumed).not.toContain('does not match the captured baseline')
+      expect(resumed).toContain('tools:')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
   it('does not integrate a writer whose strict output policy fails', async () => {
     const harness = await createHarness()
     try {
