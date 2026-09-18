@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai'
@@ -22,6 +24,7 @@ import { runBatch } from '../src/coordinator.ts'
 import { buildTaskGraph } from '../src/graph.ts'
 import { RunMailbox } from '../src/mailbox.ts'
 import {
+  artifactFileStem,
   evaluateGates,
   publishOutputArtifact,
   readArtifact,
@@ -1149,6 +1152,28 @@ describe('coordination primitives', () => {
       expect(repeated.uri).not.toBe(artifact.uri)
       expect(await readArtifact(artifact)).toBe('first\nsecond')
       expect(await readArtifact(repeated)).toBe('replacement')
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  it('publishes an artifact for a provider call id that exceeds the file name limit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'subagent-output-long-'))
+    try {
+      const taskId = `${randomUUID()}-tool-call_lnpkjbD6H2LC0o3DLx5tsOuW|fc_${'0'.repeat(48)}`
+      const artifact = await publishOutputArtifact({
+        attempt: 18,
+        output: 'candidate',
+        runId: randomUUID(),
+        sessionFile: join(directory, 'session.jsonl'),
+        taskId,
+      })
+      const name = basename(fileURLToPath(artifact.uri))
+      expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(200)
+      expect(name).not.toContain('|')
+      expect(artifact.id).toContain(taskId)
+      expect(await readArtifact(artifact)).toBe('candidate')
+      expect(artifactFileStem(artifact.id)).toBe(name.slice(0, -'.md'.length))
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

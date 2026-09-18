@@ -387,6 +387,19 @@ export function evaluateGates(
   return gates.map((gate) => evaluateGate(gate, status, structuredOutput, artifact))
 }
 
+const MAX_ARTIFACT_FILE_NAME_BYTES = 200
+const ARTIFACT_STEM_BUDGET =
+  MAX_ARTIFACT_FILE_NAME_BYTES - '.'.length - '-'.length - 36 - '.tmp'.length
+const ARTIFACT_DIGEST_LENGTH = 32
+
+export function artifactFileStem(id: string): string {
+  const safe = id.replace(/[^A-Za-z0-9._-]/g, '_')
+  if (safe.length <= ARTIFACT_STEM_BUDGET) return safe
+  const digest = createHash('sha256').update(id).digest('hex').slice(0, ARTIFACT_DIGEST_LENGTH)
+  const head = safe.slice(0, ARTIFACT_STEM_BUDGET - digest.length - 1)
+  return `${head}-${digest}`
+}
+
 async function publishArtifact(options: {
   attempt: number
   content: string
@@ -400,8 +413,9 @@ async function publishArtifact(options: {
   const directory = join(dirname(options.sessionFile), 'subagent-artifacts')
   await mkdir(directory, { recursive: true })
   const id = `${options.runId}-${options.taskId}-attempt-${options.attempt}-${randomUUID()}-${options.suffix}`
-  const destination = join(directory, `${id}.${options.extension}`)
-  const temporary = join(directory, `.${id}-${randomUUID()}.tmp`)
+  const stem = artifactFileStem(id)
+  const destination = join(directory, `${stem}.${options.extension}`)
+  const temporary = join(directory, `.${stem}-${randomUUID()}.tmp`)
   await writeFile(temporary, options.content, 'utf8')
   await rename(temporary, destination)
   const metadata = await stat(destination)
