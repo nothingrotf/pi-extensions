@@ -221,6 +221,11 @@ describe('writer isolation', () => {
         '#!/bin/sh\nif [ "$1" = "-aR" ]; then exec /bin/cp "$@"; fi\nfor target do :; done\nmkdir -p "$target"\nprintf partial > "$target/dependency.txt"\nexit 1\n',
       )
       await chmod(join(bin, 'cp'), 0o755)
+      await writeFile(
+        join(bin, 'python3'),
+        '#!/bin/sh\necho "Operation not supported" >&2\nexit 45\n',
+      )
+      await chmod(join(bin, 'python3'), 0o755)
       await mkdir(join(directory, 'node_modules'))
       await writeFile(join(directory, 'node_modules', 'dependency.txt'), 'dependency\n')
       process.env.PATH = `${bin}:${originalPath ?? ''}`
@@ -230,6 +235,38 @@ describe('writer isolation', () => {
         await readFile(join(isolation.rootWorktree, 'node_modules', 'dependency.txt'), 'utf8'),
       ).toBe('dependency\n')
       await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('clones the dependency tree as one copy-on-write unit on macOS', async () => {
+    if (process.platform !== 'darwin') return
+    const directory = await repository()
+    const originalPath = process.env.PATH
+    try {
+      const bin = join(directory, 'bin')
+      await mkdir(bin)
+      await writeFile(join(bin, 'cp'), '#!/bin/sh\necho "cp must not run" >&2\nexit 1\n')
+      await chmod(join(bin, 'cp'), 0o755)
+      await mkdir(join(directory, 'node_modules', 'pkg'), { recursive: true })
+      await writeFile(join(directory, 'node_modules', 'pkg', 'index.js'), 'source\n', 'utf8')
+      process.env.PATH = `${bin}:${originalPath ?? ''}`
+      const isolation = await writer(directory, 'clonefile-tree')
+      try {
+        await isolation.dependencies
+        const cloned = join(isolation.rootWorktree, 'node_modules', 'pkg', 'index.js')
+        expect(await readFile(cloned, 'utf8')).toBe('source\n')
+        expect(isolation.repositories[0]?.dependencyMode).toBe('copy-on-write')
+        await writeFile(cloned, 'edited in worktree\n', 'utf8')
+        expect(await readFile(join(directory, 'node_modules', 'pkg', 'index.js'), 'utf8')).toBe(
+          'source\n',
+        )
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
     } finally {
       if (originalPath === undefined) delete process.env.PATH
       else process.env.PATH = originalPath

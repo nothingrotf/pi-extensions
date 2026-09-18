@@ -427,8 +427,37 @@ export async function deleteRef(
   })
 }
 
+const CLONE_TREE_SCRIPT = [
+  'import ctypes, os, sys',
+  'libc = ctypes.CDLL(None, use_errno=True)',
+  'source, target = os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2])',
+  'if libc.clonefile(source, target, 0) != 0:',
+  '    code = ctypes.get_errno()',
+  '    sys.stderr.write(os.strerror(code))',
+  '    sys.exit(code or 1)',
+].join('\n')
+
+let cloneTreeSupported: boolean | undefined
+
+async function cloneTree(source: string, target: string): Promise<boolean> {
+  if (process.platform !== 'darwin' || cloneTreeSupported === false) return false
+  try {
+    await run(dirname(source), ['python3', '-c', CLONE_TREE_SCRIPT, source, target])
+    cloneTreeSupported = true
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/spawn .*ENOENT|xcode-select|No developer tools/i.test(message)) {
+      cloneTreeSupported = false
+    }
+    await rm(target, { force: true, recursive: true })
+    return false
+  }
+}
+
 async function copyDirectory(source: string, target: string): Promise<'copy' | 'copy-on-write'> {
   await mkdir(dirname(target), { recursive: true })
+  if (await cloneTree(source, target)) return 'copy-on-write'
   const command =
     process.platform === 'darwin'
       ? ['cp', '-cR', source, target]
