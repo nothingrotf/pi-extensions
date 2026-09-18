@@ -111,7 +111,10 @@ The runtime drops a failed reference from a passing criterion when successful pr
 Re-run the command after the fix and cite the successful alias, or lower the criterion result.
 
 A resumed attempt has its own receipt numbering.
-Previous `command:n` references do not automatically identify evidence in the new attempt.
+Previous `command:n` and `read:n` references do not identify evidence in the new attempt.
+A resumed reviewer starts with an empty receipt index, so instruct it to reopen every file it cites.
+A resume prompt that demands a citation without a re-read fails validation and wastes the whole review.
+A report-only correction cannot repair a missing receipt, so the reviewer changes the verdict and fails outright.
 For a report-only defect, retain the original report, attempt identity, artifact identity, and immutable receipt references.
 Use the managed report-repair operation instead of resuming implementation or creating another workspace.
 Repair cannot change execution results, receipt status, artifact identity, or the meaning of a criterion.

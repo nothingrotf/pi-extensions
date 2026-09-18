@@ -1427,6 +1427,49 @@ describe('pstack delivery tool interception', () => {
     expect(result.correctionPrompt).toContain('Failed current-attempt receipts: command:1')
   })
 
+  it('states the verdict and receipt invariants that fail a correction', () => {
+    const issue = emptyDeliveryIssue('owner', 'correction-invariants')
+    const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
+    expect(prompt).toContain('A resume transfers no previous alias')
+    expect(prompt).toContain('A resumed attempt starts an empty receipt index')
+    const result = validateDeliveryTerminal({
+      agentId: 'agent',
+      artifact: {
+        byteLength: 2,
+        mediaType: 'application/json',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 2,
+      output: '{}',
+      previousOutputs: [],
+      prompt,
+      readonly: true,
+      role: 'code review',
+      structuredOutput: {
+        data: {
+          issue: issue.issue,
+          kind: 'technical-review',
+          state: 'candidate',
+          criteria: [{ id: 'resumed', result: 'pass', evidence: ['read:18'] }],
+          findings: [],
+          reason: 'resumed review cites a prior attempt receipt',
+          failureClass: 'none',
+        },
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [],
+    })
+    expect(result.status).toBe('rejected')
+    if (result.status !== 'rejected') throw new Error('Invalid report was accepted.')
+    expect(result.error).toContain('references missing receipt read:18')
+    expect(result.correctionPrompt).toContain('Keep the technical verdict identical')
+    expect(result.correctionPrompt).toContain('Replace a missing receipt reference')
+  })
+
   it('drops a failed receipt from a passing criterion when successful proof remains', () => {
     const issue = emptyDeliveryIssue('owner', 'failed-receipt-prune')
     const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
