@@ -211,12 +211,79 @@ async function submodulePaths(repoRoot: string): Promise<Set<string>> {
   return paths
 }
 
-export async function nestedRepositories(repoRoot: string): Promise<string[]> {
-  const found: string[] = []
+export const SHARED_REPOSITORIES_FILE = '.pi-subagent-shared'
+
+async function ignoredDirectories(repoRoot: string): Promise<Set<string>> {
+  const output = await git(repoRoot, [
+    'ls-files',
+    '-z',
+    '--others',
+    '--ignored',
+    '--exclude-per-directory=.gitignore',
+    '--directory',
+  ]).catch(() => '')
+  const ignored = new Set<string>()
+  for (const entry of output.split('\0')) {
+    if (entry.endsWith('/')) ignored.add(entry.slice(0, -1))
+  }
+  return ignored
+}
+
+async function sharedPrefixes(repoRoot: string): Promise<string[]> {
+  const content = await readFile(join(repoRoot, SHARED_REPOSITORIES_FILE), 'utf8').catch(() => '')
+  return content
+    .split('\n')
+    .map((line) => line.trim().replace(/^\/+|\/+$/g, ''))
+    .filter((line) => line.length > 0 && !line.startsWith('#') && !line.includes('..'))
+}
+
+interface SharingPolicy {
+  ignored: ReadonlySet<string>
+  prefixes: readonly string[]
+}
+
+const noSharing: SharingPolicy = { ignored: new Set<string>(), prefixes: [] }
+
+async function sharingPolicy(repoRoot: string): Promise<SharingPolicy> {
+  const prefixes = await sharedPrefixes(repoRoot)
+  if (prefixes.length === 0) return noSharing
+  return { ignored: await ignoredDirectories(repoRoot), prefixes }
+}
+
+function sharedByPolicy(policy: SharingPolicy, ownerRelativePath: string): boolean {
+  if (
+    !policy.prefixes.some(
+      (prefix) => ownerRelativePath === prefix || ownerRelativePath.startsWith(`${prefix}/`),
+    )
+  ) {
+    return false
+  }
+  let candidate = ownerRelativePath
+  while (candidate.length > 0) {
+    if (policy.ignored.has(candidate)) return true
+    const separator = candidate.lastIndexOf('/')
+    if (separator < 0) return false
+    candidate = candidate.slice(0, separator)
+  }
+  return false
+}
+
+export interface NestedRepositoryLayout {
+  isolated: string[]
+  shared: string[]
+}
+
+async function walkNestedRepositories(
+  repoRoot: string,
+  sharing: boolean,
+): Promise<NestedRepositoryLayout> {
+  const isolated: string[] = []
+  const shared: string[] = []
   const walk = async (
     directory: string,
     ownerRoot: string,
     submodules: ReadonlySet<string>,
+    policy: SharingPolicy,
   ): Promise<void> => {
     let entries
     try {
@@ -229,18 +296,53 @@ export async function nestedRepositories(repoRoot: string): Promise<string[]> {
       const path = join(directory, entry.name)
       const ownerRelativePath = relative(ownerRoot, path)
       if (submodules.has(ownerRelativePath)) continue
-      if (await pathExists(join(path, '.git'))) {
-        found.push(relative(repoRoot, path))
-        const childSubmodules = await submodulePaths(path).catch(() => new Set<string>())
-        await walk(path, path, childSubmodules)
+      const nested = await pathExists(join(path, '.git'))
+      if (sharedByPolicy(policy, ownerRelativePath)) {
+        if (nested) shared.push(relative(repoRoot, path))
+        else await walk(path, ownerRoot, submodules, policy)
         continue
       }
-      await walk(path, ownerRoot, submodules)
+      if (nested) {
+        isolated.push(relative(repoRoot, path))
+        const [childSubmodules, childPolicy] = await Promise.all([
+          submodulePaths(path).catch(() => new Set<string>()),
+          sharing ? sharingPolicy(path) : noSharing,
+        ])
+        await walk(path, path, childSubmodules, childPolicy)
+        continue
+      }
+      await walk(path, ownerRoot, submodules, policy)
     }
   }
-  const rootSubmodules = await submodulePaths(repoRoot).catch(() => new Set<string>())
-  await walk(repoRoot, repoRoot, rootSubmodules)
-  return found.sort()
+  const [rootSubmodules, rootPolicy] = await Promise.all([
+    submodulePaths(repoRoot).catch(() => new Set<string>()),
+    sharing ? sharingPolicy(repoRoot) : noSharing,
+  ])
+  await walk(repoRoot, repoRoot, rootSubmodules, rootPolicy)
+  return { isolated: isolated.sort(), shared: shared.sort() }
+}
+
+export async function nestedRepositoryLayout(repoRoot: string): Promise<NestedRepositoryLayout> {
+  return walkNestedRepositories(repoRoot, true)
+}
+
+export async function nestedRepositories(repoRoot: string): Promise<string[]> {
+  return (await walkNestedRepositories(repoRoot, false)).isolated
+}
+
+async function linkSharedRepositories(
+  sourceRoot: string,
+  worktree: string,
+  shared: readonly string[],
+): Promise<void> {
+  for (const relativePath of shared) {
+    const target = join(worktree, relativePath)
+    try {
+      await mkdir(dirname(target), { recursive: true })
+      await symlink(join(sourceRoot, relativePath), target)
+      if (!(await ignoredInWorktree(worktree, relativePath))) await rm(target, { force: true })
+    } catch {}
+  }
 }
 
 const INTERNAL_REF_PREFIX = 'refs/pi-subagent/v2'
@@ -584,7 +686,8 @@ export async function createWriterWorkspace(options: {
   )
 
   try {
-    const nested = await nestedRepositories(rootRepoRoot)
+    const layout = await nestedRepositoryLayout(rootRepoRoot)
+    const nested = layout.isolated
     const rootBaseline = await syntheticBaseline(rootRepoRoot)
     const rootEntry: RepositoryEntry = {
       baselineCommit: rootBaseline.baselineCommit,
@@ -653,6 +756,7 @@ export async function createWriterWorkspace(options: {
       })
     }
     manifest.repositories = repositories.map((repository) => ({ ...repository }))
+    await linkSharedRepositories(rootRepoRoot, rootWorktree, layout.shared)
 
     manifest.state = 'active'
     const updatedPath = await writeManifest(manifest)
@@ -836,7 +940,7 @@ export async function captureWorkspaceIdentity(
   const artifactRoot = join(await commonDirectory(root), 'pi-subagent', 'artifacts', 'workspace')
   const primary = await captureSnapshotRepository({ artifactRoot, relativePath: '', root })
   const repositories = [primary.snapshot]
-  for (const relativePath of await nestedRepositories(root)) {
+  for (const relativePath of (await nestedRepositoryLayout(root)).isolated) {
     const nestedRoot = await repositoryRoot(join(root, relativePath))
     if (nestedRoot === undefined)
       throw new Error(`The nested repository ${relativePath} is unavailable.`)

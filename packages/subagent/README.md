@@ -390,6 +390,12 @@ Their paths must contain no tracked baseline product content. Changed ignore rul
 Existing nested repositories remain captured, including repositories that the baseline already ignores.
 Prepare product repositories before dispatch. Keep newly synchronized references under predeclared ignored paths.
 
+A `.pi-subagent-shared` file at a repository root lists path prefixes of reference clones, one per line.
+A nested repository under a listed prefix is shared instead of isolated when the owner's `.gitignore` files already ignore its path.
+The writer worktree reaches a shared repository through a symlink to the parent's copy, so reads keep working and no snapshot, checkout, capture, or cleanup runs for it.
+A listed path that the owner tracks or does not ignore stays isolated.
+Declare only vendored reference material there. A shared repository is outside the isolation guarantee, so a child write to it lands in the parent's copy immediately.
+
 `integration: 'apply'` uses a three-tree merge of the child baseline, current parent, and child result.
 
 The runtime plans every repository before the first mutation. It applies merged worktree patches under ordered destination locks.

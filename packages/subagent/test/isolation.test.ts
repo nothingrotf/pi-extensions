@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -26,8 +27,10 @@ import {
   commonDirectory,
   git,
   nestedRepositories,
+  nestedRepositoryLayout,
   promoteCommit,
   repositoryRoot,
+  SHARED_REPOSITORIES_FILE,
   SHARED_TASK_CACHE_PATHS,
 } from '../src/git-isolation.ts'
 import {
@@ -743,6 +746,58 @@ describe('writer isolation', () => {
     } finally {
       await rm(directory, { force: true, recursive: true })
       await rm(upstream, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('shares an ignored reference repository instead of isolating it', async () => {
+    const directory = await repository()
+    const reference = await repository()
+    try {
+      await writeFile(join(directory, '.gitignore'), 'node_modules/\n/repos/\n/vendor/\n')
+      await writeFile(join(directory, SHARED_REPOSITORIES_FILE), '# references\n/repos/\n')
+      await git(directory, ['add', '.gitignore', SHARED_REPOSITORIES_FILE])
+      await git(directory, ['commit', '-qm', 'declare shared references'])
+      await git(directory, ['clone', '-q', reference, 'repos/reference'])
+      await git(directory, ['clone', '-q', reference, 'vendor/product'])
+      await writeFile(join(directory, 'repos', 'reference', 'local.txt'), 'reference only\n')
+      expect(await nestedRepositoryLayout(directory)).toEqual({
+        isolated: ['vendor/product'],
+        shared: ['repos/reference'],
+      })
+      expect(await nestedRepositories(directory)).toEqual(['repos/reference', 'vendor/product'])
+      const identity = await captureWorkspaceIdentity(directory)
+      expect(identity?.snapshot.repositories.map((entry) => entry.relativePath)).toEqual([
+        '',
+        'vendor/product',
+      ])
+      const isolation = await writer(directory, 'writer-shared-reference')
+      try {
+        expect(isolation.repositories.map((entry) => entry.relativePath)).toEqual([
+          '',
+          'vendor/product',
+        ])
+        const link = join(isolation.rootWorktree, 'repos', 'reference')
+        expect((await lstat(link)).isSymbolicLink()).toBe(true)
+        expect(await readFile(join(link, 'local.txt'), 'utf8')).toBe('reference only\n')
+        await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'product result\n')
+        const receipt = await captureIsolation(isolation)
+        expect(receipt.captureStatus).toBe('captured')
+        expect(receipt.repositories.map((entry) => entry.relativePath)).toEqual([
+          '',
+          'vendor/product',
+        ])
+        expect(receipt.repositories[0]?.changedFiles).toEqual([
+          { path: 'tracked.txt', status: 'M' },
+        ])
+      } finally {
+        await cleanupWorkspaceArtifacts(isolation)
+      }
+      expect(await readFile(join(directory, 'repos', 'reference', 'local.txt'), 'utf8')).toBe(
+        'reference only\n',
+      )
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+      await rm(reference, { force: true, recursive: true })
     }
   }, 180_000)
 
