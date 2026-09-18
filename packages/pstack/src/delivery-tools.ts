@@ -39,6 +39,7 @@ import {
   type DeliveryReportDraft,
   type DeliveryResult,
   type DeliverySubmission,
+  type DeliverySummary,
   currentDeliveryReport,
   deliveryRepairIdentity,
   deliveryReportDiagnostics,
@@ -231,6 +232,38 @@ function artifactFromRun(record: RunRecord): DeliveryArtifact {
       ? record.execution.workspaceIdentity
       : undefined
   return implementationArtifact(record.isolation, workspaceIdentity)
+}
+
+function artifactMismatch(
+  candidate: DeliveryArtifact,
+  snapshot: WorkspaceSnapshot | undefined,
+): string {
+  if (snapshot === undefined) return 'The cwd is not inside a Git repository.'
+  const differences = candidate.repositories.flatMap((expected) => {
+    const actual = snapshot.repositories.find(
+      (entry) => entry.root === expected.root && entry.relativePath === expected.relativePath,
+    )
+    if (actual === undefined) return [`${expected.relativePath || '.'}: repository missing`]
+    if (actual.tree !== expected.tree) {
+      return [
+        `${expected.relativePath || '.'}: expected tree ${expected.tree.slice(0, 12)}, found ${actual.tree.slice(0, 12)}`,
+      ]
+    }
+    return []
+  })
+  const extra = snapshot.repositories.length - candidate.repositories.length
+  if (extra > 0) differences.push(`${extra} unexpected repositories`)
+  return `Differences: ${differences.join('; ') || 'none'}. Check out the accepted candidate tree or point cwd at the workspace that holds it.`
+}
+
+function stateHint(summary: DeliverySummary, issueId: string): string {
+  const parts = [`Issue ${issueId} is ${summary.state}`]
+  if (summary.integration !== undefined) parts.push(`integration ${summary.integration}`)
+  if (summary.unresolvedCriteria.length > 0)
+    parts.push(`unresolved criteria ${summary.unresolvedCriteria.join(', ')}`)
+  if (summary.unresolvedFindings.length > 0)
+    parts.push(`open blocking findings ${summary.unresolvedFindings.join(', ')}`)
+  return `${parts.join(', ')}.`
 }
 
 function matchesCandidateSnapshot(
@@ -1054,7 +1087,9 @@ async function preflight(
   }
   if (task.delivery?.kind === 'independent') {
     if (promptIssue !== undefined) {
-      throw new DeliveryRejected('An independent Task cannot include a managed issue field.')
+      throw new DeliveryRejected(
+        `An independent Task cannot include a managed issue field. Remove the issue: ${promptIssue} line from the prompt, or pass delivery: { kind: "managed", issue: "${promptIssue}" }.`,
+      )
     }
     if (
       retainedDelivery?.kind === 'managed' ||
@@ -1064,7 +1099,7 @@ async function preflight(
     }
     if (issues.size > 0 && role === 'publication') {
       throw new DeliveryRejected(
-        'Managed publication cannot opt out of its accepted issue checkpoint.',
+        `Managed publication cannot opt out of its accepted issue checkpoint. Pass delivery: { kind: "managed", issue: <id> } for one of: ${[...issues.keys()].join(', ')}.`,
       )
     }
     return
@@ -1107,8 +1142,11 @@ async function preflight(
       ),
   )
   if (isImplementationRole(role) && unrecordedTerminalRuns.length > 0) {
+    const pending = unrecordedTerminalRuns
+      .map((record) => `${record.agentId} attempt ${record.runGeneration ?? 1} (${record.status})`)
+      .join('; ')
     throw new DeliveryRejected(
-      'Record each terminal issue attempt before another implementation dispatch.',
+      `Record each terminal issue attempt before another implementation dispatch. Unrecorded: ${pending}. Call pstack_delivery record for each one first, then dispatch.`,
     )
   }
   if (task.resume !== undefined) {
@@ -1120,7 +1158,9 @@ async function preflight(
       contract.outputSchema === undefined ||
       !jsonEquals(contract.outputSchema, DeliveryOutputSchema)
     ) {
-      throw new DeliveryRejected('Managed resume requires its stored delivery output contract.')
+      throw new DeliveryRejected(
+        `Managed resume requires its stored delivery output contract. Agent ${task.resume} ${resumed === undefined ? 'is unknown to this session' : 'was not dispatched as a managed delivery Task'}. Dispatch a fresh managed Task for issue ${issueId} instead of resuming it.`,
+      )
     }
     if (
       resumed.status !== 'running' &&
@@ -1130,7 +1170,9 @@ async function preflight(
           submission.attempt === (resumed.runGeneration ?? 1),
       )
     ) {
-      throw new DeliveryRejected('Record the prior terminal attempt before managed resume.')
+      throw new DeliveryRejected(
+        `Record the prior terminal attempt before managed resume. Call pstack_delivery record for agent ${resumed.agentId} attempt ${resumed.runGeneration ?? 1} (${resumed.status}), then resume.`,
+      )
     }
   }
   const summary = summarizeDelivery(issue)
@@ -1173,53 +1215,69 @@ async function preflight(
   }
   if (role === 'publication') {
     if (task.run_in_background !== false)
-      throw new DeliveryRejected('Publication must remain explicitly foreground.')
+      throw new DeliveryRejected(
+        'Publication must remain explicitly foreground. Pass run_in_background: false.',
+      )
     if (
       summary.state !== 'accepted' ||
       summary.integration !== 'integrated' ||
       summary.artifact === undefined
     ) {
       throw new DeliveryRejected(
-        'Publication requires independent acceptance and integration of the current artifact.',
+        `Publication requires independent acceptance and integration of the current artifact. ${stateHint(summary, issueId)} ${summary.state !== 'accepted' ? 'Obtain accepted static and runtime verdicts on the current candidate first.' : 'Call pstack_delivery refresh after the owner integration settles.'}`,
       )
     }
     const current = await captureWorkspaceSnapshot(resolve(ctx.cwd, task.cwd ?? '.'))
     if (current === undefined || !matchesCandidateSnapshot(summary.artifact, current)) {
-      throw new DeliveryRejected('The destination artifact changed after acceptance.')
+      throw new DeliveryRejected(
+        `The destination artifact changed after acceptance. ${artifactMismatch(summary.artifact, current)}`,
+      )
     }
     return
   }
   if (role === 'code review') {
     if (!readonly) {
-      throw new DeliveryRejected('Static review requires a read-only Task.')
+      throw new DeliveryRejected(
+        'Static review requires a read-only Task. Pass readonly: true, or use a read-only agent.',
+      )
     }
     if (summary.state !== 'candidate' || summary.artifact === undefined) {
-      throw new DeliveryRejected('Static review requires the current candidate artifact.')
+      throw new DeliveryRejected(
+        `Static review requires the current candidate artifact. ${stateHint(summary, issueId)} ${summary.state === 'accepted' ? 'The candidate is already accepted; dispatch publication.' : 'Record an implementation candidate with a captured artifact first.'}`,
+      )
     }
     const current = await captureWorkspaceSnapshot(effectiveTaskCwd(task, resumed, ctx))
     if (current === undefined || !matchesCandidateSnapshot(summary.artifact, current)) {
-      throw new DeliveryRejected('Static review must start from the current candidate artifact.')
+      throw new DeliveryRejected(
+        `Static review must start from the current candidate artifact. ${artifactMismatch(summary.artifact, current)}`,
+      )
     }
   }
   if (role === 'runtime verification') {
     if (readonly) {
-      throw new DeliveryRejected('Runtime verification requires a writable shell.')
+      throw new DeliveryRejected(
+        'Runtime verification requires a writable shell. Pass readonly: false and a shell-capable agent.',
+      )
     }
     const isolation = effectiveRuntimeIsolation(task, resumed)
     if (isolation?.mode !== 'worktree' || isolation.integration !== 'manual') {
-      throw new DeliveryRejected('Runtime verification requires manual worktree isolation.')
+      throw new DeliveryRejected(
+        'Runtime verification requires manual worktree isolation. Pass isolation: { mode: "worktree", integration: "manual" }.',
+      )
     }
     if (
       summary.state !== 'candidate' ||
       summary.integration !== 'integrated' ||
       summary.artifact === undefined
     ) {
-      throw new DeliveryRejected('Runtime verification requires the integrated candidate artifact.')
+      throw new DeliveryRejected(
+        `Runtime verification requires the integrated candidate artifact. ${stateHint(summary, issueId)} ${summary.state !== 'candidate' ? 'Record an implementation candidate first.' : 'Join the owner Task so its isolation integrates, then call pstack_delivery refresh.'}`,
+      )
     }
     const current = await captureWorkspaceSnapshot(effectiveTaskCwd(task, resumed, ctx))
     if (current === undefined || !matchesCandidateSnapshot(summary.artifact, current)) {
       throw new DeliveryRejected(
-        'Runtime verification must start from the current candidate artifact.',
+        `Runtime verification must start from the current candidate artifact. ${artifactMismatch(summary.artifact, current)}`,
       )
     }
   }
@@ -1230,7 +1288,7 @@ async function preflight(
   }
   if (task.outputSchema !== undefined && !isDeliveryOutputSchema(task.outputSchema)) {
     throw new DeliveryRejected(
-      'Managed delivery uses its exact report schema. Do not replace an existing resume contract.',
+      'Managed delivery uses its exact report schema. Do not replace an existing resume contract. Omit outputSchema and schemaMode; the managed preflight installs them.',
     )
   }
   task.outputSchema = structuredClone(DeliveryOutputSchema)

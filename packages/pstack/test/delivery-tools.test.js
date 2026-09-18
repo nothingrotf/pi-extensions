@@ -2995,6 +2995,94 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
+  it('names the issue state and next step when review precedes a candidate', async () => {
+    const harness = await sessionWithDeliveryTool({
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: {
+                action: 'open',
+                criteria: [{ description: 'The command returns a receipt.', id: 'receipt' }],
+                issue: 'delivery-tools',
+                runtimeRequired: true,
+              },
+              id: 'open',
+              name: 'pstack_delivery',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+        plannedReply(
+          [
+            {
+              arguments: {
+                description: 'Review nothing',
+                prompt: 'issue: delivery-tools',
+                readonly: true,
+                role: 'code review',
+                subagent_type: 'generalPurpose',
+              },
+              id: 'early-review',
+              name: 'Task',
+              type: 'toolCall',
+            },
+            {
+              arguments: {
+                description: 'Verify nothing',
+                isolation: { integration: 'manual', mode: 'worktree' },
+                prompt: 'issue: delivery-tools',
+                role: 'runtime verification',
+                subagent_type: 'generalPurpose',
+              },
+              id: 'early-verify',
+              name: 'Task',
+              type: 'toolCall',
+            },
+            {
+              arguments: {
+                description: 'Publish nothing',
+                prompt: 'issue: delivery-tools',
+                role: 'publication',
+                subagent_type: 'generalPurpose',
+              },
+              id: 'early-publish',
+              name: 'Task',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Open and review too early.', {
+        expandPromptTemplates: false,
+      })
+      expect(harness.observed).toHaveLength(0)
+      const text = (id) =>
+        harness.session.messages.findLast(
+          (message) => message.role === 'toolResult' && message.toolCallId === id,
+        )?.content[0]?.text
+      expect(text('early-review')).toContain(
+        'Static review requires the current candidate artifact.',
+      )
+      expect(text('early-review')).toContain(
+        'Issue delivery-tools is wip, unresolved criteria receipt.',
+      )
+      expect(text('early-review')).toContain('Record an implementation candidate')
+      expect(text('early-verify')).toContain(
+        'Runtime verification requires the integrated candidate artifact.',
+      )
+      expect(text('early-verify')).toContain('Issue delivery-tools is wip')
+      expect(text('early-publish')).toContain('Publication must remain explicitly foreground.')
+      expect(text('early-publish')).toContain('Pass run_in_background: false.')
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('blocks a fresh unrecorded issue dispatch under an arbitrary role', async () => {
     const harness = await sessionWithDeliveryTool({
       beforePrompt(sessionManager) {
@@ -3111,6 +3199,10 @@ describe('pstack delivery tool interception', () => {
         (message) => message.role === 'toolResult' && message.toolCallId === 'binding-2',
       )
       expect(result?.content[0]?.text).toContain('Record each terminal issue attempt')
+      expect(result?.content[0]?.text).toContain(
+        'Unrecorded: failed-without-report attempt 1 (failed)',
+      )
+      expect(result?.content[0]?.text).toContain('Call pstack_delivery record for each one first')
     } finally {
       await harness.close()
     }
