@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, realpath, rm } from 'node:fs/promises'
+import { readdir, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -763,12 +763,41 @@ export async function recaptureRetainedIsolation(options: {
   return captureIsolation(workspace)
 }
 
+const deferredRemovals = new Set<Promise<void>>()
+
+export const DETACHED_TREE_SUFFIX = '.detached-'
+
+function removeDeferred(path: string): void {
+  const removal: Promise<void> = rm(path, { force: true, recursive: true })
+    .catch(() => undefined)
+    .finally(() => {
+      deferredRemovals.delete(removal)
+    })
+  deferredRemovals.add(removal)
+}
+
+async function detachTree(path: string): Promise<void> {
+  const detached = `${path}${DETACHED_TREE_SUFFIX}${randomUUID()}`
+  try {
+    await rename(path, detached)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return
+    await rm(path, { force: true, recursive: true })
+    return
+  }
+  removeDeferred(detached)
+}
+
+export async function drainDeferredRemovals(): Promise<void> {
+  while (deferredRemovals.size > 0) await Promise.all(deferredRemovals)
+}
+
 export async function cleanupWorkspaceArtifacts(workspace: WriterWorkspace): Promise<boolean> {
   try {
     await workspace.dependencies
     if (!(await hasValidWorkspaceLocation(workspace))) return true
-    await rm(workspace.rootWorktree, { force: true, recursive: true })
-    await rm(workspace.baseDir, { force: true, recursive: true })
+    await detachTree(workspace.rootWorktree)
+    await detachTree(workspace.baseDir)
     await removeFromRegistry(workspace.storeRoot, workspace.manifestPath, workspace.manifest.owner)
     return false
   } catch {
@@ -789,7 +818,20 @@ export async function recoverIsolations(cwd: string): Promise<IsolationRecovery[
   return recoverIsolationStore(join(await commonDirectory(root), 'pi-subagent'))
 }
 
+async function sweepDetachedTrees(storeRoot: string): Promise<void> {
+  const roots = [join(storeRoot, 'worktrees'), await realpath(tmpdir()).catch(() => tmpdir())]
+  for (const root of roots) {
+    const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.includes(DETACHED_TREE_SUFFIX)) continue
+      if (root !== roots[0] && !entry.name.startsWith('pi-subagent-')) continue
+      removeDeferred(join(root, entry.name))
+    }
+  }
+}
+
 export async function recoverIsolationStore(storeRoot: string): Promise<IsolationRecovery[]> {
+  await sweepDetachedTrees(storeRoot)
   await recoverIntegrationTransactions(storeRoot)
   const manifestPaths = await listManifests(storeRoot)
   const manifests: { manifest: WorkspaceManifest; path: string }[] = []

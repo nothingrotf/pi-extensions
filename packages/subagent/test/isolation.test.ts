@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -12,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -37,6 +38,8 @@ import {
   captureIsolation,
   cleanupCapturedReceipt,
   cleanupWorkspaceArtifacts,
+  DETACHED_TREE_SUFFIX,
+  drainDeferredRemovals,
   createIsolation,
   integrateStagedReceipt,
   needsRecoveryCapture,
@@ -955,6 +958,37 @@ describe('writer isolation', () => {
       )
       expect(await readFile(join(deeper, 'deep.txt'), 'utf8')).toBe('deep agent\n')
       await cleanupWorkspaceArtifacts(isolation)
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('detaches the worktree synchronously and removes its contents off the critical path', async () => {
+    const directory = await repository()
+    try {
+      const isolation = await writer(directory, 'writer-deferred-cleanup')
+      const bulk = join(isolation.rootWorktree, 'node_modules', 'bulk')
+      await mkdir(bulk, { recursive: true })
+      for (let index = 0; index < 200; index += 1) {
+        await writeFile(join(bulk, `module-${index}.txt`), 'dependency\n'.repeat(64), 'utf8')
+      }
+      const parent = dirname(isolation.rootWorktree)
+      const prefix = basename(isolation.rootWorktree)
+      expect(await cleanupWorkspaceArtifacts(isolation)).toBe(false)
+      await expect(stat(isolation.rootWorktree)).rejects.toHaveProperty('code', 'ENOENT')
+      await expect(stat(isolation.baseDir)).rejects.toHaveProperty('code', 'ENOENT')
+      await drainDeferredRemovals()
+      const leftovers = (await readdir(parent)).filter((entry) =>
+        entry.startsWith(`${prefix}${DETACHED_TREE_SUFFIX}`),
+      )
+      expect(leftovers).toEqual([])
+      const storeWorktrees = join(isolation.storeRoot, 'worktrees')
+      const stale = join(storeWorktrees, `ws-stale${DETACHED_TREE_SUFFIX}crashed`)
+      await mkdir(stale, { recursive: true })
+      await writeFile(join(stale, 'manifest.json'), '{}', 'utf8')
+      await recoverIsolations(directory)
+      await drainDeferredRemovals()
+      await expect(stat(stale)).rejects.toHaveProperty('code', 'ENOENT')
     } finally {
       await rm(directory, { force: true, recursive: true })
     }

@@ -422,6 +422,7 @@ The recovery scan reads durable registries. It preserves live and ambiguous owne
 
 Recovery attaches root writer evidence to the interrupted record. It does not reconstruct nested parent join scopes.
 
+Cleanup detaches the worktree and its store directory with an atomic rename, unregisters the manifest, and returns. The detached contents are removed in the background, so a large dependency copy never delays the parent's completion. Startup recovery sweeps any detached directory that an earlier process left behind.
 A cleanup failure retains recovery evidence and sets `cleanupDebt`.
 Startup retries cleanup for dead workspaces in `captured`, `staged`, `integrating`, `integrated`, `cleanup-pending`, or `cleanup-debt` states.
 Cleanup requires durable result references for every repository. It preserves those references, patch artifacts, and transaction journals.
