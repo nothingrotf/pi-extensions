@@ -46,7 +46,7 @@ Set `role` on a single Task or separately on each `tasks[]` item. Nested dispatc
 The role persists in the execution contract, run record, batch item/state, snapshots, results, and TaskControl status/list/jobs. Omit it on resume to retain the original value, or supply the same value. A different value is rejected, including adding a role to a legacy Task that had none. Legacy sessions remain unlabeled.
 
 The `[fast]` selector uses the shared policy from `@nothingrotf/fast-mode`.
-It accepts supported Codex models, including Astra, and respects explicit service tiers from the Codex catalog.
+It accepts supported Codex models, including GPT-6 Astra, Luna, and Sol, and respects explicit service tiers from the Codex catalog.
 It does not inherit the parent's global Fast Mode preference.
 
 Set `run_in_background` to `true` to return the Agent ID after session creation.

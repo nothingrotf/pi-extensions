@@ -34,7 +34,7 @@ Fast Mode increases usage. The status reports a requested tier, not proof that t
 The package reads `${CODEX_HOME:-~/.codex}/models_cache.json` without network requests.
 An explicit catalog tier declaration takes precedence over the built-in compatibility list, including a declaration without a Fast tier.
 
-The built-in list covers these verified model identifiers when the catalog lacks tier metadata:
+The built-in list covers these model identifiers when the catalog lacks tier metadata:
 
 - `gpt-5.4`
 - `gpt-5.5`
@@ -42,6 +42,8 @@ The built-in list covers these verified model identifiers when the catalog lacks
 - `gpt-5.6-sol`
 - `gpt-5.6-terra`
 - `gpt-6-astra`
+- `gpt-6-luna`
+- `gpt-6-sol`
 
 Unknown models require a catalog entry that advertises `priority` or `fast`.
 The package does not apply Codex tier rules to the public OpenAI API or other providers.

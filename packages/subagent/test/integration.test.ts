@@ -1002,6 +1002,15 @@ function providerConfig(state: ProviderState): ProviderConfig {
         reasoning: true,
         thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high' },
       },
+      ...['gpt-6-sol', 'gpt-6-luna'].map((id) => ({
+        contextWindow: 272_000,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+        id,
+        input: ['text'] satisfies Array<'text' | 'image'>,
+        maxTokens: 128_000,
+        name: id,
+        reasoning: true,
+      })),
       {
         contextWindow: 100_000,
         cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
@@ -4390,6 +4399,27 @@ describe('subagent Task integration', () => {
         model: 'openai-codex/gpt-6-astra:off',
       })
       expect(rejected).toContain('does not support reasoning effort "off"')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('runs GPT-6 Sol and Luna subagents with explicit fast mode', async () => {
+    const harness = await createHarness()
+    try {
+      for (const id of ['gpt-6-sol', 'gpt-6-luna']) {
+        const payloadStart = harness.state.payloads.length
+        const result = await runTask(harness, {
+          ...baseInput,
+          model: `openai-codex/${id}:medium [fast]`,
+        })
+        expect(result).toContain('Agent ID:')
+        expect(latestState(harness).records.at(-1)?.model).toBe(`openai-codex/${id}`)
+        const payloads = harness.state.payloads
+          .slice(payloadStart)
+          .map((payload) => Value.Decode(PayloadSchema, payload))
+        expect(payloads.some((payload) => payload.service_tier === 'priority')).toBe(true)
+      }
     } finally {
       await harness.close()
     }
