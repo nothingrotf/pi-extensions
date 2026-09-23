@@ -2597,6 +2597,93 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
+  it('permits a correction after two verified WIP artifact changes', async () => {
+    const harness = await sessionWithDeliveryTool({
+      beforePrompt(sessionManager) {
+        const ownerSessionId = sessionManager.getSessionId()
+        const issue = emptyDeliveryIssue(ownerSessionId, 'retries')
+        const incomplete = {
+          agentId: 'implementer',
+          attempt: 1,
+          role: 'feature',
+          execution: 'completed',
+          integration: 'captured',
+          recordedAt: 1,
+          artifact: {
+            repositories: [
+              {
+                root: '/product',
+                relativePath: '',
+                base: 'a'.repeat(40),
+                tree: 'b'.repeat(40),
+                patch: 'c'.repeat(64),
+              },
+            ],
+          },
+          evidence: [
+            {
+              id: 'command:1',
+              kind: 'command',
+              passed: true,
+              reference: 'file:///test-output',
+              sha256: 'd'.repeat(64),
+            },
+          ],
+          report: {
+            issue: 'retries',
+            kind: 'implementation',
+            state: 'wip',
+            criteria: [{ id: 'receipt', result: 'pending', evidence: ['command:1'] }],
+            findings: [],
+            reason: 'The connected proof is not ready.',
+            failureClass: 'external-decision',
+          },
+        }
+        const first = recordDelivery(issue, incomplete)
+        if (!first.ok) throw first.error
+        const second = recordDelivery(first.value, {
+          ...incomplete,
+          attempt: 2,
+          artifact: {
+            repositories: [
+              {
+                ...incomplete.artifact.repositories[0],
+                tree: 'e'.repeat(40),
+                patch: 'f'.repeat(64),
+              },
+            ],
+          },
+        })
+        if (!second.ok) throw second.error
+        sessionManager.appendCustomEntry('@nothingrotf/pstack/delivery-v1', second.value)
+      },
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: {
+                description: 'Continue verified implementation',
+                prompt: 'issue: retries\nphase: correction',
+                role: 'feature',
+                subagent_type: 'generalPurpose',
+              },
+              id: 'allowed',
+              name: 'Task',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Continue the correction.', { expandPromptTemplates: false })
+      expect(harness.observed).toHaveLength(1)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('records a failed WIP without isolation through the protocol', async () => {
     const harness = await sessionWithDeliveryTool({
       beforePrompt(sessionManager) {

@@ -507,6 +507,79 @@ describe('managed delivery acceptance', () => {
     expect(summarizeDelivery(resolved).state).toBe('accepted')
   })
 
+  it('keeps corrections available when each captured change has executable proof', () => {
+    const first = save(issue, {
+      ...implementation,
+      report: {
+        ...implementation.report,
+        state: 'wip',
+        criteria: [{ id: 'replay', result: 'pending', evidence: ['test'] }],
+        reason: 'The connected route remains pending.',
+        failureClass: 'external-decision',
+      },
+    })
+    const second = save(first, {
+      ...implementation,
+      attempt: 2,
+      artifact: {
+        repositories: artifact.repositories.map((entry) => ({
+          ...entry,
+          tree: 'e'.repeat(40),
+          patch: 'f'.repeat(64),
+        })),
+      },
+      report: {
+        ...implementation.report,
+        state: 'wip',
+        criteria: [{ id: 'replay', result: 'pending', evidence: ['test'] }],
+        reason: 'The connected route remains pending.',
+        failureClass: 'external-decision',
+      },
+    })
+    expect(summarizeDelivery(second)).toMatchObject({
+      incompleteReturns: 0,
+      diagnosisRequired: false,
+    })
+  })
+
+  it('does not treat uncited checks, unchanged results, or failed attempts as progress', () => {
+    const wip: DeliverySubmission = {
+      ...implementation,
+      report: {
+        ...implementation.report,
+        state: 'wip',
+        criteria: [{ id: 'replay', result: 'pending', evidence: ['test'] }],
+        reason: 'The route is incomplete.',
+        failureClass: 'execution-contract',
+      },
+    }
+    const changed = {
+      repositories: artifact.repositories.map((entry) => ({
+        ...entry,
+        tree: 'e'.repeat(40),
+        patch: 'f'.repeat(64),
+      })),
+    }
+    const first = save(issue, { ...wip, report: { ...wip.report, criteria: [] } })
+    for (const attempt of [
+      { ...wip, attempt: 2, artifact: changed, report: { ...wip.report, criteria: [] } },
+      { ...wip, attempt: 2, artifact: changed, evidence: [] },
+      { ...wip, attempt: 2, artifact: changed, execution: 'failed' as const },
+      {
+        ...wip,
+        attempt: 2,
+        artifact: {
+          repositories: artifact.repositories.map((entry) => ({ ...entry, patch: 'f'.repeat(64) })),
+        },
+      },
+    ]) {
+      expect(summarizeDelivery(save(first, attempt))).toMatchObject({
+        incompleteReturns: 2,
+        diagnosisRequired: true,
+      })
+    }
+  })
+
   it('requires diagnosis before a third equivalent return and does not count patch churn as progress', () => {
     const incomplete: DeliverySubmission = {
       ...implementation,

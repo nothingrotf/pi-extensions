@@ -470,6 +470,7 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
     )
     .map((criterion) => criterion.id)
   let incompleteReturns = 0
+  let previousArtifact: DeliveryArtifact | undefined
   const passed = new Set<string>()
   for (const submission of issue.submissions) {
     const report = currentDeliveryReport(submission)
@@ -481,9 +482,31 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
     const current = report.criteria
       .filter((entry) => entry.result === 'pass' && proven(entry.evidence, submission.evidence))
       .map((entry) => entry.id)
-    const progress = current.some((criterion) => !passed.has(criterion))
+    const newCriterion = current.some((criterion) => !passed.has(criterion))
     for (const criterion of current) passed.add(criterion)
-    incompleteReturns = complete(issue, submission) || progress ? 0 : incompleteReturns + 1
+    const cited = new Set([
+      ...report.criteria.flatMap((criterion) => criterion.evidence),
+      ...report.findings.flatMap((finding) => finding.evidence),
+    ])
+    const verifiedChange =
+      submission.execution === 'completed' &&
+      submission.artifact !== undefined &&
+      submission.artifact.repositories.some(
+        (repository) =>
+          repository.tree !== repository.base &&
+          !previousArtifact?.repositories.some(
+            (previous) =>
+              previous.root === repository.root &&
+              previous.relativePath === repository.relativePath &&
+              previous.tree === repository.tree,
+          ),
+      ) &&
+      submission.evidence.some(
+        (entry) => entry.kind === 'command' && entry.passed && cited.has(entry.id),
+      )
+    if (submission.artifact !== undefined) previousArtifact = submission.artifact
+    incompleteReturns =
+      complete(issue, submission) || newCriterion || verifiedChange ? 0 : incompleteReturns + 1
   }
   const candidateReady =
     candidate !== undefined &&

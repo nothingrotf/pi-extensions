@@ -69,7 +69,7 @@ Two consecutive incomplete returns without meaningful acceptance progress requir
 A recurring contract defect or a structural regression also requires diagnosis before the next correction.
 
 Classify the cause as implementation, environment, execution contract, context, or external decision.
-Use command receipts and artifact changes, not token counts or silence, to establish progress.
+A new passing criterion establishes progress. A changed captured result tree also establishes progress when the completed attempt cites a successful command receipt. Cite that receipt in a criterion or finding. Patch changes alone, repeated result trees, and uncited commands do not establish progress. This check permits another correction without promoting WIP or proving an unresolved criterion.
 Fix shared environment failures once before redispatching affected work.
 Preserve compatible owners when they can continue from a precise correction brief.
 If context or artifact access requires replacement, consolidate the checkpoint before creating a fresh owner.

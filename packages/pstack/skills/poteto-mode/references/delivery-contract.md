@@ -74,7 +74,7 @@ Never join the verifier's incidental patch.
 
 Start with two independent issue lanes when files, dependencies, and mutable resources are disjoint.
 Lane count follows verified independence, never the size of a configured model pool.
-Serialize shared dependencies and topology changes.
+Serialize shared dependencies and topology changes with an explicit implementation owner. Do not reserve code edits or unfinished feature behavior for the coordinator. The coordinator may apply conflict-free patches and inspect checks. Assign integration edits and conflict resolution to a scoped writer. Give each issue owner a path to finish connected proof after the shared patch lands.
 Do not silently increase the two-lane pilot because more models are available.
 
 ## Candidate readiness
