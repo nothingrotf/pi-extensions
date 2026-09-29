@@ -14,7 +14,13 @@ import {
   SettingsManager,
 } from '@earendil-works/pi-coding-agent'
 
-import { formatToolCostReport, toolCostReport, type ToolCostInput } from './tool-cost.ts'
+import { measureDeclarations } from './tool-cost-session.ts'
+import {
+  formatDeclarationCosts,
+  formatToolCostReport,
+  toolCostReport,
+  type ToolCostInput,
+} from './tool-cost.ts'
 
 const args = process.argv.slice(2)
 const asJson = args.includes('--json')
@@ -59,8 +65,14 @@ if (paths.length === 0) {
       for (const tool of extension.tools.values()) record(tool.definition)
     }
     const report = toolCostReport([...tools.values()])
+    const codemode = []
+    for (const mode of ['off', 'on', 'only'] as const) {
+      codemode.push(await measureDeclarations(paths, mode))
+    }
     process.stdout.write(
-      asJson ? `${JSON.stringify(report, null, 2)}\n` : `${formatToolCostReport(report)}\n`,
+      asJson
+        ? `${JSON.stringify({ ...report, codemode }, null, 2)}\n`
+        : `${formatToolCostReport(report)}\n\n${formatDeclarationCosts(codemode)}\n`,
     )
   } finally {
     await rm(root, { force: true, recursive: true })

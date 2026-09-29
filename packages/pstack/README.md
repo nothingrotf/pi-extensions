@@ -82,6 +82,11 @@ The package registers the `Comment Sicko` and `poteto-agent` agents with `@nothi
 
 It also registers the `pstack-nested` capability profile. The profile permits three local Task levels.
 
+The `pstack-leaf` and `pstack-nested` profiles list `codemode` in `defaultTools`.
+Every pstack child therefore receives Pi's `codemode` tool unless its Task lists explicit `tools`.
+Scripts can batch reads and searches in parallel and return only the part of a large result the child needs.
+Their nested calls keep their own tool receipts, so a `bash` command inside a script still counts as command evidence.
+
 The `poteto-agent` defaults to background mode. Mutable background work runs in automatic writer isolation.
 
 Inspect a completed writer with `TaskControl`. Use `action: "join"` only when the parent workspace must receive its accepted patch.
@@ -181,6 +186,10 @@ Checkpoint previews expose counts and omission markers. They never replace the f
 Ready-to-use `repair` locators appear in the checkpoint's `recentAttempts`, `view: "submissions"` entries, and the `view: "submission"` paging envelope. Spread that locator into a `pstack_delivery` call and add only the corrected `report`. It pins the issue, agent, attempt, next revision, current report digest, evidence digest, and artifact digest, so callers never hash a guess or inspect raw session JSONL.
 Reading a checkpoint does not reverify its evidence or change acceptance.
 
+`pstack_delivery` declares an output schema for codemode scripts.
+A script receives `{ issue, truncated, page }`, where `page` is the parsed JSON of the text result.
+A script can page through a submission and return only the verdict instead of every chunk.
+
 New records append only their submission to a linked delivery journal. Integration refresh appends only the attempt identity and integration state.
 Replay preserves immutable reports, evidence, and original timestamps. It rejects disconnected events, corrupt authority, and legacy checkpoints after journal activation.
 Normal Pi compaction retains the journal on the active branch. Compaction summaries never replace its acceptance evidence.
@@ -249,6 +258,8 @@ bun src/session-metrics-cli.ts --compare /path/to/baseline.jsonl /path/to/candid
 
 The report separates generation time from tool time, counts turns that carried a single tool call,
 and totals read output, cache reads, cost, and terminal report rejections.
+Codemode calls count once as tool calls. Their nested calls appear separately as nested calls per tool.
+The cost includes usage that tool results report, such as classifier calls from codemode scripts.
 Generation time is the wall gap before each assistant message and tool time is the wall gap before
 each tool result, so concurrent tool calls count once instead of once per call.
 Only the active branch is measured, so a fork, a rewind, or a compaction does not inflate the totals.
@@ -274,6 +285,15 @@ bun src/tool-cost-cli.ts --json ../filetools/src/index.ts
 The report loads the named extensions beside the Pi built-in tools and ranks each tool by the
 characters it contributes, separating the serialized definition from its system prompt snippet and
 guidelines. Characters are not tokenizer counts.
+
+A second table runs a real session with a local fake model for each codemode mode:
+
+- `off`: the default tools and the named extensions.
+- `on`: the same tools with codemode declarations appended, plus the `codemode` tool.
+- `only`: the `codemode` tool alone, with every callable tool listed in its description.
+
+It counts the declarations and the system prompt that the model request actually carries.
+Compare the totals before you change the `codemode.mode` setting.
 
 ## Stack backends
 

@@ -19,6 +19,7 @@ interface TranscriptMessage {
   model?: string
   role: string
   toolCallId?: string
+  nestedCalls?: { calls: { name: string; status: string }[]; complete: boolean }
   toolName?: string
   usage?: { cacheRead?: number; cost?: { total: number }; input?: number; output?: number }
 }
@@ -113,6 +114,49 @@ describe('session metrics', () => {
     expect(bash.calls).toBe(1)
     expect(bash.wallMs).toBe(6_000)
     expect(metrics.tools[0]?.name).toBe('read')
+  })
+
+  it('counts codemode nested calls and tool usage cost', () => {
+    const metrics = sessionMetrics(
+      [
+        entry('2026-09-17T00:00:00.000Z', {
+          content: [{ text: 'go', type: 'text' }],
+          role: 'user',
+        }),
+        entry('2026-09-17T00:00:05.000Z', {
+          content: [{ id: 's', name: 'codemode', type: 'toolCall' }],
+          role: 'assistant',
+          usage: { cost: { total: 0.25 } },
+        }),
+        entry('2026-09-17T00:00:07.000Z', {
+          content: [{ text: 'Script completed', type: 'text' }],
+          nestedCalls: {
+            calls: [
+              { name: 'read', status: 'ok' },
+              { name: 'read', status: 'ok' },
+              { name: 'bash', status: 'error' },
+            ],
+            complete: true,
+          },
+          role: 'toolResult',
+          toolCallId: 's',
+          toolName: 'codemode',
+          usage: { cost: { total: 0.05 } },
+        }),
+      ].join('\n'),
+    )
+
+    expect(metrics.toolCalls).toBe(1)
+    expect(metrics.nestedToolCalls).toBe(3)
+    expect(metrics.costUsd).toBeCloseTo(0.3)
+    expect(metrics.toolCostUsd).toBeCloseTo(0.05)
+    expect(metrics.tools.map((tool) => [tool.name, tool.calls, tool.nestedCalls])).toEqual([
+      ['read', 0, 2],
+      ['bash', 0, 1],
+      ['codemode', 1, 0],
+    ])
+    expect(formatSessionMetrics(metrics)).toContain('read: 0 calls + 2 nested')
+    expect(formatSessionMetrics(metrics)).toContain('nested 3')
   })
 
   it('ignores unparsable and unrelated lines instead of failing the report', () => {

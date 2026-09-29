@@ -1,7 +1,10 @@
+import { fileURLToPath } from 'node:url'
+
 import { Type } from 'typebox'
 import { describe, expect, it } from 'vite-plus/test'
 
-import { formatToolCostReport, toolCostReport } from '../src/tool-cost.ts'
+import { measureDeclarations } from '../src/tool-cost-session.ts'
+import { formatDeclarationCosts, formatToolCostReport, toolCostReport } from '../src/tool-cost.ts'
 
 const tools = [
   {
@@ -50,5 +53,21 @@ describe('toolCostReport', () => {
       totalDefinitionChars: 0,
       totalPromptChars: 0,
     })
+  })
+})
+
+describe('measureDeclarations', () => {
+  it('measures what each codemode mode declares to the model', async () => {
+    const extension = fileURLToPath(new URL('../../filetools/src/index.ts', import.meta.url))
+    const off = await measureDeclarations([extension], 'off')
+    const on = await measureDeclarations([extension], 'on')
+    const only = await measureDeclarations([extension], 'only')
+
+    expect(off.declaredTools).toEqual(expect.arrayContaining(['read', 'patch']))
+    expect(off.declaredTools).not.toContain('codemode')
+    expect([...on.declaredTools].sort()).toEqual([...off.declaredTools, 'codemode'].sort())
+    expect(on.declarationChars).toBeGreaterThan(off.declarationChars)
+    expect(only.declaredTools).toEqual(['codemode'])
+    expect(formatDeclarationCosts([off, on, only])).toContain('only')
   })
 })

@@ -60,6 +60,56 @@ export function toolCostReport(tools: readonly ToolCostInput[]): ToolCostReport 
   }
 }
 
+export type CodemodeMode = 'off' | 'on' | 'only'
+
+export interface DeclaredTool {
+  description: string
+  name: string
+  parameters: unknown
+}
+
+export interface DeclarationCost {
+  declarationChars: number
+  declaredTools: readonly string[]
+  mode: CodemodeMode
+  systemPromptChars: number
+  totalChars: number
+}
+
+export function declarationCost(
+  mode: CodemodeMode,
+  tools: readonly DeclaredTool[],
+  systemPrompt: string,
+): DeclarationCost {
+  const declarationChars = tools.reduce(
+    (total, tool) =>
+      total +
+      JSON.stringify({
+        description: tool.description,
+        name: tool.name,
+        parameters: tool.parameters,
+      }).length,
+    0,
+  )
+  return {
+    declarationChars,
+    declaredTools: tools.map((tool) => tool.name),
+    mode,
+    systemPromptChars: systemPrompt.length,
+    totalChars: declarationChars + systemPrompt.length,
+  }
+}
+
+export function formatDeclarationCosts(costs: readonly DeclarationCost[]): string {
+  const lines = ['codemode  tools  declaration  system prompt    total']
+  for (const cost of costs) {
+    lines.push(
+      `${cost.mode.padEnd(8)} ${pad(cost.declaredTools.length, 6)} ${pad(cost.declarationChars, 12)} ${pad(cost.systemPromptChars, 14)} ${pad(cost.totalChars, 8)}`,
+    )
+  }
+  return lines.join('\n')
+}
+
 function pad(value: number, width: number): string {
   return String(value).padStart(width)
 }

@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import {
   createAgentSession,
+  createCodemodeExtension,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -485,6 +486,7 @@ async function sessionWithDeliveryTool(options = {}) {
     agentDir: join(cwd, 'agent'),
     cwd,
     extensionFactories: [
+      ...(options.codemode === true ? [createCodemodeExtension({ models: false })] : []),
       (pi) => {
         registerDeliveryProtocol(pi)
         pi.registerTool({
@@ -537,7 +539,12 @@ async function sessionWithDeliveryTool(options = {}) {
     modelRuntime: runtime,
     resourceLoader: loader,
     sessionManager,
-    tools: ['pstack_delivery', 'Task', 'TaskControl'],
+    tools: [
+      'pstack_delivery',
+      'Task',
+      'TaskControl',
+      ...(options.codemode === true ? ['codemode'] : []),
+    ],
   })
   return {
     close: async () => {
@@ -1701,6 +1708,60 @@ describe('pstack delivery tool interception', () => {
     if (result.status !== 'rejected') throw new Error('An unclassified incomplete draft passed.')
     expect(result.error).toContain('failureClass')
   })
+  it('returns the parsed delivery page to codemode scripts', async () => {
+    const harness = await sessionWithDeliveryTool({
+      codemode: true,
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: {
+                action: 'open',
+                criteria: [{ description: 'The command returns a receipt.', id: 'receipt' }],
+                issue: 'scripted-delivery',
+                runtimeRequired: false,
+              },
+              id: 'open',
+              name: 'pstack_delivery',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+        plannedReply(
+          [
+            {
+              arguments: {
+                code: [
+                  "const view = await tools.pstack_delivery({ action: 'read', issue: 'scripted-delivery', view: 'criteria' })",
+                  'return { issue: view.issue, truncated: view.truncated, ids: view.page.criteria.map((entry) => entry.id) }',
+                ].join('\n'),
+              },
+              id: 'script',
+              name: 'codemode',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Read the delivery criteria in a script.', {
+        expandPromptTemplates: false,
+      })
+      const result = harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'script',
+      )
+      expect(result?.isError).toBe(false)
+      expect(result?.content.map((part) => part.text ?? '').join('\n')).toContain(
+        '{"issue":"scripted-delivery","truncated":false,"ids":["receipt"]}',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('injects the supported delivery schema into the real Task tool call', async () => {
     const harness = await sessionWithDeliveryTool()
     try {

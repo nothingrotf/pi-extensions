@@ -3,7 +3,11 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent'
+import {
+  type AgentToolResult,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from '@earendil-works/pi-coding-agent'
 import {
   captureWorkspaceSnapshot,
   decodeJsonValue,
@@ -25,7 +29,7 @@ import {
   readDeliveryJournal,
 } from './delivery-journal.ts'
 import { isDeliveryRole, isImplementationRole } from './delivery-roles.ts'
-import { DeliveryReadSchema, deliveryView } from './delivery-views.ts'
+import { DeliveryReadSchema, DeliveryToolOutputSchema, deliveryView } from './delivery-views.ts'
 import {
   DELIVERY_REASON_LIMIT,
   DeliveryArtifactSchema,
@@ -55,6 +59,8 @@ import {
   sameDeliveryTechnicalVerdict,
   summarizeDelivery,
 } from './delivery.ts'
+
+type JsonValue = Exclude<AgentToolResult['structuredContent'], undefined>
 
 const entryType = '@nothingrotf/pstack/delivery-v1'
 const deliveryPacketPrefix = 'PSTACK_DELIVERY_PACKET:'
@@ -1302,6 +1308,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
     description:
       'Open criteria, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
     parameters: DeliveryToolSchema,
+    outputSchema: DeliveryToolOutputSchema,
     async execute(_callId, input, _signal, _onUpdate, ctx) {
       const journal = loadJournal(ctx)
       let issue = journal.issues.get(input.issue)
@@ -1427,9 +1434,15 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
         input.action === 'read' ? input : { action: 'read', issue: issue.issue },
       )
       if (!view.ok) throw view.error
+      const page: JsonValue = JSON.parse(view.value.text)
       return {
         content: [{ type: 'text', text: view.value.text }],
         details: view.value.details,
+        structuredContent: {
+          issue: view.value.details.issue,
+          page,
+          truncated: view.value.details.truncated,
+        },
       }
     },
   })

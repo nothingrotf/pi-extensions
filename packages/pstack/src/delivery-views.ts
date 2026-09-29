@@ -48,6 +48,20 @@ export const DeliveryReadSchema = Type.Union([
 
 type DeliveryRead = Static<typeof DeliveryReadSchema>
 
+export const DeliveryToolOutputSchema = Type.Object(
+  {
+    issue: Type.String(),
+    truncated: Type.Boolean({
+      description: 'Whether the page exceeded 32 KiB and the result carries a compact summary.',
+    }),
+    page: Type.Unknown({
+      description:
+        'Parsed JSON of the text result: an issue checkpoint, a criteria or submissions page, or an exact submission chunk.',
+    }),
+  },
+  { additionalProperties: false },
+)
+
 function summaryView(summary: DeliverySummary) {
   return {
     state: summary.state,

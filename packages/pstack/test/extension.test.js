@@ -47,11 +47,13 @@ describe('pstack extension', () => {
       {
         profiles: [
           {
+            defaultTools: ['codemode'],
             id: 'pstack-leaf',
             optionalRegistrations: ['filetools', 'tgrep'],
             registrations: ['pstack-planning'],
           },
           {
+            defaultTools: ['codemode'],
             id: 'pstack-nested',
             nested: { maxDepth: 3 },
             optionalRegistrations: ['filetools', 'tgrep'],

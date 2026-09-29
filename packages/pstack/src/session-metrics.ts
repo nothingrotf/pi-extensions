@@ -26,10 +26,18 @@ const UsageSchema = Type.Object(
   { additionalProperties: true },
 )
 
+const NestedCallsSchema = Type.Object(
+  {
+    calls: Type.Array(Type.Object({ name: Type.String() }, { additionalProperties: true })),
+  },
+  { additionalProperties: true },
+)
+
 const MessageSchema = Type.Object(
   {
     content: Type.Optional(Type.Array(ContentPartSchema)),
     model: Type.Optional(Type.String()),
+    nestedCalls: Type.Optional(NestedCallsSchema),
     role: Type.String(),
     toolCallId: Type.Optional(Type.String()),
     toolName: Type.Optional(Type.String()),
@@ -54,6 +62,7 @@ type SessionMessage = Static<typeof MessageSchema>
 export interface ToolUsageMetric {
   calls: number
   name: string
+  nestedCalls: number
   resultChars: number
   wallMs: number
 }
@@ -69,6 +78,8 @@ export interface SessionMetrics {
   models: readonly string[]
   cacheReadTokens: number
   costUsd: number
+  nestedToolCalls: number
+  toolCostUsd: number
   durationMs: number
   finishedAt: string | undefined
   inputTokens: number
@@ -84,8 +95,13 @@ export interface SessionMetrics {
 
 interface MutableToolUsage {
   calls: number
+  nestedCalls: number
   resultChars: number
   wallMs: number
+}
+
+function emptyUsage(): MutableToolUsage {
+  return { calls: 0, nestedCalls: 0, resultChars: 0, wallMs: 0 }
 }
 
 const rejectionMarker = 'Your terminal delivery report was rejected'
@@ -153,6 +169,8 @@ export function sessionMetrics(content: string): SessionMetrics {
   let assistantTurns = 0
   let cacheReadTokens = 0
   let costUsd = 0
+  let nestedToolCalls = 0
+  let toolCostUsd = 0
   let inputTokens = 0
   let outputTokens = 0
   let modelMs = 0
@@ -198,7 +216,7 @@ export function sessionMetrics(content: string): SessionMetrics {
         turnCalls += 1
         toolCalls += 1
         pending.set(part.id, { name: part.name, startedAt: currentMs })
-        const current = usage.get(part.name) ?? { calls: 0, resultChars: 0, wallMs: 0 }
+        const current = usage.get(part.name) ?? emptyUsage()
         current.calls += 1
         usage.set(part.name, current)
       }
@@ -215,9 +233,18 @@ export function sessionMetrics(content: string): SessionMetrics {
     const name = call?.name ?? message.toolName
     if (name === undefined) continue
     if (message.toolCallId !== undefined) pending.delete(message.toolCallId)
+    const toolCost = usageOf(message).cost?.total ?? 0
+    toolCostUsd += toolCost
+    costUsd += toolCost
+    for (const nested of message.nestedCalls?.calls ?? []) {
+      nestedToolCalls += 1
+      const entry = usage.get(nested.name) ?? emptyUsage()
+      entry.nestedCalls += 1
+      usage.set(nested.name, entry)
+    }
     const text = messageText(message)
     if (name === 'read') readResultChars += text.length
-    const current = usage.get(name) ?? { calls: 0, resultChars: 0, wallMs: 0 }
+    const current = usage.get(name) ?? emptyUsage()
     current.resultChars += text.length
     if (call?.startedAt !== undefined && currentMs !== undefined) {
       current.wallMs += Math.max(0, currentMs - call.startedAt)
@@ -236,16 +263,22 @@ export function sessionMetrics(content: string): SessionMetrics {
     inputTokens,
     modelMs,
     models: [...models].sort(),
+    nestedToolCalls,
     outputTokens,
     readResultChars,
     singleCallTurns,
     startedAt,
     terminalRejections,
     toolCalls,
+    toolCostUsd,
     toolMs,
     tools: [...usage.entries()]
       .map(([name, entry]) => ({ name, ...entry }))
-      .sort((left, right) => right.calls - left.calls || left.name.localeCompare(right.name)),
+      .sort(
+        (left, right) =>
+          right.calls + right.nestedCalls - (left.calls + left.nestedCalls) ||
+          left.name.localeCompare(right.name),
+      ),
   }
 }
 
@@ -291,6 +324,7 @@ export function compareSessionMetrics(
     compareValue('turns', baseline.assistantTurns, candidate.assistantTurns),
     compareValue('single-call turns', baseline.singleCallTurns, candidate.singleCallTurns),
     compareValue('tool calls', baseline.toolCalls, candidate.toolCalls),
+    compareValue('nested tool calls', baseline.nestedToolCalls, candidate.nestedToolCalls),
     compareValue('read result chars', baseline.readResultChars, candidate.readResultChars),
     compareValue('cache read tokens', baseline.cacheReadTokens, candidate.cacheReadTokens),
     compareValue('output tokens', baseline.outputTokens, candidate.outputTokens),
@@ -301,8 +335,10 @@ export function compareSessionMetrics(
     ...baseline.tools.map((tool) => tool.name),
     ...candidate.tools.map((tool) => tool.name),
   ])
-  const callsOf = (metrics: SessionMetrics, name: string) =>
-    metrics.tools.find((tool) => tool.name === name)?.calls ?? 0
+  const callsOf = (metrics: SessionMetrics, name: string) => {
+    const tool = metrics.tools.find((entry) => entry.name === name)
+    return tool === undefined ? 0 : tool.calls + tool.nestedCalls
+  }
   const tools = [...names]
     .map((name) => compareValue(name, callsOf(baseline, name), callsOf(candidate, name)))
     .sort((left, right) => right.baseline - left.baseline || left.name.localeCompare(right.name))
@@ -343,13 +379,14 @@ export function formatSessionMetrics(metrics: SessionMetrics): string {
     `window ${metrics.startedAt ?? 'unknown'} -> ${metrics.finishedAt ?? 'unknown'} (${minutes(metrics.durationMs)})`,
     `models ${metrics.models.join(', ') || 'unknown'}`,
     `model ${minutes(metrics.modelMs)} (${share}%) | tool ${minutes(metrics.toolMs)}`,
-    `turns ${metrics.assistantTurns} | single-call turns ${metrics.singleCallTurns} | tool calls ${metrics.toolCalls} | ${perTurn}s per turn`,
+    `turns ${metrics.assistantTurns} | single-call turns ${metrics.singleCallTurns} | tool calls ${metrics.toolCalls} | nested ${metrics.nestedToolCalls} | ${perTurn}s per turn`,
     `read result chars ${metrics.readResultChars} | cache read ${metrics.cacheReadTokens} | output ${metrics.outputTokens}`,
-    `cost ${metrics.costUsd.toFixed(2)} USD | terminal rejections ${metrics.terminalRejections}`,
+    `cost ${metrics.costUsd.toFixed(2)} USD (tools ${metrics.toolCostUsd.toFixed(2)}) | terminal rejections ${metrics.terminalRejections}`,
   ]
   for (const tool of metrics.tools.slice(0, 8)) {
+    const nested = tool.nestedCalls === 0 ? '' : ` + ${tool.nestedCalls} nested`
     lines.push(
-      `  ${tool.name}: ${tool.calls} calls, ${minutes(tool.wallMs)}, ${tool.resultChars} chars`,
+      `  ${tool.name}: ${tool.calls} calls${nested}, ${minutes(tool.wallMs)}, ${tool.resultChars} chars`,
     )
   }
   return lines.join('\n')

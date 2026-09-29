@@ -295,6 +295,12 @@ describe('pstack SDK child bootstrap', () => {
         expect(h.inventories.find((entry) => entry.action === 'read:configured').model).toBe(
           'pstack-test/configured',
         )
+        expect(h.inventories.find((entry) => entry.action === 'read:configured').tools).toContain(
+          'codemode',
+        )
+        expect(
+          h.inventories.find((entry) => entry.action === 'read:configured').tools,
+        ).not.toContain('bash')
         expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).toContain(
           'how explorer: pstack-test/configured:off',
         )
