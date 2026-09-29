@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
+import {
+  createAssistantMessageEventStream,
+  getCurrentTools,
+  withoutInitialSystemMessage,
+} from '@earendil-works/pi-ai'
 import {
   AgentSession,
   ModelRegistry,
@@ -56,8 +60,8 @@ async function fixture(respond, refreshModels) {
     ],
     streamSimple(model, context, options) {
       calls.push({
-        messages: structuredClone(context.messages),
-        tools: context.tools?.map((tool) => ({ name: tool.name })),
+        messages: structuredClone(withoutInitialSystemMessage(context.messages)),
+        tools: getCurrentTools(context.messages).map((tool) => ({ name: tool.name })),
       })
       const stream = createAssistantMessageEventStream()
       const message = {

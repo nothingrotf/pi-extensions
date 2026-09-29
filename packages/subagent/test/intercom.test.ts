@@ -6,6 +6,8 @@ import {
   type AssistantMessage,
   type Context,
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
 } from '@earendil-works/pi-ai'
 import {
   createAgentSession,
@@ -67,7 +69,11 @@ async function harness() {
       },
     ],
     streamSimple: (_model, context) => {
-      contexts.push(context)
+      contexts.push({
+        messages: context.messages,
+        systemPrompt: getCurrentSystemPrompt(context.messages),
+        tools: getCurrentTools(context.messages),
+      })
       const stream = createAssistantMessageEventStream()
       if (JSON.stringify(context.messages.at(-1)).includes('BLOCK_SIDE')) {
         streams.push(stream)

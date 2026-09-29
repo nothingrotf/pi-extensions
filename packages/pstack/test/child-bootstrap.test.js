@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
+import {
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+} from '@earendil-works/pi-ai'
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -80,8 +84,8 @@ async function harness(pstackFirst, plans = new Map(), policy, fixtureExtension)
       inventories.push({
         model: `${model.provider}/${model.id}`,
         action,
-        prompt: context.systemPrompt,
-        tools: context.tools?.map((tool) => tool.name) ?? [],
+        prompt: getCurrentSystemPrompt(context.messages),
+        tools: getCurrentTools(context.messages).map((tool) => tool.name),
         results,
         user: text,
       })

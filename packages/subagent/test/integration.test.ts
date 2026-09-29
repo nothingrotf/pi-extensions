@@ -10,11 +10,15 @@ import type {
   Api,
   AssistantMessage,
   AssistantMessageEventStream,
-  Context,
   Model,
   SimpleStreamOptions,
+  TranscriptContext,
 } from '@earendil-works/pi-ai'
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
+import {
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+} from '@earendil-works/pi-ai'
 import {
   createAgentSession,
   CustomMessageComponent,
@@ -179,7 +183,7 @@ function assistant(
   }
 }
 
-function contentText(content: Context['messages'][number]['content']): string {
+function contentText(content: TranscriptContext['messages'][number]['content']): string {
   if (!Array.isArray(content)) return content
   return content
     .filter((part) => part.type === 'text')
@@ -187,7 +191,7 @@ function contentText(content: Context['messages'][number]['content']): string {
     .join('\n')
 }
 
-function toolResultText(context: Context, toolName: string): string | undefined {
+function toolResultText(context: TranscriptContext, toolName: string): string | undefined {
   for (let index = context.messages.length - 1; index >= 0; index -= 1) {
     const message = context.messages[index]
     if (message?.role !== 'toolResult' || message.toolName !== toolName) continue
@@ -196,7 +200,7 @@ function toolResultText(context: Context, toolName: string): string | undefined 
   return undefined
 }
 
-function userPrompts(context: Context): string[] {
+function userPrompts(context: TranscriptContext): string[] {
   const prompts: string[] = []
   for (const message of context.messages) {
     if (message.role === 'user') prompts.push(contentText(message.content))
@@ -220,7 +224,7 @@ function endStream(stream: AssistantMessageEventStream, message: AssistantMessag
 
 function parentMessage(
   model: Model<Api>,
-  context: Context,
+  context: TranscriptContext,
   state: ProviderState,
 ): AssistantMessage {
   state.parentRequests += 1
@@ -308,7 +312,7 @@ function parentMessage(
   return assistant(model, [{ text: 'Parent turn complete.', type: 'text' }], 'stop')
 }
 
-function childMessage(model: Model<Api>, context: Context): AssistantMessage {
+function childMessage(model: Model<Api>, context: TranscriptContext): AssistantMessage {
   const prompts = userPrompts(context)
   const prompt = prompts.at(-1) ?? ''
   if (prompt === 'WRITE_RETAINED_BOUNDARY') {
@@ -378,11 +382,10 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
   if (prompt === 'RETURN_CORRECTION_TOOL_ATTEMPT') {
     const attempted = toolResultText(context, 'write')
     if (attempted !== undefined) {
-      const tools =
-        context.tools
-          ?.map((tool) => tool.name)
-          .sort()
-          .join(',') ?? ''
+      const tools = getCurrentTools(context.messages)
+        .map((tool) => tool.name)
+        .sort()
+        .join(',')
       return assistant(model, [{ text: `tools-after-attempt:${tools}`, type: 'text' }], 'stop')
     }
     return assistant(
@@ -436,11 +439,10 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
     )
   }
   if (prompt === 'RETURN_TOOLS') {
-    const tools =
-      context.tools
-        ?.map((tool) => tool.name)
-        .sort()
-        .join(',') ?? ''
+    const tools = getCurrentTools(context.messages)
+      .map((tool) => tool.name)
+      .sort()
+      .join(',')
     return assistant(model, [{ text: `tools:${tools}`, type: 'text' }], 'stop')
   }
   if (prompt === 'READ_THROUGH_CAPABILITY') {
@@ -844,11 +846,11 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
     )
   }
   if (prompt === 'RETURN_CONTEXT') {
-    const present = (context.systemPrompt ?? '').includes('PROJECT_CONTEXT_SENTINEL')
+    const present = getCurrentSystemPrompt(context.messages).includes('PROJECT_CONTEXT_SENTINEL')
     return assistant(model, [{ text: `project-context:${present}`, type: 'text' }], 'stop')
   }
   if (prompt === 'RETURN_PROFILE') {
-    const systemPrompt = context.systemPrompt ?? ''
+    const systemPrompt = getCurrentSystemPrompt(context.messages)
     const marker = systemPrompt.includes('CUSTOM_AGENT_SENTINEL')
       ? 'custom'
       : systemPrompt.includes('FILE_AGENT_SENTINEL')
@@ -856,11 +858,10 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
         : systemPrompt.includes('ALT_CONTEXT_SENTINEL')
           ? 'cwd'
           : 'none'
-    const tools =
-      context.tools
-        ?.map((tool) => tool.name)
-        .sort()
-        .join(',') ?? ''
+    const tools = getCurrentTools(context.messages)
+      .map((tool) => tool.name)
+      .sort()
+      .join(',')
     return assistant(model, [{ text: `profile:${marker};tools:${tools}`, type: 'text' }], 'stop')
   }
   if (prompt === 'FAIL') {
@@ -877,7 +878,7 @@ function childMessage(model: Model<Api>, context: Context): AssistantMessage {
 
 function streamResponse(
   model: Model<Api>,
-  context: Context,
+  context: TranscriptContext,
   options: SimpleStreamOptions | undefined,
   state: ProviderState,
 ): AssistantMessageEventStream {
@@ -885,15 +886,15 @@ function streamResponse(
   const lastPrompt = userPrompts(context).at(-1) ?? ''
   const isSideTurn = lastPrompt.includes('<subagent-intercom>')
   const isParent =
-    (context.tools?.some((tool) => tool.name === 'Task') ?? false) &&
-    !(context.tools?.some((tool) => tool.name === 'ask_parent') ?? false)
+    getCurrentTools(context.messages).some((tool) => tool.name === 'Task') &&
+    !getCurrentTools(context.messages).some((tool) => tool.name === 'ask_parent')
   if (isSideTurn) {
     state.sideContextPrompts.push(userPrompts(context))
     state.sideQuestions.push(lastPrompt)
-    state.sideSystemPrompts.push(context.systemPrompt ?? '')
-    state.sideToolNames.push(context.tools?.map((tool) => tool.name) ?? [])
+    state.sideSystemPrompts.push(getCurrentSystemPrompt(context.messages))
+    state.sideToolNames.push(getCurrentTools(context.messages).map((tool) => tool.name))
   } else if (!isParent) {
-    state.childSystemPrompts.push(context.systemPrompt ?? '')
+    state.childSystemPrompts.push(getCurrentSystemPrompt(context.messages))
   }
   const message = isSideTurn
     ? assistant(
