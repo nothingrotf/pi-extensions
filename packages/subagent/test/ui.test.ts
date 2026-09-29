@@ -64,6 +64,51 @@ it('renders send age separately from delivery latency and acknowledgment', () =>
   expect(lines).not.toContain('acknowledged')
 })
 
+it('renders a settled coordinator decision without the waiting instruction', () => {
+  const message = [
+    'Parent decision requested by Task child. Request ID: request.',
+    'The child is waiting. Reply with TaskControl action="reply", agent_id, request_id, and message.',
+    'Preserve the user authorization boundary. Deny requests that exceed the authorized scope.',
+    'Question: May I use a disposable worktree?',
+  ].join('\n')
+  const render = (state: 'delivered' | 'acknowledged' | 'cancelled') =>
+    renderIntercomCard(
+      { agentId: 'child', kind: 'request', message, requestId: 'request' },
+      'Child',
+      0,
+      {
+        delivery: {
+          agentId: 'child',
+          content: message,
+          customType: 'subagent-intercom',
+          display: true,
+          id: 'decision',
+          kind: 'request',
+          level: 'warning',
+          ownerSessionId: 'owner',
+          queuedAt: 0,
+          requestId: 'request',
+          runGeneration: 1,
+          sentAt: 0,
+          state,
+        },
+        expanded: true,
+        now: 60_000,
+      },
+      theme,
+    ).join('\n')
+  expect(render('delivered')).toContain('The child is waiting.')
+  const answered = render('acknowledged')
+  expect(answered).toContain('answered · coordinator decision')
+  expect(answered).toContain('Answered. The child received the coordinator reply.')
+  expect(answered).toContain('Question: May I use a disposable worktree?')
+  expect(answered).not.toContain('The child is waiting.')
+  const expired = render('cancelled')
+  expect(expired).toContain('unanswered · coordinator decision')
+  expect(expired).toContain('Closed without a reply. No authorization was granted.')
+  expect(expired).not.toContain('The child is waiting.')
+})
+
 describe('IRC card header', () => {
   const codes = new Map<string, number>([
     ['accent', 14],

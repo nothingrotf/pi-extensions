@@ -21,6 +21,8 @@ export interface DecisionReceipt {
   requestId: string
 }
 
+export const DECISION_QUESTION_PREFIX = 'Question: '
+
 export class ParentDecisions {
   private pending = new Map<string, PendingDecision>()
 
@@ -42,7 +44,7 @@ export class ParentDecisions {
         `Parent decision requested by Task ${handle.agentId}. Request ID: ${requestId}.`,
         'The child is waiting. Reply with TaskControl action="reply", agent_id, request_id, and message.',
         'Preserve the user authorization boundary. Deny requests that exceed the authorized scope.',
-        `Question: ${redactSensitiveText(question)}`,
+        `${DECISION_QUESTION_PREFIX}${redactSensitiveText(question)}`,
       ].join('\n'),
       customType: 'subagent-intercom',
       display: true,

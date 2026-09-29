@@ -709,6 +709,8 @@ Notices persist before dispatch. Receipt states distinguish `queued`, `delivered
 
 `delivered` means that a context hook supplied the notice to the model. It does not prove attention or acknowledgment.
 
+A settled decision card shows `answered` or `unanswered` and omits the waiting instruction. It keeps the original question.
+
 Acknowledge a notice explicitly:
 
 ```ts

@@ -1154,7 +1154,7 @@ export function renderTaskControlResult(
 }
 
 export const taskControlDescription =
-  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. Operational responses are bounded summaries. evidence retrieves paginated output or verification evidence for an exact Agent ID and attempt. inbox shows bounded notification delivery previews. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, timeout, or abort; use it only without other work. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
+  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. Operational responses are bounded summaries. evidence retrieves paginated output or verification evidence for an exact Agent ID and attempt. inbox shows bounded notification delivery previews. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, a child requests a decision, a timeout, or an abort. Call wait as the only tool call. Never pair it with shell sleep, because a parallel call delays decision replies past their 5-minute deadline. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
 
 export function registerTaskControl(
   pi: ExtensionAPI,

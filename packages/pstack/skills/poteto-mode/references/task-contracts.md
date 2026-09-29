@@ -179,6 +179,7 @@ The wait returns on a watched completion, decision request, timeout, or abort, n
 On a decision request, inspect `inbox` and reply using its returned `request_id`.
 On timeout, inspect bounded status once and wait again if no other work is ready.
 Never replace wait with shell `sleep` or repeated status polling.
+Call wait alone. A parallel shell `sleep` delays decision replies past their 5-minute deadline.
 
 Follow [Delivery operations](delivery-operations.md) for checkpoints, stalled corrections, artifact reconstruction, and browser preflight.
 Preserve failed, blocked, and interrupted outcomes. Correct tool or environment failures before redispatch instead of weakening verification requirements.

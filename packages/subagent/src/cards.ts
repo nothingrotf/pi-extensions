@@ -2,6 +2,7 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { DECISION_QUESTION_PREFIX } from './decisions.ts'
 import type { DeliveryRecord } from './delivery.ts'
 import { oneLineLabel, type SubagentTheme, taskRoleLabel } from './format.ts'
 import { formatMoreItems } from './jobs.ts'
@@ -163,6 +164,32 @@ export function intercomTimingKey(timing: IntercomTiming): string {
   return `${timing.age ?? ''}\u001f${timing.state ?? ''}\u001f${timing.queue ?? ''}`
 }
 
+function settledRequestOutcome(state: DeliveryRecord['state'] | undefined): string | undefined {
+  switch (state) {
+    case 'acknowledged':
+      return 'Answered. The child received the coordinator reply.'
+    case 'cancelled':
+    case 'failed':
+    case 'superseded':
+      return 'Closed without a reply. No authorization was granted.'
+    default:
+      return undefined
+  }
+}
+
+function requestBody(message: string, state: DeliveryRecord['state'] | undefined): string {
+  const outcome = settledRequestOutcome(state)
+  if (outcome === undefined) return message
+  const question = message.indexOf(`\n${DECISION_QUESTION_PREFIX}`)
+  return question < 0 ? outcome : `${outcome}${message.slice(question)}`
+}
+
+function stateLabel(kind: NonNullable<IntercomDetails>['kind'], state: DeliveryRecord['state']) {
+  if (kind !== 'request') return state
+  if (state === 'acknowledged') return 'answered'
+  return state === 'cancelled' || state === 'failed' ? 'unanswered' : state
+}
+
 export function renderIntercomCard(
   details: NonNullable<IntercomDetails>,
   label: string,
@@ -195,7 +222,7 @@ export function renderIntercomCard(
   }
   if (timing.age !== undefined) meta.push(dim(`${timing.age} ago`))
   if (timing.state !== undefined) {
-    meta.push(dim(timing.state))
+    meta.push(dim(stateLabel(details.kind, timing.state)))
     if (timing.queue !== undefined) meta.push(dim(`queue ${timing.queue}`))
   }
   if (details.kind === 'request') meta.push(dim('coordinator decision'))
@@ -209,9 +236,9 @@ export function renderIntercomCard(
   )
   const body = (text: string, tone: 'dim' | 'toolOutput' = 'toolOutput') =>
     quotedBody(unescapeXml(text), theme, { expanded: options.expanded, indent, tone, width })
-  if (details.kind === 'notification' || details.kind === 'request') {
-    return [header, ...body(details.message)]
-  }
+  if (details.kind === 'request')
+    return [header, ...body(requestBody(details.message, timing.state))]
+  if (details.kind === 'notification') return [header, ...body(details.message)]
   return [
     header,
     ...body(details.question),

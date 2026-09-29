@@ -59,6 +59,7 @@ Prefer one open wait over repeated short windows.
 A completion or decision request is the next scheduling event.
 Use the loop heartbeat only to audit liveness, not to delay completion handling.
 Never substitute shell `sleep`, polling loops, or repeated status requests for completion-driven waiting.
+Never run shell `sleep` in parallel with wait, because it delays decision replies past their deadline.
 After a schema error, correct arguments from the actual descriptor before retrying.
 
 ## Stalled corrections
