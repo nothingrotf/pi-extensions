@@ -74,6 +74,8 @@ A freeform answer uses `freeformText`. The sentinel option ID never appears in `
 
 Print mode and JSON mode reject questions because no interactive form exists.
 
+`AskQuestion` uses `model-only` exposure. Only the model can open a form. Pi `codemode` scripts cannot call the tool, and `codemode.mode: "only"` keeps it declared to the model.
+
 ## Outstanding questions
 
 Ask publishes `ask:state` on Pi's shared event bus:

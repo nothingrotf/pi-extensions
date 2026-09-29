@@ -317,6 +317,7 @@ export default function ask(pi: ExtensionAPI): void {
   pi.registerTool<typeof AskQuestionSchema, AskQuestionDetails, AskRenderState>({
     name: 'AskQuestion',
     label: 'Ask question',
+    exposure: 'model-only',
     description,
     promptSnippet: 'Ask the user one or more questions with selectable and freeform answers',
     promptGuidelines: [
