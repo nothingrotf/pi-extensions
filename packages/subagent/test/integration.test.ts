@@ -445,6 +445,37 @@ function childMessage(model: Model<Api>, context: TranscriptContext): AssistantM
       .join(',')
     return assistant(model, [{ text: `tools:${tools}`, type: 'text' }], 'stop')
   }
+  if (prompt === 'RUN_CODEMODE_SCOPE') {
+    const script = toolResultText(context, 'codemode')
+    if (script !== undefined)
+      return assistant(model, [{ text: `codemode:${script}`, type: 'text' }], 'stop')
+    return assistant(
+      model,
+      [
+        {
+          arguments: {
+            code: [
+              'const [read, probe] = await Promise.allSettled([',
+              "  tools.read({ path: 'receipt.txt' }),",
+              "  tools.secret_probe ? tools.secret_probe({}) : Promise.reject(new Error('absent')),",
+              '])',
+              "const orchestration = ['Task', 'TaskControl', 'request_parent', 'ask_parent', 'receive_peers']",
+              "  .filter((name) => typeof tools[name] === 'function')",
+              'return {',
+              "  read: read.status === 'fulfilled' ? read.value : read.reason.message,",
+              "  probe: probe.status === 'fulfilled' ? 'reached' : probe.reason.message,",
+              '  orchestration,',
+              '}',
+            ].join('\n'),
+          },
+          id: `run-codemode-scope-${Date.now()}`,
+          name: 'codemode',
+          type: 'toolCall',
+        },
+      ],
+      'toolUse',
+    )
+  }
   if (prompt === 'READ_THROUGH_CAPABILITY') {
     const read = toolResultText(context, 'read')
     if (read !== undefined)
@@ -2884,6 +2915,110 @@ describe('subagent Task integration', () => {
       expect(childPrompt).toContain('BOUNDED_READ_SNIPPET')
     } finally {
       await harness.close()
+    }
+  })
+
+  it('runs codemode scripts only against the Task tool contract', async () => {
+    const harness = await createHarness()
+    try {
+      await writeFile(join(harness.dir, 'receipt.txt'), 'native content\n', 'utf8')
+      let probeLoaded = false
+      harness.runtime.registerCapability({
+        extensions: [
+          {
+            factory: (pi) => {
+              probeLoaded = true
+              pi.registerTool({
+                description: 'Return a value outside the Task contract.',
+                async execute() {
+                  return { content: [{ text: 'SECRET_PROBE_REACHED', type: 'text' }], details: {} }
+                },
+                exposure: 'codemode',
+                label: 'Secret Probe',
+                name: 'secret_probe',
+                parameters: Type.Object({}),
+              })
+            },
+            name: 'secret-probe',
+          },
+        ],
+        id: 'secret-probe',
+        tools: [],
+        version: '1',
+      })
+      harness.runtime.registerCapabilityProfiles([
+        { id: 'scripted', registrations: ['secret-probe'] },
+        { defaultTools: ['codemode'], id: 'scripted-default', registrations: [] },
+      ])
+
+      const scripted = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'scripted',
+        prompt: 'RUN_CODEMODE_SCOPE',
+        readonly: false,
+        subagent_type: 'generalPurpose',
+        tools: ['read', 'codemode'],
+      })
+      expect(scripted).toContain('"read":"native content\\n"')
+      expect(probeLoaded).toBe(true)
+      expect(scripted).toContain('"probe":"absent"')
+      expect(
+        harness.pi
+          .getAllTools()
+          .filter((tool) => tool.name === 'Task' || tool.name === 'TaskControl')
+          .map((tool) => `${tool.name}:${tool.exposure}`)
+          .sort(),
+      ).toEqual(['Task:model-only', 'TaskControl:model-only'])
+      expect(scripted).toContain('"orchestration":[]')
+      expect(scripted).not.toContain('SECRET_PROBE_REACHED')
+      const receipts = latestState(harness).records.at(-1)?.toolExecutionReceipts ?? []
+      expect(receipts.map((receipt) => receipt.tool)).toContain('codemode')
+      expect(
+        receipts.some(
+          (receipt) => receipt.tool === 'read' && receipt.callId.includes('/') && !receipt.isError,
+        ),
+      ).toBe(true)
+
+      const implicit = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'scripted-default',
+        prompt: 'RETURN_TOOLS',
+      })
+      expect(implicit).toContain('tools:')
+      expect(implicit).toContain('codemode')
+      expect(await runTask(harness, { ...baseInput, prompt: 'RETURN_TOOLS' })).not.toContain(
+        'codemode',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('keeps child codemode in on mode when the global setting is only', async () => {
+    const harness = await createHarness()
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-subagent-agent-'))
+    const previous = process.env.PI_CODING_AGENT_DIR
+    try {
+      await writeFile(
+        join(agentDir, 'settings.json'),
+        JSON.stringify({ codemode: { mode: 'only' } }),
+        'utf8',
+      )
+      process.env.PI_CODING_AGENT_DIR = agentDir
+      const result = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RETURN_TOOLS',
+        tools: ['read', 'grep', 'codemode'],
+      })
+      expect(result).toContain('tools:')
+      expect(result).toContain('codemode')
+      expect(result).toContain('grep')
+      expect(result).toContain('read')
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = previous
+      await harness.close()
+      await rm(agentDir, { force: true, recursive: true })
     }
   })
 

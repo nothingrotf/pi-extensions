@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises'
 
 import {
   createAgentSession,
+  createCodemodeExtension,
   DefaultResourceLoader,
   getAgentDir,
   type AgentSession,
@@ -45,6 +46,14 @@ const fastModeExtension: InlineExtension = {
   },
   hidden: true,
   name: 'subagent-fast-mode',
+}
+
+function codemodeExtension(): InlineExtension {
+  return {
+    factory: createCodemodeExtension({ mode: 'on', models: false }),
+    hidden: true,
+    name: 'subagent-codemode',
+  }
 }
 
 export function syncChildProviders(ctx: ExtensionContext, runtime: ModelRuntime): void {
@@ -125,7 +134,11 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
       ].join('\n'),
     ],
     cwd: options.cwd,
-    extensionFactories: [...(options.model.fast ? [fastModeExtension] : []), ...options.extensions],
+    extensionFactories: [
+      ...(options.model.fast ? [fastModeExtension] : []),
+      ...(options.tools.includes('codemode') ? [codemodeExtension()] : []),
+      ...options.extensions,
+    ],
     noExtensions: true,
     noThemes: true,
   })

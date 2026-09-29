@@ -69,4 +69,27 @@ describe('Task capability tool selection', () => {
       ...planning,
     ])
   })
+
+  it('adds codemode only on request or through a profile default', () => {
+    const restricted = { name: 'restricted', tools: ['read', 'grep'] }
+    expect(resolveTools(agent, undefined, true, planning)).not.toContain('codemode')
+    expect(resolveTools(agent, undefined, true, planning, [], ['codemode'])).toEqual([
+      'read',
+      'grep',
+      'find',
+      'ls',
+      'codemode',
+      ...planning,
+    ])
+    expect(resolveTools(restricted, undefined, true)).toEqual(['read', 'grep'])
+    expect(resolveTools(restricted, undefined, true, [], [], ['codemode'])).toEqual([
+      'read',
+      'grep',
+      'codemode',
+    ])
+    expect(resolveTools(restricted, ['read', 'codemode'], true)).toEqual(['read', 'codemode'])
+    expect(() => resolveTools(restricted, ['bash', 'codemode'], true)).toThrow(/not permitted/)
+    expect(() => resolveTools(agent, undefined, true, [], [], ['bash'])).toThrow(/not optional/)
+    expect(() => resolveTools(agent, undefined, false, ['codemode'])).toThrow(/conflicts/)
+  })
 })

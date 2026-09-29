@@ -3,7 +3,18 @@ import { isAbsolute, resolve } from 'node:path'
 
 import type { RoleDefinition } from './roles.ts'
 
-const PUBLIC_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'bash', 'powershell', 'edit', 'write'])
+const PUBLIC_TOOLS = new Set([
+  'read',
+  'grep',
+  'find',
+  'ls',
+  'bash',
+  'powershell',
+  'edit',
+  'write',
+  'codemode',
+])
+const OPTIONAL_TOOLS = new Set(['codemode'])
 const PRIVATE_TOOLS = new Set([
   'ask_parent',
   'request_parent',
@@ -37,7 +48,11 @@ export function resolveTools(
   readonly: boolean,
   capabilityTools: readonly string[] = [],
   overrides: readonly string[] = [],
+  defaultTools: readonly string[] = [],
 ): string[] {
+  for (const name of defaultTools) {
+    if (!OPTIONAL_TOOLS.has(name)) throw new Error(`Default tool "${name}" is not optional.`)
+  }
   const available = new Set(PUBLIC_TOOLS)
   const replaced = new Set(overrides)
   for (const name of capabilityTools) {
@@ -49,8 +64,14 @@ export function resolveTools(
     }
     available.add(name)
   }
-  const allowed = role.tools === undefined ? [...available] : [...new Set(role.tools)]
-  const selected = requested === undefined ? allowed : [...requested]
+  const listed = role.tools === undefined ? undefined : [...new Set(role.tools)]
+  const allowed =
+    listed === undefined ? [...available] : [...new Set([...listed, ...OPTIONAL_TOOLS])]
+  const implicit =
+    listed === undefined
+      ? allowed.filter((name) => !OPTIONAL_TOOLS.has(name) || defaultTools.includes(name))
+      : [...new Set([...listed, ...defaultTools])]
+  const selected = requested === undefined ? implicit : [...requested]
   const seen = new Set<string>()
   for (const name of selected) {
     if (seen.has(name)) throw new Error(`Task tool "${name}" is duplicated.`)

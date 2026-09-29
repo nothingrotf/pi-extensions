@@ -524,6 +524,7 @@ export function createChildIntercomTools(
           details: {},
         }
       },
+      exposure: 'model-only',
       label: 'Ask Parent (Advisory)',
       name: 'ask_parent',
       parameters: AskParentSchema,
@@ -602,6 +603,7 @@ export function createChildIntercomTools(
           details: { messages },
         }
       },
+      exposure: 'model-only',
       label: 'Receive Peers',
       name: 'receive_peers',
       parameters: ReceivePeersSchema,

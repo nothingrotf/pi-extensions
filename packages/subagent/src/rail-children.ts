@@ -22,6 +22,16 @@ type ChildToolMeta = {
 
 const childToolMeta = new Map<string, ChildToolMeta>([
   ['read', { category: 'read', doneLabel: 'Read', iconKey: 'read', runningLabel: 'Reading' }],
+  ['patch', { category: 'edit', doneLabel: 'Patched', iconKey: 'edit', runningLabel: 'Patching' }],
+  [
+    'codemode',
+    {
+      category: 'other',
+      doneLabel: 'Ran script',
+      iconKey: 'shell',
+      runningLabel: 'Running script',
+    },
+  ],
   ['write', { category: 'edit', doneLabel: 'Wrote', iconKey: 'edit', runningLabel: 'Writing' }],
   ['edit', { category: 'edit', doneLabel: 'Edited', iconKey: 'edit', runningLabel: 'Editing' }],
   ['bash', { category: 'other', doneLabel: 'Ran', iconKey: 'shell', runningLabel: 'Running' }],
@@ -78,6 +88,7 @@ const childToolMeta = new Map<string, ChildToolMeta>([
 ])
 
 const PathArgs = Type.Object({ path: Type.String() })
+const PatchArgs = Type.Object({ files: Type.Array(Type.Object({ path: Type.String() })) })
 const CommandArgs = Type.Object({ command: Type.String() })
 const PatternArgs = Type.Object({ pattern: Type.String() })
 const GenericArgs = Type.Object(
@@ -131,6 +142,10 @@ export function childToolDetail<Args>(toolName: string, args: Args, cwd: string)
       return Value.Check(PatternArgs, args) ? clip(args.pattern, 55) : ''
     case 'find':
       return Value.Check(PatternArgs, args) ? clip(args.pattern, 50) : ''
+    case 'patch':
+      return Value.Check(PatchArgs, args)
+        ? clip(args.files.map((file) => shortPath(file.path, cwd)).join(', '), 60)
+        : ''
     default: {
       if (!Value.Check(GenericArgs, args)) return ''
       const value =
@@ -176,6 +191,12 @@ export function childRailToolCallId(agentId: string, toolCallId: string): string
   return `${agentId}:${toolCallId}`
 }
 
+export function nestedCallSummary(counts: ReadonlyMap<string, number>): string {
+  return [...counts]
+    .map(([toolName, count]) => (count === 1 ? toolName : `${toolName} ×${count}`))
+    .join(', ')
+}
+
 export function childRailReport(
   event: ChildToolEvent,
   parentToolCallId: string,
@@ -207,6 +228,8 @@ export function childRailReport(
 
 export class RailChildReporter {
   private readonly agentIds = new Set<string>()
+  private readonly nested = new Map<string, Map<string, number>>()
+  private readonly pendingReports = new Map<string, RailActionReport>()
   private readonly startedAt = new Map<string, number>()
   private readonly unsubscribe: () => void
   private stopped = false
@@ -230,20 +253,41 @@ export class RailChildReporter {
     this.stopped = true
     this.unsubscribe()
     this.agentIds.clear()
+    this.nested.clear()
+    this.pendingReports.clear()
     this.startedAt.clear()
+  }
+
+  private handleNested(event: ChildToolEvent, scriptToolCallId: string): void {
+    if (event.status !== 'pending') return
+    const scriptId = childRailToolCallId(event.agentId, scriptToolCallId)
+    const counts = this.nested.get(scriptId) ?? new Map<string, number>()
+    counts.set(event.toolName, (counts.get(event.toolName) ?? 0) + 1)
+    this.nested.set(scriptId, counts)
+    const script = this.pendingReports.get(scriptId)
+    if (script !== undefined) this.rail.report({ ...script, detail: nestedCallSummary(counts) })
   }
 
   private handle(event: ChildToolEvent): void {
     if (this.stopped || !this.rail.active || !this.agentIds.has(event.agentId)) return
+    if (event.parentToolCallId !== undefined) {
+      this.handleNested(event, event.parentToolCallId)
+      return
+    }
     const id = childRailToolCallId(event.agentId, event.toolCallId)
     if (event.status === 'pending') {
       this.startedAt.set(id, this.now())
       const report = childRailReport(event, this.parentToolCallId)
-      if (report !== undefined) this.rail.report(report)
+      if (report !== undefined) {
+        this.pendingReports.set(id, report)
+        this.rail.report(report)
+      }
       return
     }
     const began = this.startedAt.get(id)
     this.startedAt.delete(id)
+    this.pendingReports.delete(id)
+    this.nested.delete(id)
     const report = childRailReport(
       event,
       this.parentToolCallId,

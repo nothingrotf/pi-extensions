@@ -6,6 +6,7 @@ import {
   assertRoleToolRequirements,
   CapabilityRegistry,
   type CapabilityModelPolicy,
+  decodeCapabilityProfileRegistration,
   type TerminalValidationPolicy,
   decodeCapabilityPublication,
   isCapabilitySubset,
@@ -306,6 +307,28 @@ describe('capability profiles', () => {
       'plan',
       'extra',
     ])
+  })
+
+  it('resolves profile default tools outside the persisted capability contract', () => {
+    const registry = new CapabilityRegistry()
+    registry.registerProfile({ defaultTools: ['codemode'], id: 'scripted', registrations: [] })
+
+    const resolved = registry.resolve('scripted', true)
+    expect(resolved.defaultTools).toEqual(['codemode'])
+    expect(resolved.contract.tools).toEqual([])
+    expect(registry.resolve(undefined).defaultTools).toEqual([])
+    expect(
+      decodeCapabilityProfileRegistration({
+        profiles: [{ defaultTools: ['codemode'], id: 'scripted', registrations: [] }],
+        sourceId: 'test',
+      })?.profiles[0]?.defaultTools,
+    ).toEqual(['codemode'])
+    expect(
+      decodeCapabilityProfileRegistration({
+        profiles: [{ defaultTools: ['bash'], id: 'scripted', registrations: [] }],
+        sourceId: 'test',
+      }),
+    ).toBeUndefined()
   })
 
   it('rejects a registration listed as both required and optional', () => {

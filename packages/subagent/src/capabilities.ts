@@ -78,7 +78,10 @@ export interface CapabilityRegistration {
   version: string
 }
 
+export type OptionalToolName = 'codemode'
+
 export interface CapabilityProfile {
+  defaultTools?: readonly OptionalToolName[]
   id: string
   nested?: { maxDepth: number }
   /** Registrations included only when their provider is installed. */
@@ -89,6 +92,7 @@ export interface CapabilityProfile {
 export interface ResolvedCapabilities {
   modelPolicies: readonly CapabilityModelPolicy[]
   contract: CapabilityContract
+  defaultTools: readonly OptionalToolName[]
   overrides: readonly string[]
   roleToolRequirements: readonly RoleToolRequirement[]
   extensions: readonly InlineExtension[]
@@ -122,6 +126,9 @@ const MAX_NESTED_DEPTH = 16
 
 const CapabilityProfileSchema = Type.Object(
   {
+    defaultTools: Type.Optional(
+      Type.Array(Type.Literal('codemode'), { maxItems: 1, uniqueItems: true }),
+    ),
     id: Type.String({ minLength: 1 }),
     nested: Type.Optional(
       Type.Object(
@@ -586,6 +593,7 @@ export class CapabilityRegistry {
         stored.optionalRegistrations = [...profile.optionalRegistrations]
       }
       if (profile.nested !== undefined) stored.nested = { maxDepth: profile.nested.maxDepth }
+      if (profile.defaultTools !== undefined) stored.defaultTools = [...profile.defaultTools]
       staged.set(profile.id, stored)
     }
     for (const [id, profile] of staged) this.profiles.set(id, profile)
@@ -602,6 +610,7 @@ export class CapabilityRegistry {
           roleToolRequirements: [],
           tools: [],
         },
+        defaultTools: [],
         extensions: [],
         overrides: [],
         roleToolRequirements: [],
@@ -708,6 +717,7 @@ export class CapabilityRegistry {
         roleToolRequirements,
         tools,
       },
+      defaultTools: [...(profile.defaultTools ?? [])],
       extensions,
       overrides,
       roleToolRequirements,

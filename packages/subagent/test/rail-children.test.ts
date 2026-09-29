@@ -181,6 +181,60 @@ describe('RailChildReporter', () => {
     expect(runtime.listeners.size).toBe(0)
   })
 
+  it('folds codemode nested calls into the script row', () => {
+    const runtime = fakeRuntime()
+    const rail = fakeRail()
+    const reporter = new RailChildReporter(rail, runtime, 'task-1')
+    reporter.started('child')
+    runtime.emit({
+      agentId: 'child',
+      args: { code: 'await tools.read({ path: "a.ts" })' },
+      cwd: '/work',
+      status: 'pending',
+      toolCallId: 's1',
+      toolName: 'codemode',
+    })
+    runtime.emit({ ...start('child', 's1/1'), parentToolCallId: 's1' })
+    runtime.emit({ ...end('child', 's1/1'), parentToolCallId: 's1' })
+    runtime.emit({ ...start('child', 's1/2'), parentToolCallId: 's1' })
+    runtime.emit({
+      agentId: 'child',
+      args: { files: [{ path: '/work/a.ts' }, { path: '/work/b.ts' }] },
+      cwd: '/work',
+      parentToolCallId: 's1',
+      status: 'pending',
+      toolCallId: 's1/3',
+      toolName: 'patch',
+    })
+    runtime.emit({
+      agentId: 'child',
+      cwd: '/work',
+      output: 'Script completed',
+      status: 'ok',
+      toolCallId: 's1',
+      toolName: 'codemode',
+    })
+
+    expect(rail.reports.map((report) => report.toolCallId)).toEqual([
+      'child:s1',
+      'child:s1',
+      'child:s1',
+      'child:s1',
+      'child:s1',
+    ])
+    expect(rail.reports.map((report) => report.detail)).toEqual([
+      '',
+      'read',
+      'read \u00d72',
+      'read \u00d72, patch',
+      undefined,
+    ])
+    expect(rail.reports.at(0)).toMatchObject({ runningLabel: 'Running script' })
+    expect(rail.reports.at(-1)).toMatchObject({ doneLabel: 'Ran script', status: 'ok' })
+    expect(childToolDetail('patch', { files: [{ path: '/work/a.ts' }] }, '/work')).toBe('a.ts')
+    reporter.stop()
+  })
+
   it('stays silent while the rail is inactive', () => {
     const runtime = fakeRuntime()
     const rail = fakeRail(false)

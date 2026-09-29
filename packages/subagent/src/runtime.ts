@@ -241,6 +241,7 @@ export type ChildToolEvent =
       agentId: string
       args: unknown
       cwd: string
+      parentToolCallId?: string
       status: 'pending'
       toolCallId: string
       toolName: string
@@ -249,6 +250,7 @@ export type ChildToolEvent =
       agentId: string
       cwd: string
       output: string
+      parentToolCallId?: string
       status: 'error' | 'ok'
       toolCallId: string
       toolName: string
@@ -1391,6 +1393,7 @@ export class SubagentRuntime {
               },
             }
           },
+          exposure: 'model-only',
           label: 'Task',
           name: 'Task',
           parameters: SingleTaskInputSchema,
@@ -1408,6 +1411,7 @@ export class SubagentRuntime {
           this.listSnapshots().find((snapshot) => snapshot.agentId === agentId)?.description ??
           agentId
         pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
+          exposure: 'model-only',
           description: `${taskControlDescription} Access stays within this Task scope.`,
           execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
             const callerId = ctx.sessionManager.getSessionId()
@@ -2447,6 +2451,7 @@ export class SubagentRuntime {
       readonly,
       capabilities.tools,
       capabilities.overrides,
+      capabilities.defaultTools,
     )
     if (attenuation !== undefined) {
       const allowedTools = new Set(attenuation.tools)
@@ -3000,14 +3005,16 @@ export class SubagentRuntime {
               active.cwd,
             )
           : event.toolName.charAt(0).toUpperCase() + event.toolName.slice(1)
-        this.emitChildTool({
+        const pending: ChildToolEvent = {
           agentId: record.agentId,
           args: event.args,
           cwd: active.cwd,
           status: 'pending',
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-        })
+        }
+        if (event.parentToolCallId !== undefined) pending.parentToolCallId = event.parentToolCallId
+        this.emitChildTool(pending)
       }
       if (event.type === 'tool_execution_end') {
         const execution = active.toolExecutions.get(event.toolCallId)
@@ -3017,14 +3024,16 @@ export class SubagentRuntime {
           execution.output = toolResultText(event.result)
           execution.status = event.isError ? 'error' : 'success'
         }
-        this.emitChildTool({
+        const settled: ChildToolEvent = {
           agentId: record.agentId,
           cwd: active.cwd,
           output: toolResultText(event.result),
           status: event.isError ? 'error' : 'ok',
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-        })
+        }
+        if (event.parentToolCallId !== undefined) settled.parentToolCallId = event.parentToolCallId
+        this.emitChildTool(settled)
       }
       if (event.type === 'message_update' && event.message.role === 'assistant') {
         active.partialMessage = event.message

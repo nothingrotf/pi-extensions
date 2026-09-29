@@ -82,6 +82,30 @@ The runtime permits absolute paths and parent traversal. Trusted adapters must a
 The effective tools equal the intersection of the runtime, agent, and call policies.
 Read-only policy removes default mutable tools and rejects explicitly requested mutable tools before session creation.
 
+### Codemode
+
+Pi's `codemode` tool is an optional child tool. It requires Pi 0.99 or later.
+A child receives it when the call lists it in `tools` or when the capability profile lists it in `defaultTools`.
+An agent allowlist does not need to name it, because a script only reaches the child's effective tools.
+
+```ts
+Task({
+  description: 'Summarize the packages',
+  prompt: 'Read every package manifest in one script and report the scripts.',
+  subagent_type: 'explore',
+  tools: ['read', 'grep', 'find', 'ls', 'codemode'],
+})
+```
+
+The child session loads the codemode extension without classifier access, so a script cannot bypass the Task model policy.
+Children always use `on` mode, so their direct tools stay declared to the model. A global `codemode.mode: "only"` setting changes only the root session. The `codemode.inlineBudget` setting applies to children.
+Read-only children keep `codemode`, and their scripts cannot reach removed mutation tools.
+The session allowlist also excludes capability tools that register `codemode` or `deferred` exposure outside the Task contract.
+Nested calls produce tool receipts with `<script call id>/<n>` call IDs.
+
+`Task`, `TaskControl`, `request_parent`, `ask_parent`, and `receive_peers` use `model-only` exposure.
+A script cannot dispatch Tasks, wait on them, request decisions, or consume sibling messages that the model would not see.
+
 Private intercom tools enter after policy validation. A call cannot request or remove them.
 
 A capability can set `isolation: 'manual'` in a `roleToolRequirements` entry.
@@ -481,6 +505,18 @@ runtime.registerCapabilityProfile({
 
 Set `capability_profile` on a Task call to select an approved profile.
 
+A profile can list optional built-in tools in `defaultTools`. The only optional tool is `codemode`:
+
+```ts
+runtime.registerCapabilityProfile({
+  defaultTools: ['codemode'],
+  id: 'scripted-review',
+  registrations: ['review-tools'],
+})
+```
+
+The default applies when the Task omits `tools`. The persisted execution contract records the effective tools, so a resume keeps its original selection.
+
 Capability tool parameter schemas must declare `type: 'object'` at the root.
 The registry rejects primitive roots, array roots, and bare unions before publication.
 Represent action variants within an explicit object-root schema.
@@ -780,6 +816,8 @@ While a foreground Task or a `tasks[]` graph runs with the rail active, each chi
 ```
 
 Child rows follow the rail rules for spinners, `×N` folding, durations, and expanded output. Each row keeps a bounded output preview of twelve lines. `update_progress` calls stay out of the rail. A background Task reports no child rows because the parent turn does not wait for it.
+
+A child `codemode` call appears as one `Running script` row. Its detail counts the nested calls by tool, for example `read ×2, patch`. The nested calls do not add rows, because the rail nests only one level under the Task row.
 
 The editor dock uses separate panels for foreground dispatches and background Tasks:
 

@@ -409,6 +409,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       }
     },
     executionMode: 'parallel',
+    exposure: 'model-only',
     label: 'Task',
     name: 'Task',
     parameters: TaskInputSchema,

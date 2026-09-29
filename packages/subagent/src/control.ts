@@ -1185,6 +1185,7 @@ export function registerTaskControl(
       return { content: [{ text: serializeTaskControl(details), type: 'text' }], details }
     },
     executionMode: 'parallel',
+    exposure: 'model-only',
     label: 'Task Control',
     name: 'TaskControl',
     parameters: TaskControlInputSchema,

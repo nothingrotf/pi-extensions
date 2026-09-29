@@ -110,6 +110,7 @@ export function createDecisionTool(
   return defineTool({
     name: 'request_parent',
     label: 'Request Parent Decision',
+    exposure: 'model-only',
     description:
       'Request an explicit decision from the real root coordinator. Only direct background Tasks can wait for a reply. Foreground or nested Tasks must return their unresolved decision in the handoff instead.',
     parameters: Type.Object({ question: Type.String({ minLength: 1, maxLength: 4000 }) }),
