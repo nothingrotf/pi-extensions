@@ -33,6 +33,7 @@ import type {
 } from './runtime.ts'
 import { EvidenceSectionSchema, type EvidenceSection } from './schema.ts'
 import { type AgentRow, TaskResult } from './task-render.ts'
+import { toolInputUnion } from './tool-schema.ts'
 
 const MAX_LIST_RESULTS = 20
 const DEFAULT_LIST_RESULTS = 10
@@ -158,22 +159,19 @@ const ReplyInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
-export const TaskControlInputSchema = Type.Union(
-  [
-    EvidenceInputSchema,
-    InboxInputSchema,
-    AcknowledgeInputSchema,
-    ReplyInputSchema,
-    StatusInputSchema,
-    SteerInputSchema,
-    CancelInputSchema,
-    JoinInputSchema,
-    ListInputSchema,
-    WaitInputSchema,
-    JobsInputSchema,
-  ],
-  { type: 'object' },
-)
+export const TaskControlInputSchema = toolInputUnion([
+  EvidenceInputSchema,
+  InboxInputSchema,
+  AcknowledgeInputSchema,
+  ReplyInputSchema,
+  StatusInputSchema,
+  SteerInputSchema,
+  CancelInputSchema,
+  JoinInputSchema,
+  ListInputSchema,
+  WaitInputSchema,
+  JobsInputSchema,
+])
 
 export type TaskControlInput = StaticDecode<typeof TaskControlInputSchema>
 

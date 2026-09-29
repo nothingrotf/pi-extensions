@@ -159,7 +159,7 @@ The root session model remains separate from Task model policy.
 
 ## Managed delivery protocol
 
-Use `pstack_delivery` to open an issue and record a terminal Task. The ledger stores only entries owned by the current session. The reader skips corrupt entries from other sessions before it decodes their full delivery data.
+Use `pstack_delivery` to open an issue and record a terminal Task. Its schema declares every action field at the top level, so providers that read only top-level properties still receive typed `criteria` and `runtimeRequired` fields. The ledger stores only entries owned by the current session. The reader skips corrupt entries from other sessions before it decodes their full delivery data.
 
 `open`, `record`, `refresh`, `repair`, and default `read` responses return compact checkpoints with owner identities, criteria, artifact state, recent attempts, and evidence references.
 Use `view: "submissions"` or `view: "criteria"` with `offset` and `limit` for retained records.

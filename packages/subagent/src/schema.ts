@@ -1,6 +1,8 @@
 import { Codec, type StaticDecode, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { toolInputUnion } from './tool-schema.ts'
+
 export const SUBAGENT_NAME_PATTERN = '^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$'
 
 export const SubagentTypeSchema = Type.String({ minLength: 1, pattern: SUBAGENT_NAME_PATTERN })
@@ -240,9 +242,7 @@ export const BatchTaskInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
-export const TaskInputSchema = Type.Union([SingleTaskInputSchema, BatchTaskInputSchema], {
-  type: 'object',
-})
+export const TaskInputSchema = toolInputUnion([SingleTaskInputSchema, BatchTaskInputSchema])
 
 export const RunStatusSchema = Type.Union([
   Type.Literal('running'),

@@ -6,6 +6,8 @@ Each Task call runs an isolated `AgentSession` in the current Pi process. The ch
 
 ## Tool
 
+`Task` and `TaskControl` declare every input field at the top level beside their exact variants. Providers that read only top-level properties, such as Anthropic Messages, still receive each field name and type.
+
 Run a foreground child:
 
 ```ts

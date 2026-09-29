@@ -1,5 +1,7 @@
 import { Type, type Static } from 'typebox'
 
+import { toolInputUnion } from './tool-schema.ts'
+
 const Limit50 = Type.Optional(Type.Integer({ minimum: 1, maximum: 50 }))
 const Limit100 = Type.Optional(Type.Integer({ minimum: 1, maximum: 100 }))
 const Limit200 = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }))
@@ -98,9 +100,13 @@ const ContentSchema = Type.Object(
 
 export type ContentReadInput = Static<typeof ContentReadSchema>
 
-export const SessionHistorySchema = Type.Union(
-  [ListSchema, SearchSchema, ReadSchema, TimelineSchema, ToolActivitySchema, ContentSchema],
-  { type: 'object' },
-)
+export const SessionHistorySchema = toolInputUnion([
+  ListSchema,
+  SearchSchema,
+  ReadSchema,
+  TimelineSchema,
+  ToolActivitySchema,
+  ContentSchema,
+])
 
 export type SessionHistoryInput = Static<typeof SessionHistorySchema>

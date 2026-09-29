@@ -8,6 +8,8 @@ The tool hides physical session paths. Each session and entry receives a stable 
 
 ## Actions
 
+The schema declares every action field at the top level beside the exact action variants. Providers that read only top-level properties still receive each field name and type.
+
 The tool supports these actions:
 
 - `list` returns visible sessions.

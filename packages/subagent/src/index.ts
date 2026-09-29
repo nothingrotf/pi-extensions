@@ -609,6 +609,7 @@ export { acquireSubagentController } from './controller.ts'
 export { captureWorkspaceSnapshot } from './git-isolation.ts'
 export { latestState as readSubagentState } from './state.ts'
 export { TaskControlInputSchema } from './control.ts'
+export { toolInputUnion } from './tool-schema.ts'
 export type { TaskControlDetails, TaskControlInput } from './control.ts'
 export type { AgentSource, SubagentDefinition } from './agents.ts'
 export type {

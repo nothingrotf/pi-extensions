@@ -13,6 +13,7 @@ import {
   type StructuredOutput,
   type TerminalValidationInput,
   type TerminalValidationResult,
+  toolInputUnion,
   type WorkspaceSnapshot,
 } from '@nothingrotf/subagent'
 import { Type, type Static } from 'typebox'
@@ -116,43 +117,40 @@ const BatchViewSchema = Type.Object(
   { additionalProperties: true },
 )
 
-const DeliveryToolSchema = Type.Union(
-  [
-    Type.Object(
-      {
-        action: Type.Literal('open'),
-        issue: id,
-        criteria: DeliveryIssueSchema.properties.criteria,
-        runtimeRequired: Type.Boolean(),
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      { action: Type.Literal('record'), issue: id, agentId: id },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      { action: Type.Literal('refresh'), issue: id, agentId: id },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: Type.Literal('repair'),
-        issue: id,
-        agentId: id,
-        artifactSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
-        attempt: Type.Integer({ minimum: 1 }),
-        evidenceSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
-        report: DeliveryReportSchema,
-        reportSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
-        revision: Type.Integer({ minimum: 1 }),
-      },
-      { additionalProperties: false },
-    ),
-    ...DeliveryReadSchema.anyOf,
-  ],
-  { type: 'object' },
-)
+const DeliveryToolSchema = toolInputUnion([
+  Type.Object(
+    {
+      action: Type.Literal('open'),
+      issue: id,
+      criteria: DeliveryIssueSchema.properties.criteria,
+      runtimeRequired: Type.Boolean(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { action: Type.Literal('record'), issue: id, agentId: id },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { action: Type.Literal('refresh'), issue: id, agentId: id },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      action: Type.Literal('repair'),
+      issue: id,
+      agentId: id,
+      artifactSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
+      attempt: Type.Integer({ minimum: 1 }),
+      evidenceSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
+      report: DeliveryReportSchema,
+      reportSha256: Type.String({ pattern: '^[a-f0-9]{64}$' }),
+      revision: Type.Integer({ minimum: 1 }),
+    },
+    { additionalProperties: false },
+  ),
+  ...DeliveryReadSchema.anyOf,
+])
 
 function loadJournal(ctx: Pick<ExtensionContext, 'sessionManager'>) {
   const journal = readDeliveryJournal(
