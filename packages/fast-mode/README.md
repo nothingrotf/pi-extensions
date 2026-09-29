@@ -44,6 +44,7 @@ The built-in list covers these model identifiers when the catalog lacks tier met
 - `gpt-6-astra`
 - `gpt-6-luna`
 - `gpt-6-sol`
+- `gpt-6.1-sol`
 
 Unknown models require a catalog entry that advertises `priority` or `fast`.
 The package does not apply Codex tier rules to the public OpenAI API or other providers.

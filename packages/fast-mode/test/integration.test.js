@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close()
 })
 
-async function harness() {
+async function harness(modelId) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-fast-mode-'))
   cleanup.push(() => rm(dir, { recursive: true, force: true }))
   const requests = []
@@ -86,7 +86,7 @@ async function harness() {
     api: 'openai-codex-responses',
     apiKey: token,
     baseUrl,
-    models: ['gpt-6-astra', 'not-fast'].map((id) => ({
+    models: ['gpt-6-astra', 'gpt-6.1-sol', 'not-fast'].map((id) => ({
       id,
       name: id,
       reasoning: true,
@@ -120,7 +120,7 @@ async function harness() {
     agentDir: dir,
     resourceLoader: loader,
     modelRuntime: runtime,
-    model: runtime.getModel('openai-codex', 'gpt-6-astra'),
+    model: runtime.getModel('openai-codex', modelId),
     thinkingLevel: 'medium',
     sessionManager: SessionManager.inMemory(dir),
     settingsManager,
@@ -137,16 +137,16 @@ async function harness() {
   return { session: created.session, runtime, requests, dir, catalogPath, notices }
 }
 
-describe('Fast Mode through the native Codex request path', () => {
+describe.each(['gpt-6-astra', 'gpt-6.1-sol'])('Fast Mode through Codex with %s', (modelId) => {
   it('toggles the tier without changing reasoning, verbosity, or other payload fields', async () => {
-    const instance = await harness()
+    const instance = await harness(modelId)
     await instance.session.prompt('Reply OK')
     expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
     const originalText = instance.requests.at(-1).text
     await instance.session.prompt('/fast on')
     await instance.session.prompt('Reply OK again')
     expect(instance.requests.at(-1)).toMatchObject({
-      model: 'gpt-6-astra',
+      model: modelId,
       service_tier: 'priority',
       reasoning: { effort: 'medium' },
       text: originalText,
@@ -161,7 +161,7 @@ describe('Fast Mode through the native Codex request path', () => {
   })
 
   it('respects catalog denial after a model switch and refuses unsupported activation', async () => {
-    const instance = await harness()
+    const instance = await harness(modelId)
     await instance.session.prompt('/fast on')
     await instance.session.setModel(instance.runtime.getModel('openai-codex', 'not-fast'))
     await instance.session.prompt('Reply OK')
@@ -171,10 +171,10 @@ describe('Fast Mode through the native Codex request path', () => {
     expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
       enabled: false,
     })
-    await instance.session.setModel(instance.runtime.getModel('openai-codex', 'gpt-6-astra'))
+    await instance.session.setModel(instance.runtime.getModel('openai-codex', modelId))
     await writeFile(
       instance.catalogPath,
-      JSON.stringify({ models: [{ slug: 'gpt-6-astra', service_tiers: [] }] }),
+      JSON.stringify({ models: [{ slug: modelId, service_tiers: [] }] }),
     )
     await instance.session.prompt('/fast on')
     expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
@@ -183,11 +183,11 @@ describe('Fast Mode through the native Codex request path', () => {
   })
 
   it('uses the catalog tier and suspends the override when the preference becomes invalid', async () => {
-    const instance = await harness()
+    const instance = await harness(modelId)
     await writeFile(
       instance.catalogPath,
       JSON.stringify({
-        models: [{ slug: 'gpt-6-astra', service_tiers: [{ id: 'fast', name: 'Fast' }] }],
+        models: [{ slug: modelId, service_tiers: [{ id: 'fast', name: 'Fast' }] }],
       }),
     )
     await instance.session.prompt('/fast on')
