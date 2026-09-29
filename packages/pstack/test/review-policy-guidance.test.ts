@@ -51,6 +51,16 @@ describe('Comment Sicko review guidance', () => {
 })
 
 describe('setup pstack role guidance', () => {
+  it('announces discarded known legacy roles without treating unknown roles as compatible', () => {
+    const skill = read('../skills/setup-pstack/SKILL.md')
+    expect(skill).toContain('`how critics` is a known legacy role')
+    expect(skill).toContain('accepts its valid configuration but ignores its selectors')
+    expect(skill).toContain('list each known legacy row that the rewrite will remove')
+    expect(skill).toContain('Unknown roles remain errors')
+    expect(skill).toContain('resolve them with the operator before confirmation or rewriting')
+    expect(skill).toContain('Preserve the choices of active roles')
+  })
+
   it('documents new pools, scalar role, and compatibility fallback', () => {
     const skill = read('../skills/setup-pstack/SKILL.md')
     expect(skill).toContain('code review: inherit-parent')

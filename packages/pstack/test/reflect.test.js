@@ -58,6 +58,19 @@ describe('reflect', () => {
     expect(synthesizer).toContain('Preserve stable `pi-session://` references.')
   })
 
+  it.each(['judgment-reviewer.md', 'tooling-reviewer.md', 'divergent-reviewer.md'])(
+    '%s reports every evidenced learning without a quota',
+    (file) => {
+      const prompt = text(join(skillRoot, 'references', file))
+      expect(prompt).toContain('List each durable learning you find')
+      expect(prompt).toContain('An empty list is valid')
+      expect(prompt).toContain('If no findings remain, return `No findings.`')
+      expect(prompt).toContain('Skip trivial events, facts that drift')
+      expect(prompt).toContain('pi-session://')
+      expect(prompt).not.toContain('Surface 3-5')
+    },
+  )
+
   it('uses the bundled skill author without Cursor assumptions', () => {
     const port = markdownFiles(skillRoot).map(text).join('\n')
     expect(port).toContain('bundled `create-skill` skill')

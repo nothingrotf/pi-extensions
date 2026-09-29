@@ -17,6 +17,13 @@ Run `pi --list-models` to detect available `provider/model-id` values. A concret
 
 The default role-to-model mapping is the rule shape shown in step 5 below. If `~/.agents/rules/pstack-models.md` already exists, read it and treat its values as the current choices. Otherwise start from those defaults.
 
+`how critics` is a known legacy role.
+The runtime accepts its valid configuration but ignores its selectors and publishes no dispatch role for it.
+Before confirmation, list each known legacy row that the rewrite will remove and explain that it has no runtime effect.
+Preserve the choices of active roles.
+Unknown roles remain errors, not legacy compatibility.
+If unknown roles occur, report the errors and resolve them with the operator before confirmation or rewriting.
+
 ### 3. Map and confirm
 
 Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Every list is an availability pool. The dispatching skill owns its count and explicitly selects each required entry when choices differ, including `model: "inherit-parent"` for an inherited entry. List length never causes fanout or sets a skill's count. Prefer AskQuestion over free text.

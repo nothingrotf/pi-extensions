@@ -14,6 +14,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Pass the per-issue fields from `../references/delivery-contract.md` inside each Task prompt.
    Keep the accepted design, artifact identities, acceptance criteria, and verification owner attached through corrections.
    Start an uncommitted `decisions.tsv` and retain checks, findings, and the PR URL.
+   Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
    Resume the same implementer while its contract remains compatible after verifying artifact reconstruction.
    Diagnose repeated incomplete returns before another equivalent dispatch.
    Update the checkpoint after each handoff, verdict, and publication.
@@ -53,8 +54,16 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Pass `role: "publication"` and `capability_profile: "pstack-leaf"` to publication.
    Include commit and PR text in that operation without a separate prose-preparation Task.
    Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
-   Rebase onto current trunk before babysit through `playbooks/babysit.md`.
+   Rebase onto current trunk through the foreground destination boundary before babysit.
+   When publication returns the PR URL, the root starts the assigned loop through `playbooks/babysit.md`.
+   This lifecycle assignment does not require another babysit request or completion of other independent PRs.
+   Use `background` while independent builds continue, or `check` for small or docs-only PRs.
+   Return code fixes to the same implementer and publish accepted corrections through the foreground destination boundary.
    Apply the same foreground destination boundary to later rebases and landing operations.
+   Before a rewritten push, verify the assigned branch's remote tip with `git ls-remote`.
+   Use `git push --force-with-lease=<branch>:<observed-tip>` only for an explicitly authorized rewritten branch.
+   Never force-push a shared branch.
+   Recheck the artifact and required gates after a rebase before publication or landing.
    Record the base SHA, head SHA, and stable patch-id with the root verdict.
    If trunk moves, apply the patch rule from `playbooks/shipping.md`.
    A changed patch voids the code verdict, while an unchanged patch still requires current mergeability and CI.

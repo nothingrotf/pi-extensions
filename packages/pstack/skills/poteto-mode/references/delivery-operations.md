@@ -36,6 +36,7 @@ Retain these fields:
 - Agent IDs, attempt IDs, workspace IDs, effective paths, and pending decision or delivery IDs.
 - Destination branch, base SHA, head or tree identity, patch URI, digest, and stable patch-id.
 - Acceptance matrix, unresolved findings, harness reference, and next authorized action.
+- Operator status baseline and the path to the run's show-me-your-work decision log.
 
 Keep raw logs, patches, screenshots, and full reports outside the checkpoint.
 Link immutable evidence instead of copying it into every prompt or status response.
@@ -58,6 +59,10 @@ A re-issued wait costs a full coordinator turn and can miss the provider prompt 
 Prefer one open wait over repeated short windows.
 A completion or decision request is the next scheduling event.
 Use the loop heartbeat only to audit liveness, not to delay completion handling.
+Report only changed verdicts, queue states, operator gates, and blockers not already reported.
+If none changed, produce no reply text.
+Always append the tick's row to the decision log named in the checkpoint, including idle audits.
+Record which changes the operator status covered so the next tick does not repeat them.
 Never substitute shell `sleep`, polling loops, or repeated status requests for completion-driven waiting.
 Never run shell `sleep` in parallel with wait, because it delays decision replies past their deadline.
 After a schema error, correct arguments from the actual descriptor before retrying.

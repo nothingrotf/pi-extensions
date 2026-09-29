@@ -9,13 +9,13 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Assign one persistent implementer per issue and one independent reviewer that never wrote its code.
    Pass the per-issue fields from `../references/delivery-contract.md` inside the Task prompt.
    Retain the accepted design, artifact identities, verification owner, acceptance criteria, and an uncommitted `decisions.tsv`.
+   Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
    Resume the same implementer for compatible corrections after verifying the retained artifact and reconstruction instructions.
    Diagnose repeated incomplete returns through the delivery operations procedure before another equivalent dispatch.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
    If the owner must delegate, use `pstack-nested` within its depth limit.
    Keep external evidence collection, runtime preflight, telemetry, and evaluation utility at the root.
    Apply early probes, self-proof, skeptical Bugbot triage, deslop, and comment cleanup through the delivery contract.
-   Run babysit through `playbooks/babysit.md` when its lifecycle requires it.
 
 2. **Start two independent lanes.**
    Verify disjoint files, dependencies, branches, and mutable resources before parallel dispatch.
@@ -62,13 +62,18 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Otherwise, open it immediately after attaching it to the stack topology.
    Append only accepted patches in verified order or the operator's specified order.
    No implementer or publication Task merges, arms auto-merge, or closes the PR.
+   When publication returns the PR URL, the root starts the assigned loop through `playbooks/babysit.md`.
+   Keep one babysitter at the stack's merge frontier while independent builds continue.
+   Use `background` while independent builds continue, or `check` for small or docs-only PRs.
+   Return code fixes to the same implementer and publish accepted corrections through the foreground destination boundary.
    Update the checkpoint after each verdict and publication before advancing to the next issue.
 
 6. **Keep one topology writer.**
    Publication Tasks push only their assigned branches and report their tips, current bases, and intended parents.
    Keep all topology writes at the root.
    Before each topology change, fetch the intended parent and verify the remote child tip with `git ls-remote`.
-   Use `--force-with-lease` only for an authorized rewritten child branch.
+   Use `git push --force-with-lease=<branch>:<observed-tip>` only for an authorized rewritten child branch.
+   If the selected backend cannot enforce that observed tip, block the rewritten push instead of using an implicit lease.
    For Graphite, run `gt track -p <current-tip>` and `gt submit --no-interactive --stack`.
    For GitHub, run `gh stack init --base <trunk> <branches...>` and `gh stack submit --auto --open`.
    Never mix backend metadata within one run.
@@ -76,7 +81,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 7. **Reverify affected drift.**
    For Graphite, use `gt restack` and `gt sync`.
    For GitHub, use `gh stack rebase` and `gh stack sync`.
-   Return conflicts to the implementer that owns the affected files, then push through the root publication boundary.
+   Return conflicts to the implementer that owns the affected files, then push through the foreground destination boundary.
    Compare each old and new base-to-head diff with `git patch-id --stable`.
    A changed patch returns to verification.
    An unchanged patch retains its code verdict but still requires current mergeability and CI.

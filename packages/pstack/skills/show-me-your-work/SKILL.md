@@ -39,6 +39,21 @@ Use the helper `scripts/log.sh <logfile> <phase> <decision> <why> <evidence> <re
 
 Log decision points and checkpoints, not every action: a fork chosen, a unit completed with its verification result, a pivot or revert with its trigger, a blocker surfaced, a gate fixed. For loop runs, one row per iteration. Skip the trivial and self-evident.
 
+A run is one Pi session, including resumed turns and compaction.
+A pickup in another session or a replacement agent starts a new run.
+Before the first row, resolve this run's stable `pi-session://` reference through `session_history`.
+Use `action: "list"` with `include_current: true` and select the entry with `isCurrent: true`.
+If the tool is unavailable, use the recorded reference supplied by the parent.
+If no reference exists, keep a separate log until the parent binds it to recorded session evidence.
+Do not append to a shared log without that identity.
+Begin each identified run with a row with phase `start`.
+Write another `start` row when this run returns after another run's `start` row.
+Before returning to a shared log, read its last rows.
+The `start` row names the earlier timestamp range that this run did not write.
+Its evidence identifies this run with its stable `pi-session://` reference.
+Use phase `start` only for these run boundaries.
+Give concurrent writers separate logs and serialize handoffs to a shared log.
+
 ## Where it lives
 
 By default the log is a working artifact, not committed. Keep it at `decisions.tsv` in the work dir, or `.audit/<task-slug>.tsv` when several efforts run at once, and leave it out of git.
@@ -53,14 +68,19 @@ Commit it only when the work is ambitious enough that a reviewer needs the trail
 
 ## Audit the log against the transcript
 
-At the end of the run, before handoff, check that the log tells the truth. Use `session_history` to inspect the current Pi session. First call `list` with `include_current: true` and `include_children: true`. Select the result with `isCurrent: true`, and preserve its `pi-session://` reference. Call `timeline` and `tool_activity` for that session with `include_children: true`. When an entry needs context, call `read` with `view: "audit"`. Treat a recorded tool result as execution proof. Do not treat an assistant statement as execution proof. Walk the log against what actually happened:
+At the end of the run, before handoff, check that the log tells the truth. Use `session_history` to inspect the current Pi session. First call `list` with `include_current: true` and `include_children: true`. Select the result with `isCurrent: true`, and preserve its `pi-session://` reference. Call `timeline` and `tool_activity` for that session with `include_children: true`. When an entry needs context, call `read` with `view: "audit"`. Treat a recorded tool result as execution proof. Do not treat an assistant statement as execution proof. Audit only this run's rows against what actually happened.
+Each stretch starts at this run's `start` row, or the first row when this run created the log.
+It ends before another run's next `start` row.
 
-- Every row maps to a real action. Cut invented or aspirational entries.
-- Each row's evidence resolves and shows what the row claims.
-- A fork, pivot, or abandoned approach that shaped the work but isn't logged is a gap. Add it.
-- Drop padding.
+- Check that every row maps to a real decision or action.
+- Check that each evidence pointer resolves and proves the row's claim.
+- Add missing forks, pivots, or abandoned approaches that shaped this run.
 
-Fix the log, not the story. If the work diverged from what a row claims, the row is wrong.
+Never edit or remove a row during the audit, even an invented or padded row.
+Append a correction that supersedes the wrong claim and describes what actually happened.
+Identify the original row by line number and timestamp, and cite the recorded evidence for the correction.
+Do not audit other runs' rows.
+If this run's evidence disproves an earlier row, supersede it without rewriting that history.
 
 ## Cross-model review of the trail
 

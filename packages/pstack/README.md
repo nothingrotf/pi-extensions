@@ -96,10 +96,18 @@ This port incorporates these upstream changes:
 - [cursor/plugins#331](https://github.com/cursor/plugins/pull/331) at `9ed271d798099a9c0c7982a9a8b170f18cb37cd2` adjusts prose punctuation and terminology.
 - [cursor/plugins#341](https://github.com/cursor/plugins/pull/341) at `2336018ca979f8662e804139ecf1b316cb159323` requires evidence or uncertainty labels alongside claims and agent-run verification when possible.
 
-The sync preserves Pi tools, Task contracts, model selection, and stack backends.
+The following reviewed heads provide the baseline for selective synchronization:
+
+- [#414](https://github.com/cursor/plugins/pull/414) at `88886d41a9e921d02f70b0044741ba86681f81fe` supplies log initialization, quiet audits, evidence identity, and pause checkpoints.
+- [#419](https://github.com/cursor/plugins/pull/419) at `773258b8233e6cc09c1894a76cd855f639281793` supplies quota-free reflection, traced security findings, and local prompt deduplication.
+- [#422](https://github.com/cursor/plugins/pull/422) at `be6bcd1805535bc426d46bd5caf4650d998d01be` supplies append-only audits, authorized babysit boundaries, and retired-role notices.
+
+The port preserves configured model defaults, panel sizes, Pi tools, Task contracts, and stack backends.
+[#416](https://github.com/cursor/plugins/pull/416) at `e6773141c087933005b2a8e3f6cb28a637bda142` only updates upstream documentation.
 
 `how` now explains architecture without a Critique mode.
 Existing `how critics:` configuration lines remain valid but no longer publish a dispatch role.
+`setup-pstack` announces which known legacy rows its rewrite removes before confirmation.
 `poteto-mode` starts its task list with the matched playbook steps and cites only principles read during the session.
 The new principles cover questioning a shared premise after repeated failed fixes and testing observable behavior.
 

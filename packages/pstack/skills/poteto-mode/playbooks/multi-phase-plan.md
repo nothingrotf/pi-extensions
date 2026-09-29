@@ -40,7 +40,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] `playbooks/opening-a-pr.md` from the bundled `poteto-mode` skill.
   - [ ] `<each other bundled leaf skill path the program uses>`.
 - [ ] Arm the 30-minute audit tick. Use the installed `loop` skill with a watcher and heartbeat fallback. Never leave the cadence to memory.
-- [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the armed /goal and execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint and send a status message with changed verdicts, queue states, operator gates, and blockers."
+- [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the armed /goal and execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint. Send a status message only for changed verdicts, queue states, operator gates, and blockers not already reported. If none changed, produce no reply text. Record which changes the operator status covered in the checkpoint. Always append the tick's row to the decision log named in that checkpoint."
 - [ ] Use `TaskControl.wait` when no independent work remains. Handle completion without waiting for the audit tick.
 - [ ] Follow `../references/delivery-operations.md` for reconstruction, runtime preflight, checkpoints, and stalled corrections.
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.

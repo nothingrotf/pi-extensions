@@ -32,7 +32,13 @@ Do not use `## Summary` or `## Test plan` boilerplate. A commit body does not re
 
 **Readiness.** Open every PR ready, never as a draft. Set `draft: false` on API or tool calls. Omit `--draft` from `gh pr create`. If a PR still opens as a draft, run `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
 
-**Babysit.** Opening a PR does not start a babysit. Post the URL and keep building. Finish the phase or stack first. Run a separate babysit pass only when the user asks for one after the whole stack exists. A babysit for each new PR stalls the build and spends checks on commits that later waves restart. Push back when feedback drifts from intent.
+**Babysit.** Opening a PR alone does not authorize babysit.
+For ordinary publication, return the URL and continue the build until a separate user request starts babysit.
+In Autopilot-full or Autopilot-stack, an explicit lifecycle assignment authorizes the root to start babysit after publication returns the PR URL.
+Follow `playbooks/babysit.md` for the active frontier and watcher ownership.
+Do not wait for unrelated PRs or the whole stack when that assignment already authorizes the loop.
+The root owns this lifecycle, not the publication Task.
+Push back when feedback drifts from intent.
 
 Publication Tasks pass `role: "publication"`, `capability_profile: "pstack-leaf"`, and `run_in_background: false`. Draft commit and PR text within this same destination-scoped Task. Do not create a separate preparation owner or worktree for prose alone. Reuse the independent reviewer's complete verdict, including `/deslop` and `/no-comments` findings. Apply their checklists inline without child delegation. Run `interrogate` only for unresolved contested design or an explicit review gate, not for every publication.
 

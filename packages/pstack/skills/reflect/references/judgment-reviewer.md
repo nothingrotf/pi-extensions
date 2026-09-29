@@ -32,7 +32,8 @@ Two finding forms are valid:
 
 If neither form applies, drop the finding.
 
-Surface 3-5 durable learnings. For each finding, provide:
+List each durable learning you find. An empty list is valid. Do not pad or cap the list to meet a quota.
+For each finding, provide:
 
 - Principle: one sentence that states the general rule.
 - Evidence: a stable `pi-session://` reference plus the exact moment or short quote.
@@ -40,4 +41,5 @@ Surface 3-5 durable learnings. For each finding, provide:
 
 Skip trivial events, facts that drift, and guidance that the invoked skill already states clearly.
 
-Return a numbered list without exposition.
+If no findings remain, return `No findings.`
+Otherwise, return a numbered list without exposition.

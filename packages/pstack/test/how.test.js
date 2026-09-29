@@ -31,7 +31,9 @@ describe('how', () => {
     const setup = text(join(packageRoot, 'skills', 'setup-pstack', 'SKILL.md'))
     expect(setup).toContain('provider/model-id:effort [fast]')
     expect(setup).toContain('how explorer: inherit-parent')
-    expect(setup).not.toContain('how critics')
+    const policy = setup.match(/```text\n([\s\S]*?)\n```/)?.[1]
+    expect(policy).toBeDefined()
+    expect(policy).not.toContain('how critics')
     expect(setup).toContain('Scalar dispatches can omit `Task.model`')
     expect(setup).not.toMatch(/grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })

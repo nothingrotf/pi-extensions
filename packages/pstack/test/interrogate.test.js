@@ -37,6 +37,17 @@ describe('interrogate', () => {
     expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 
+  it('requires traced security evidence while retaining lead filtering', () => {
+    const rubric = text(join(skillRoot, 'references', 'rubric.md'))
+    const lead = text(join(skillRoot, 'references', 'lead-judgment.md'))
+    expect(rubric).toContain(
+      'For each security finding, trace the input path through the code and show it',
+    )
+    expect(rubric).not.toContain('Only flag security issues')
+    expect(lead).toContain('Trace the call site')
+    expect(lead).toContain('concrete execution path')
+  })
+
   it('uses Pi read-only review tools', () => {
     const skill = text(join(skillRoot, 'SKILL.md'))
     const rubric = text(join(skillRoot, 'references', 'rubric.md'))
