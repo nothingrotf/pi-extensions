@@ -433,6 +433,35 @@ describe('model policy selection compatibility', () => {
     ).toThrow('configured')
   })
 
+  it('treats openai and openai-codex selectors as the same configured model', () => {
+    const openai: CapabilityModelPolicy = {
+      status: 'valid',
+      enforcement: 'configured',
+      roles: [
+        { role: 'scalar', selectors: ['openai-codex/gpt-6.1-sol:high [fast]'] },
+        {
+          role: 'pool',
+          selectors: ['openai-codex/gpt-6.1-sol:xhigh', 'openai/gpt-6.1-sol:xhigh'],
+        },
+      ],
+    }
+    expect(selectCapabilityModel([openai], 'scalar', 'openai/gpt-6.1-sol:high [fast]')).toBe(
+      'openai/gpt-6.1-sol:high [fast]',
+    )
+    expect(selectCapabilityModel([openai], 'scalar', undefined)).toBe(
+      'openai-codex/gpt-6.1-sol:high [fast]',
+    )
+    expect(() =>
+      selectCapabilityModel([openai], 'scalar', 'openai/gpt-6.1-sol:medium [fast]'),
+    ).toThrow('configured')
+    expect(() =>
+      selectCapabilityModel([openai], 'scalar', 'azure-openai-responses/gpt-6.1-sol:high [fast]'),
+    ).toThrow('configured')
+    expect(selectCapabilityModel([openai], 'pool', undefined)).toBe(
+      'openai-codex/gpt-6.1-sol:xhigh',
+    )
+  })
+
   it('rejects terminal validator callback replacement without a version change', () => {
     const registry = new CapabilityRegistry()
     const validate: TerminalValidationPolicy['validate'] = () => ({ status: 'accepted' })

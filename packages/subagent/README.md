@@ -48,7 +48,13 @@ Set `role` on a single Task or separately on each `tasks[]` item. Nested dispatc
 The role persists in the execution contract, run record, batch item/state, snapshots, results, and TaskControl status/list/jobs. Omit it on resume to retain the original value, or supply the same value. A different value is rejected, including adding a role to a legacy Task that had none. Legacy sessions remain unlabeled.
 
 The `[fast]` selector uses the shared policy from `@nothingrotf/fast-mode`.
-It accepts supported Codex models, including GPT-6 Astra, Luna, and Sol, and respects explicit service tiers from the Codex catalog.
+It accepts supported models on the `openai` and `openai-codex` providers, including GPT-6 Astra, Luna, and Sol.
+It respects explicit service tiers from the Codex catalog.
+
+The `openai` and `openai-codex` providers offer the same ChatGPT subscription models.
+If the selected provider has no login, the Task uses the same model on the other provider.
+That fallback requires a ChatGPT subscription login on the other provider. An API key never replaces a subscription login.
+The run record stores the provider that the Task used. Resume keeps that provider.
 It does not inherit the parent's global Fast Mode preference.
 
 Set `run_in_background` to `true` to return the Agent ID after session creation.
@@ -537,7 +543,7 @@ A valid policy contains exact role entries with selector arrays. An empty array 
 
 Fresh dispatch resolves capabilities before selecting a model. Selection precedence is explicit Task model, matching capability policy, agent default, then parent. A capability policy requires an exact Task role. Missing or unknown roles fail. Invalid policy blocks fresh dispatches for that capability even with an explicit model. Unrelated profiles remain unaffected.
 
-Distinct selectors require an explicit Task model. Explicit overrides may select outside the configured choices by default. Set `enforcement: 'configured'` on a valid policy to require an explicit model to match the configured selectors in every applicable enforced policy. Parent aliases are equivalent for membership. Empty selector arrays remain unconfigured. Enforcement does not control Task counts. Identical selectors can resolve without an explicit choice. `auto`, `default`, `inherit`, and `inherit-parent` select the parent. No policy creates additional Tasks or chooses the first entry from a distinct list. Existing availability, effort, and fast validation applies to the selected model.
+Distinct selectors require an explicit Task model. Explicit overrides may select outside the configured choices by default. Set `enforcement: 'configured'` on a valid policy to require an explicit model to match the configured selectors in every applicable enforced policy. Parent aliases are equivalent for membership. Selectors for the `openai` and `openai-codex` providers are also equivalent for membership. Empty selector arrays remain unconfigured. Enforcement does not control Task counts. Identical selectors can resolve without an explicit choice. `auto`, `default`, `inherit`, and `inherit-parent` select the parent. No policy creates additional Tasks or chooses the first entry from a distinct list. Existing availability, effort, and fast validation applies to the selected model.
 
 An agent profile override must preserve its default profile’s mandatory policies (enforced valid policies and invalid policies). Nested Tasks must also preserve their parent profile’s mandatory policies. Profiles without policies remain unrestricted.
 

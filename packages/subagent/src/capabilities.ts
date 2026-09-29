@@ -2,6 +2,7 @@ import type { InlineExtension, ToolDefinition } from '@earendil-works/pi-coding-
 import { type StaticDecode, Type, type TSchema } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { canonicalProviderSelector } from './model.ts'
 import {
   RoleToolRequirementSchema,
   TaskRoleSchema,
@@ -218,6 +219,10 @@ function normalizeSelector(selector: string): string {
     : selector
 }
 
+function policyKey(selector: string): string {
+  return canonicalProviderSelector(normalizeSelector(selector))
+}
+
 export function assertRoleToolRequirements(
   requirements: readonly RoleToolRequirement[],
   role: string | undefined,
@@ -281,9 +286,7 @@ export function selectCapabilityModel(
       policy.enforcement === 'configured' &&
       entry !== undefined &&
       entry.selectors.length > 0 &&
-      !entry.selectors.some(
-        (selector) => normalizeSelector(selector) === normalizeSelector(explicit),
-      )
+      !entry.selectors.some((selector) => policyKey(selector) === policyKey(explicit))
     )
       throw new Error(
         `Task.model "${explicit}" is outside configured selectors for role "${role}".`,
@@ -293,12 +296,13 @@ export function selectCapabilityModel(
   if (policies.length > 0 && matches.length === 0)
     throw new Error(`Unknown model policy role "${role}".`)
   if (explicit !== undefined) return explicit
-  const distinct = new Set(matches.flatMap((entry) => entry.selectors).map(normalizeSelector))
-  if (distinct.size > 1)
+  const selectors = matches.flatMap((entry) => entry.selectors)
+  if (new Set(selectors.map(policyKey)).size > 1)
     throw new Error(
       `Model policy role "${role}" has distinct choices. Pass an explicit Task.model for this panel or pool entry, including inherit-parent for an inherited entry.`,
     )
-  return distinct.values().next().value
+  const selected = selectors[0]
+  return selected === undefined ? undefined : normalizeSelector(selected)
 }
 
 const CapabilityRegistrationSchema = Type.Object(

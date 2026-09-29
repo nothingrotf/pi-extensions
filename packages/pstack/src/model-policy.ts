@@ -161,6 +161,7 @@ export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
     '# Pstack runtime model policy',
     'Every pstack Task must pass an exact role below and capability_profile pstack-leaf, or pstack-nested for a delegating owner. Registered pstack agents default to pstack-leaf.',
     'The configured role is mandatory. Task.model must match a configured selector, including effort and fast mode. Unknown or missing Task.role fails for pstack capabilities. Other capabilities are unaffected.',
+    'openai/ and openai-codex/ selectors match each other for the same model, effort, and fast mode. When one of these providers has no login, dispatch uses the same model on the other provider if it has a ChatGPT subscription login.',
     'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
     'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
     'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',

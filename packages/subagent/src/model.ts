@@ -9,6 +9,41 @@ import { EffortSchema, type Effort } from './schema.ts'
 
 const FAST_SUFFIX = ' [fast]'
 const RESERVED_SELECTORS = new Set(['auto', 'default', 'inherit', 'inherit-parent'])
+const LEGACY_OPENAI_PREFIX = 'openai-codex/'
+const subscriptionProviderPairs = new Map([
+  ['openai', 'openai-codex'],
+  ['openai-codex', 'openai'],
+])
+
+export interface ProviderAuth {
+  hasConfiguredAuth(providerId: string): boolean
+  isUsingSubscription(providerId: string): boolean
+}
+
+export function canonicalProviderSelector(selector: string): string {
+  return selector.startsWith(LEGACY_OPENAI_PREFIX)
+    ? `openai/${selector.slice(LEGACY_OPENAI_PREFIX.length)}`
+    : selector
+}
+
+export function withUsableProvider<Candidate extends { id: string; provider: string }>(
+  model: Candidate,
+  models: readonly Candidate[],
+  auth: ProviderAuth,
+): Candidate {
+  const alternate = subscriptionProviderPairs.get(model.provider)
+  if (
+    alternate === undefined ||
+    auth.hasConfiguredAuth(model.provider) ||
+    !auth.isUsingSubscription(alternate)
+  ) {
+    return model
+  }
+  return (
+    models.find((candidate) => candidate.provider === alternate && candidate.id === model.id) ??
+    model
+  )
+}
 
 export interface ResolvedModel {
   effort: Effort
@@ -139,7 +174,9 @@ export function resolveModel(
     throw new Error('The model selector must use provider/model-id syntax.')
   }
 
-  const model = reserved ? inheritedModel(ctx, runtime) : findExactModel(runtime, parsed.modelRef)
+  const model = reserved
+    ? inheritedModel(ctx, runtime)
+    : withUsableProvider(findExactModel(runtime, parsed.modelRef), runtime.getModels(), runtime)
   const reference = modelRef(model)
   const effort = normalizeEffort(
     model,

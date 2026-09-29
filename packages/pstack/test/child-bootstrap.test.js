@@ -154,6 +154,11 @@ async function harness(pstackFirst, plans = new Map(), policy, fixtureExtension)
     api: 'openai-codex-responses',
     models: [{ ...provider.models[1], id: 'gpt-5.4', name: 'Fast fixture' }],
   })
+  modelRuntime.registerProvider('openai', {
+    ...provider,
+    api: 'openai-responses',
+    models: [{ ...provider.models[1], id: 'gpt-5.4', name: 'OpenAI fixture' }],
+  })
   const model = modelRuntime.getModel('pstack-test', 'model')
   if (model === undefined) throw new Error('Test model missing')
   let runtime
@@ -727,6 +732,13 @@ describe('pstack runtime model policy', () => {
       'pstack-test/configured',
       'low',
       false,
+    ],
+    [
+      'how explorer: openai-codex/gpt-5.4:high [fast]',
+      'openai/gpt-5.4:high [fast]',
+      'openai/gpt-5.4',
+      'high',
+      true,
     ],
   ])(
     'handles defaults aliases effort fast and overrides (%s, %s)',
