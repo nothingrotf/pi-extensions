@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
 
-function harness(sessionManager = SessionManager.inMemory()) {
+function harness(sessionManager = SessionManager.inMemory(), model) {
   const renderers = new Map()
   const handlers = new Map()
   const commands = new Map()
@@ -50,7 +50,7 @@ function harness(sessionManager = SessionManager.inMemory()) {
     hasUI: true,
     mode: 'tui',
     cwd: process.cwd(),
-    model: undefined,
+    model,
     sessionManager,
     getContextUsage() {
       return { tokens: 0, contextWindow: 272_000, percent: 0 }
@@ -255,6 +255,48 @@ describe('HUD lifecycle', () => {
       }
     },
   )
+
+  test('shows ChatGPT plan windows from OpenAI rate-limit headers', async () => {
+    const instance = harness(undefined, {
+      provider: 'openai',
+      id: 'gpt-6.1-sol',
+      api: 'openai-responses',
+      reasoning: true,
+      contextWindow: 272_000,
+    })
+    await instance.emit('session_start')
+    const footer = instance.mount()
+    try {
+      expect(footer.render(180).join('')).not.toContain('5h')
+      await instance.emit('after_provider_response', {
+        status: 200,
+        headers: {
+          'x-codex-primary-used-percent': '12.5',
+          'x-codex-primary-window-minutes': '300',
+          'x-codex-secondary-used-percent': '42',
+          'x-codex-secondary-window-minutes': '10080',
+        },
+      })
+      expect(footer.render(180).join('')).toContain('5h 13% · wk 42%')
+      await instance.emit('provider_stream_event', {
+        provider: 'openai',
+        api: 'openai-responses',
+        model: 'gpt-6.1-sol',
+        data: {
+          type: 'codex.rate_limits',
+          rate_limits: {
+            primary: { used_percent: 20, window_minutes: 300 },
+            secondary: { used_percent: 50, window_minutes: 10_080 },
+          },
+        },
+      })
+      expect(footer.render(180).join('')).toContain('5h 20% · wk 50%')
+      await instance.emit('after_provider_response', { status: 200, headers: {} })
+      expect(footer.render(180).join('')).toContain('5h 20% · wk 50%')
+    } finally {
+      await instance.emit('session_shutdown')
+    }
+  })
 
   test('restores cache share and updates it after responses and tree navigation', async () => {
     const session = SessionManager.inMemory()

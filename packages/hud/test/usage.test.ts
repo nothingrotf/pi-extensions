@@ -8,6 +8,8 @@ import {
   normalizePercent,
   parseClaudeWindows,
   parseCodexWindows,
+  parseRateLimitEvent,
+  parseRateLimitHeaders,
 } from '../src/usage.ts'
 
 describe('provider usage', () => {
@@ -33,6 +35,58 @@ describe('provider usage', () => {
       ['5h', 8],
       ['wk', 77],
     ])
+  })
+
+  test('parses Codex rate-limit headers from OpenAI responses', () => {
+    const windows = parseRateLimitHeaders({
+      'x-codex-primary-used-percent': '12.5',
+      'x-codex-primary-window-minutes': '300',
+      'x-codex-primary-reset-at': '1790000000',
+      'x-codex-secondary-used-percent': '42',
+      'x-codex-secondary-window-minutes': '10080',
+      'x-codex-other-primary-used-percent': '99',
+    })
+    expect(windows.map((window) => [window.label, window.usedPercent])).toEqual([
+      ['5h', 12.5],
+      ['wk', 42],
+    ])
+    expect(windows[0]?.resetsIn).toBeDefined()
+    expect(parseRateLimitHeaders({ 'x-codex-primary-used-percent': 'full' })).toEqual([])
+    expect(parseRateLimitHeaders({ 'x-ratelimit-remaining-requests': '10' })).toEqual([])
+  })
+
+  test('parses Codex rate-limit stream events and ignores other events', () => {
+    const event = {
+      type: 'provider_stream_event' as const,
+      provider: 'openai',
+      api: 'openai-responses',
+      model: 'gpt-6.1-sol',
+    }
+    const windows = parseRateLimitEvent({
+      ...event,
+      data: {
+        type: 'codex.rate_limits',
+        rate_limits: {
+          primary: { used_percent: 20, window_minutes: 300, reset_at: 1_790_000_000 },
+          secondary: { used_percent: 50, window_minutes: 10_080 },
+        },
+      },
+    })
+    expect(windows.map((window) => [window.label, window.usedPercent])).toEqual([
+      ['5h', 20],
+      ['wk', 50],
+    ])
+    expect(
+      parseRateLimitEvent({
+        ...event,
+        data: {
+          type: 'codex.rate_limits',
+          metered_limit_name: 'codex_other',
+          rate_limits: { primary: { used_percent: 90, window_minutes: 300 } },
+        },
+      }),
+    ).toEqual([])
+    expect(parseRateLimitEvent({ ...event, data: { type: 'response.completed' } })).toEqual([])
   })
 
   test('clamps invalid percentages', () => {

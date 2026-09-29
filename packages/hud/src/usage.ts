@@ -4,6 +4,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
+import type {
+  AfterProviderResponseEvent,
+  ProviderStreamEvent,
+} from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import type { Static } from 'typebox'
 import { Value } from 'typebox/value'
@@ -74,10 +78,41 @@ const CodexUsageSchema = Type.Object(
   { additionalProperties: true },
 )
 
+const RateLimitEventWindowSchema = Type.Object(
+  {
+    used_percent: Type.Number(),
+    window_minutes: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    reset_at: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+  },
+  { additionalProperties: true },
+)
+
+const RateLimitEventSchema = Type.Object(
+  {
+    type: Type.Literal('codex.rate_limits'),
+    metered_limit_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    limit_name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    rate_limits: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            primary: Type.Optional(Type.Union([RateLimitEventWindowSchema, Type.Null()])),
+            secondary: Type.Optional(Type.Union([RateLimitEventWindowSchema, Type.Null()])),
+          },
+          { additionalProperties: true },
+        ),
+        Type.Null(),
+      ]),
+    ),
+  },
+  { additionalProperties: true },
+)
+
 type AuthData = Static<typeof AuthSchema>
 type ClaudeUsageData = Static<typeof ClaudeUsageSchema>
 type CodexUsageData = Static<typeof CodexUsageSchema>
 type CodexWindowData = Static<typeof CodexWindowSchema>
+type RateLimitEventWindow = Static<typeof RateLimitEventWindowSchema>
 
 export type UsageWindow = {
   label: string
@@ -125,6 +160,28 @@ export function parseClaudeWindows(data: ClaudeUsageData): UsageWindow[] {
   return windows
 }
 
+function rateWindow(
+  label: string,
+  usedPercent: number,
+  durationSeconds: number | undefined,
+  resetAtSeconds: number | undefined,
+): UsageWindow {
+  const resolvedLabel =
+    durationSeconds === 604_800
+      ? 'wk'
+      : durationSeconds !== undefined &&
+          Number.isFinite(durationSeconds) &&
+          durationSeconds > 0 &&
+          durationSeconds % 3_600 === 0
+        ? `${durationSeconds / 3_600}h`
+        : label
+  return {
+    label: resolvedLabel,
+    usedPercent: normalizePercent(usedPercent),
+    resetsIn: resetAtSeconds === undefined ? undefined : resetLabel(resetAtSeconds * 1_000),
+  }
+}
+
 function codexWindow(
   label: string,
   window: CodexWindowData | null | undefined,
@@ -132,21 +189,7 @@ function codexWindow(
   if (window?.used_percent === undefined) {
     return null
   }
-  const duration = window.limit_window_seconds
-  const resolvedLabel =
-    duration === 604_800
-      ? 'wk'
-      : duration !== undefined &&
-          Number.isFinite(duration) &&
-          duration > 0 &&
-          duration % 3_600 === 0
-        ? `${duration / 3_600}h`
-        : label
-  return {
-    label: resolvedLabel,
-    usedPercent: normalizePercent(window.used_percent),
-    resetsIn: window.reset_at === undefined ? undefined : resetLabel(window.reset_at * 1_000),
-  }
+  return rateWindow(label, window.used_percent, window.limit_window_seconds, window.reset_at)
 }
 
 export function parseCodexWindows(data: CodexUsageData): UsageWindow[] {
@@ -154,6 +197,74 @@ export function parseCodexWindows(data: CodexUsageData): UsageWindow[] {
   const primary = codexWindow('5h', limits?.primary_window)
   const secondary = codexWindow('wk', limits?.secondary_window)
   return [primary, secondary].filter((window): window is UsageWindow => window !== null)
+}
+
+function headerNumber(
+  headers: AfterProviderResponseEvent['headers'],
+  name: string,
+): number | undefined {
+  const raw = headers[name]?.trim()
+  if (raw === undefined || !/^-?\d+(?:\.\d+)?$/u.test(raw)) {
+    return undefined
+  }
+  return Number(raw)
+}
+
+function headerWindow(
+  headers: AfterProviderResponseEvent['headers'],
+  slot: 'primary' | 'secondary',
+  label: string,
+): UsageWindow | null {
+  const usedPercent = headerNumber(headers, `x-codex-${slot}-used-percent`)
+  if (usedPercent === undefined) {
+    return null
+  }
+  const minutes = headerNumber(headers, `x-codex-${slot}-window-minutes`)
+  return rateWindow(
+    label,
+    usedPercent,
+    minutes === undefined ? undefined : minutes * 60,
+    headerNumber(headers, `x-codex-${slot}-reset-at`),
+  )
+}
+
+export function parseRateLimitHeaders(
+  headers: AfterProviderResponseEvent['headers'],
+): UsageWindow[] {
+  return [headerWindow(headers, 'primary', '5h'), headerWindow(headers, 'secondary', 'wk')].filter(
+    (window): window is UsageWindow => window !== null,
+  )
+}
+
+function eventWindow(
+  label: string,
+  window: RateLimitEventWindow | null | undefined,
+): UsageWindow | null {
+  if (window === undefined || window === null) {
+    return null
+  }
+  const minutes = window.window_minutes ?? undefined
+  return rateWindow(
+    label,
+    window.used_percent,
+    minutes === undefined ? undefined : minutes * 60,
+    window.reset_at ?? undefined,
+  )
+}
+
+export function parseRateLimitEvent(event: ProviderStreamEvent): UsageWindow[] {
+  const data = event.data
+  if (!Value.Check(RateLimitEventSchema, data)) {
+    return []
+  }
+  const limit = data.metered_limit_name ?? data.limit_name ?? 'codex'
+  if (limit !== 'codex') {
+    return []
+  }
+  return [
+    eventWindow('5h', data.rate_limits?.primary),
+    eventWindow('wk', data.rate_limits?.secondary),
+  ].filter((window): window is UsageWindow => window !== null)
 }
 
 export async function withTimeout<ValueType>(

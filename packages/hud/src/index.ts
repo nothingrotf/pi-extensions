@@ -68,7 +68,13 @@ import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spa
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
-import { fetchUsageForProvider, type UsageSnapshot } from './usage.ts'
+import {
+  fetchUsageForProvider,
+  parseRateLimitEvent,
+  parseRateLimitHeaders,
+  type UsageSnapshot,
+  type UsageWindow,
+} from './usage.ts'
 import { decodeWorkingMessage, WorkingStatus, workingMessageChannel } from './working.ts'
 
 const gitRefreshMs = 30_000
@@ -732,6 +738,22 @@ export default function hud(pi: ExtensionAPI): void {
     }
     sync(ctx)
     refreshUsage(ctx)
+  })
+
+  const observeUsage = (windows: UsageWindow[]) => {
+    if (!active || windows.length === 0) {
+      return
+    }
+    state.usage = { provider: 'OpenAI', windows, fetchedAt: Date.now() }
+    render()
+  }
+
+  pi.on('after_provider_response', (event) => {
+    observeUsage(parseRateLimitHeaders(event.headers))
+  })
+
+  pi.on('provider_stream_event', (event) => {
+    observeUsage(parseRateLimitEvent(event))
   })
 
   pi.on('thinking_level_select', (_event, ctx) => {
