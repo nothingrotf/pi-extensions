@@ -137,6 +137,8 @@ async function harness() {
     contexts,
     ctx,
     dir,
+    toolContext: (toolCallId: string) =>
+      session.extensionRunner.createToolContext(toolCallId, undefined),
     manager,
     run: (question = 'Which created paths are recorded?', signal = new AbortController().signal) =>
       runParentSideTurn({
@@ -506,7 +508,7 @@ it('keeps tool names and handlers while routing authority to request_parent', as
       { question: 'Which path?' },
       undefined,
       undefined,
-      test.ctx,
+      test.toolContext('ask-1'),
     )
     expect(calls).toEqual([{ agentId: 'child-1', question: 'Which path?' }])
     expect(result.content).toEqual([

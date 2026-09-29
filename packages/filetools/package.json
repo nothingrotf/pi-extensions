@@ -25,6 +25,7 @@
     "test": "vp test run"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
     "typebox": "catalog:"
   },
