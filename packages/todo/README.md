@@ -230,7 +230,9 @@ The extension publishes `todo_turn_start_ids` when an agent run starts.
 
 The extension captures the last assistant response at `agent_end`. It evaluates the response at `agent_settled`, after automatic retries and queued continuations finish.
 
-An eligible stop produces a visible `todo-reminder` message and a new agent run. The extension awaits this continuation before the original prompt returns.
+An eligible stop produces a visible `todo-reminder` message and a new agent run. Pi starts this continuation after the `agent_settled` handlers finish and before the original prompt returns.
+
+The handler never waits inside `agent_settled`. A blocked handler would defer every later extension turn, including Task notifications and coordinator decision requests.
 
 Each accepted user message resets the reminder cycle at `message_start`. This includes queued user messages. Custom reminder continuations do not reset the cycle or emit `before_agent_start`.
 

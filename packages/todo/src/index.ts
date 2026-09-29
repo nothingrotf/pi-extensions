@@ -256,7 +256,6 @@ export default function todo(pi: ExtensionAPI): void {
   const statusKey = 'todos'
   let cycle = createReminderCycle()
   let stoppedAssistant: AssistantSummary | null = null
-  let reminderCompletion: (() => void) | undefined
   const defaultEagerMode: EagerMode = 'preferred'
   let eagerMode: EagerMode = defaultEagerMode
   let userPromptPending = false
@@ -288,8 +287,6 @@ export default function todo(pi: ExtensionAPI): void {
   const restore = (ctx: ExtensionContext) => {
     cycle = createReminderCycle()
     stoppedAssistant = null
-    reminderCompletion?.()
-    reminderCompletion = undefined
     userPromptPending = false
     questionPending = false
     questionPaused = false
@@ -360,8 +357,6 @@ export default function todo(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', () => {
     stoppedAssistant = null
-    reminderCompletion?.()
-    reminderCompletion = undefined
     overlay.dispose()
     unsubscribeAsk()
   })
@@ -444,53 +439,44 @@ export default function todo(pi: ExtensionAPI): void {
     stoppedAssistant = lastAssistant(event.messages)
   })
 
-  pi.on('agent_settled', async (_event, ctx) => {
+  pi.on('agent_settled', (_event, ctx) => {
     overlay.setWorking(false)
-    const previousCompletion = reminderCompletion
-    reminderCompletion = undefined
     const assistant = stoppedAssistant
     stoppedAssistant = null
-    try {
-      if (
-        assistant === null ||
-        waitingForUser() ||
-        ctx.signal?.aborted ||
-        !ctx.isIdle() ||
-        !todoToolActive() ||
-        ctx.hasPendingMessages()
-      )
-        return
-      const decision = decideStopReminder(cycle, todos, assistant)
-      if (decision.kind === 'silent') return
-      cycle = decision.cycle
-      pi.events.emit('todo_reminder', {
-        todos: decision.todos.map((todo) => ({
-          id: todo.id,
-          content: todo.content,
-          status: todo.status,
-        })),
-        attempt: decision.attempt,
-        maxAttempts: maximumStopReminders,
-      })
-      await new Promise<void>((resolve) => {
-        reminderCompletion = resolve
-        pi.sendMessage(
-          {
-            customType: 'todo-reminder',
-            content: formatStopReminder(decision.todos, decision.attempt),
-            display: true,
-            details: {
-              attempt: decision.attempt,
-              maxAttempts: maximumStopReminders,
-              todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
-            },
-          },
-          { triggerTurn: true, deliverAs: 'followUp' },
-        )
-      })
-    } finally {
-      previousCompletion?.()
-    }
+    if (
+      assistant === null ||
+      waitingForUser() ||
+      ctx.signal?.aborted ||
+      !ctx.isIdle() ||
+      !todoToolActive() ||
+      ctx.hasPendingMessages()
+    )
+      return
+    const decision = decideStopReminder(cycle, todos, assistant)
+    if (decision.kind === 'silent') return
+    cycle = decision.cycle
+    pi.events.emit('todo_reminder', {
+      todos: decision.todos.map((todo) => ({
+        id: todo.id,
+        content: todo.content,
+        status: todo.status,
+      })),
+      attempt: decision.attempt,
+      maxAttempts: maximumStopReminders,
+    })
+    pi.sendMessage(
+      {
+        customType: 'todo-reminder',
+        content: formatStopReminder(decision.todos, decision.attempt),
+        display: true,
+        details: {
+          attempt: decision.attempt,
+          maxAttempts: maximumStopReminders,
+          todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
+        },
+      },
+      { triggerTurn: true, deliverAs: 'followUp' },
+    )
   })
 
   pi.on('agent_start', () => {

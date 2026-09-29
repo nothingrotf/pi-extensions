@@ -173,6 +173,11 @@ async function harness(extra?: ExtensionFactory, extraFirst = false, interactive
     requests,
     session,
     ui,
+    script(content: Content[]) {
+      steps.push(...content)
+    },
+    unexpectedRequests: () => unexpectedRequests,
+    extensionErrors,
     async respond(content: Content[], key: string) {
       steps.push(...content)
       ui.press(key)
@@ -511,6 +516,30 @@ describe('todo reminders through AgentSession', () => {
       }
     },
   )
+
+  test('lets a background message start a turn after a stop reminder', async () => {
+    let send: ((content: string) => void) | undefined
+    const instance = await harness((pi) => {
+      send = (content) =>
+        pi.sendMessage(
+          { customType: 'background-notice', content, display: true },
+          { deliverAs: 'steer', triggerTurn: true },
+        )
+    })
+    try {
+      await instance.prompt([seed(), text(), text()])
+      expect(instance.customMessages('todo-reminder')).toHaveLength(1)
+      instance.script([text('Handled the background result.')])
+      send?.('Background lane finished.')
+      await expect.poll(() => instance.requests.at(-1)?.at(-1)).toBe('Background lane finished.')
+      await instance.session.agent.waitForIdle()
+      await expect.poll(() => instance.session.isIdle).toBe(true)
+      expect(instance.unexpectedRequests()).toBe(0)
+      expect(instance.extensionErrors).toEqual([])
+    } finally {
+      await instance.close()
+    }
+  })
 
   test('caps continuations at three and resets the cap for the next prompt', async () => {
     const instance = await harness()
