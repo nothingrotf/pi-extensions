@@ -70,7 +70,10 @@ class AsyncQuestionQueue {
   }
 }
 
+const blockedChannel = 'herdr:blocked'
+
 async function promptUser(
+  pi: ExtensionAPI,
   input: AskQuestionInput,
   ctx: ExtensionContext,
   signal: AbortSignal,
@@ -78,6 +81,7 @@ async function promptUser(
   const skipped: AskPromptResult = { kind: 'skipped', reason: 'Questions cancelled' }
   if (signal.aborted) return skipped
   let cancel: (() => void) | undefined
+  pi.events.emit(blockedChannel, { active: true, label: normalizedTitle(input.title) })
   try {
     return await ctx.ui.custom<AskPromptResult>((tui, theme, _keybindings, done) => {
       cancel = () => done(skipped)
@@ -87,6 +91,7 @@ async function promptUser(
     })
   } finally {
     if (cancel !== undefined) signal.removeEventListener('abort', cancel)
+    pi.events.emit(blockedChannel, { active: false })
   }
 }
 
@@ -366,7 +371,7 @@ export default function ask(pi: ExtensionAPI): void {
         }
       }
       const resolveQuestion = async () => {
-        const result = await promptUser(params, ctx, controller.signal)
+        const result = await promptUser(pi, params, ctx, controller.signal)
         if (!controller.signal.aborted && result.kind === 'skipped') paused = true
         return resultFromPrompt(params, result)
       }

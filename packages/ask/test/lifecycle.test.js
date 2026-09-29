@@ -24,7 +24,9 @@ function harness(mode = 'tui') {
   const handlers = new Map()
   const states = []
   const reports = []
+  const blocked = []
   const events = createEventBus()
+  events.on('herdr:blocked', (event) => blocked.push(event))
   events.on('ask:state', (state) => states.push(state))
   events.on('hud:rail-action', (report) => reports.push(report))
   let promptDone
@@ -75,6 +77,7 @@ function harness(mode = 'tui') {
     messages,
     reports,
     states,
+    blocked,
     opened: () => opened,
     async emit(name, event = {}) {
       for (const handler of handlers.get(name) ?? []) await handler(event, ctx)
@@ -292,6 +295,43 @@ describe('AskQuestion lifecycle', () => {
       expect(instance.messages).toEqual([])
     },
   )
+
+  it('reports a blocked agent only while a form is visible', async () => {
+    const instance = harness()
+    const pending = instance.execute(params)
+    expect(instance.blocked).toEqual([{ active: true, label: 'Language' }])
+    instance.completePrompt({ kind: 'answered', answers: [] })
+    await pending
+    expect(instance.blocked).toEqual([{ active: true, label: 'Language' }, { active: false }])
+  })
+
+  it('reports one blocked interval per queued async form', async () => {
+    const instance = harness()
+    await instance.execute({ ...params, runAsync: true }, 'one')
+    await instance.execute({ ...params, runAsync: true }, 'two')
+    expect(instance.blocked).toEqual([{ active: true, label: 'Language' }])
+    instance.completePrompt({ kind: 'answered', answers: [] })
+    await expect.poll(instance.opened).toBe(2)
+    instance.failPrompt()
+    await expect.poll(() => instance.messages.length).toBe(2)
+    expect(instance.blocked.map((event) => event.active)).toEqual([true, false, true, false])
+  })
+
+  it('releases the blocked state when a session change discards a form', async () => {
+    const instance = harness()
+    await instance.execute({ ...params, runAsync: true })
+    await instance.emit('session_tree')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(instance.blocked.map((event) => event.active)).toEqual([true, false])
+  })
+
+  it('does not report a blocked agent when the call is already aborted', async () => {
+    const instance = harness()
+    const controller = new AbortController()
+    controller.abort()
+    await instance.execute(params, 'one', controller.signal)
+    expect(instance.blocked).toEqual([])
+  })
 
   it('renders the call title and question count', () => {
     const instance = harness()

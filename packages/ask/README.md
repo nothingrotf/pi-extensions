@@ -92,6 +92,16 @@ Historical tool results do not restore the state because those forms are no long
 
 Todo uses this optional protocol to avoid reminders while questions are outstanding or the user has skipped a form. Neither package requires the other.
 
+## Herdr status
+
+Ask emits `herdr:blocked` on Pi's shared event bus while a form is visible:
+
+```json
+{ "active": true, "label": "Language" }
+```
+
+Ask emits `{ "active": false }` when the form closes. The Herdr Pi integration reports the pane as `blocked` during that interval. Herdr then notifies the user that the agent needs input. Queued `runAsync` forms emit the event only when they open.
+
 ## TUI
 
 The call frame shows a pending status line and one labelled section per question with marker bullets. The result frame shows the ask glyph and the chosen markers:
