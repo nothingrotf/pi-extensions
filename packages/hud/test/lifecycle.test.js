@@ -724,6 +724,46 @@ describe('HUD lifecycle', () => {
     expect(instance.appended()[2]?.data.report.durationMs).toBeTypeOf('number')
   })
 
+  test('groups codemode nested calls under the script action', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', {
+      args: { code: 'await tools.read({ path: "package.json" })' },
+      toolCallId: 'script-1',
+      toolName: 'codemode',
+    })
+    await instance.emit('tool_execution_start', {
+      args: { path: 'package.json' },
+      parentToolCallId: 'script-1',
+      toolCallId: 'script-1/1',
+      toolName: 'read',
+    })
+    await instance.emit('tool_execution_end', {
+      isError: false,
+      parentToolCallId: 'script-1',
+      result: { content: [{ text: '{}', type: 'text' }] },
+      toolCallId: 'script-1/1',
+      toolName: 'read',
+    })
+    await instance.emit('tool_execution_end', {
+      isError: false,
+      result: { content: [{ text: 'Script completed', type: 'text' }] },
+      toolCallId: 'script-1',
+      toolName: 'codemode',
+    })
+    await instance.emit('agent_end')
+    const reports = instance
+      .appended()
+      .filter((entry) => entry.customType === 'hud-rail-state')
+      .map((entry) => entry.data.report)
+    expect(reports.map((report) => [report.toolCallId, report.parentToolCallId])).toEqual([
+      ['script-1', undefined],
+      ['script-1/1', 'script-1'],
+    ])
+    expect(reports[1]).toMatchObject({ output: '{}', status: 'ok' })
+    expect(reports[1]?.durationMs).toBeTypeOf('number')
+  })
+
   test('renders an unmapped tool through the event fallback', async () => {
     const instance = harness()
     await instance.emit('agent_start')

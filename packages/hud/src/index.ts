@@ -158,6 +158,7 @@ export default function hud(pi: ExtensionAPI): void {
   let railsByTurn = new Map<number, RailStore>()
   const railOpeningAt = new Map<number, number>()
   const railFor = (toolCallId: string) => railsByToolCallId.get(toolCallId) ?? rail
+  const nestedStartedAt = new Map<string, number>()
   let railEnabled = true
   let railPendingNarration = false
   let liveUsageAssistantAt: number | undefined
@@ -690,6 +691,17 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('tool_execution_start', (event, ctx) => {
     railPendingNarration = false
+    if (railEnabled && event.parentToolCallId !== undefined) {
+      nestedStartedAt.set(event.toolCallId, Date.now())
+      railFor(event.parentToolCallId).reportChild(
+        event.parentToolCallId,
+        event.toolCallId,
+        railPatchForCall({ arguments: event.args, toolName: event.toolName }, ctx.cwd),
+      )
+      reconcileRailVoice()
+      requestRender?.()
+      return
+    }
     if (railEnabled) {
       if (!railTools.has(event.toolName)) fallbackToolCallIds.add(event.toolCallId)
       const target = railFor(event.toolCallId)
@@ -761,6 +773,21 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   pi.on('tool_execution_end', (event, ctx) => {
+    if (event.parentToolCallId !== undefined) {
+      const startedAt = nestedStartedAt.get(event.toolCallId)
+      nestedStartedAt.delete(event.toolCallId)
+      if (railEnabled) {
+        const patch: RailPatch = {
+          output: railResultText(event.result),
+          status: event.isError ? 'error' : 'ok',
+        }
+        if (startedAt !== undefined) patch.durationMs = Math.max(0, Date.now() - startedAt)
+        railFor(event.parentToolCallId).reportChild(event.parentToolCallId, event.toolCallId, patch)
+        reconcileRailVoice()
+        requestRender?.()
+      }
+      return
+    }
     const target = railFor(event.toolCallId)
     if (target.has(event.toolCallId)) {
       const patch: RailPatch = { status: event.isError ? 'error' : 'ok' }
@@ -787,6 +814,7 @@ export default function hud(pi: ExtensionAPI): void {
 
   pi.on('agent_end', (_event, ctx) => {
     agentWorking = false
+    nestedStartedAt.clear()
     liveUsageAssistantAt = undefined
     assistantUsageLines.clear()
     if (!railTurnPending) {

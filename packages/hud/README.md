@@ -165,7 +165,8 @@ Option details appear only in the expanded view. Selected options use `[x]`, and
 A check or a cross always identifies a tool call.
 
 A tool that spawns children, such as a subagent, nests them under its own row
-with the same trunk rules.
+with the same trunk rules. Calls from a Pi `codemode` script nest under the
+`codemode` row in the same way.
 
 At most five groups render. Older groups collapse into one `N completed` row.
 
