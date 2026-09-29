@@ -8,9 +8,11 @@ export { selectJson, SelectorError, type JsonDocument } from './json-select.ts'
 export { fileOutline, FULL_READ_BYTES, HEAD_LINES, outlineNotice } from './outline.ts'
 export { structureProblem, STRUCTURE_CHECK_MAX_CHARS, type StructureProblem } from './structure.ts'
 export {
+  applyPatch,
   createPatchTool,
   formatPatchResults,
   PatchError,
+  PatchOutputSchema,
   PatchSchema,
   planPatch,
   writePatch,
@@ -24,6 +26,7 @@ export {
   MULTI_READ_BUDGET,
   projectJson,
   ReadInputError,
+  ReadOutputSchema,
   ReadSchema,
   type ReadInput,
 } from './read.ts'

@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vite-plus/test'
@@ -126,5 +126,138 @@ describe('patch in a real session', () => {
       harness.tool('patch').execute('call-10', { files: [{ content: bounded, path: 'big.ts' }] }),
     ).rejects.toThrow(/bounded read marker/)
     expect(await readFile(join(harness.cwd, 'big.ts'), 'utf8')).toBe(large)
+  })
+})
+
+describe('structured results for programmatic callers', () => {
+  it('returns per-file records, unread paths, and selected JSON values', async () => {
+    harness = await createFiletoolsHarness([
+      { content: 'export const a = 1\n', name: 'a.ts' },
+      { content: large, name: 'big.ts' },
+      { content: report, name: 'report.json' },
+    ])
+    const read = harness.tool('read')
+
+    const multi = await read.execute('call-20', { paths: ['a.ts', 'big.ts'] })
+    expect(multi.structuredContent).toEqual({
+      files: [
+        { bounded: false, images: 0, path: 'a.ts', text: 'export const a = 1\n' },
+        {
+          bounded: true,
+          images: 0,
+          path: 'big.ts',
+          text: expect.stringContaining('[bounded read] big.ts has 3002 lines'),
+        },
+      ],
+      unread: [],
+    })
+
+    const projected = await read.execute('call-21', {
+      json: ['.verdict', '.items.length'],
+      path: 'report.json',
+    })
+    expect(projected.structuredContent).toMatchObject({ value: ['pass', 500] })
+
+    const patched = await harness.tool('patch').execute('call-22', {
+      files: [
+        { edits: [{ newText: 'export const a = 2', oldText: 'export const a = 1' }], path: 'a.ts' },
+        { content: '{"broken": \n', path: 'new.json' },
+      ],
+    })
+    expect(patched.structuredContent).toEqual({
+      files: [
+        { created: false, edits: 1, lineDelta: 0, path: 'a.ts' },
+        {
+          created: true,
+          edits: 1,
+          lineDelta: 1,
+          path: 'new.json',
+          warning: expect.stringContaining('json'),
+        },
+      ],
+    })
+  })
+})
+
+describe('patch mutation safety', () => {
+  it('keeps every edit when parallel patches change the same file', async () => {
+    const lines = Array.from({ length: 8 }, (_value, index) => `line ${index}`)
+    harness = await createFiletoolsHarness([{ content: `${lines.join('\n')}\n`, name: 'a.ts' }])
+    const patch = harness.tool('patch')
+
+    await Promise.all(
+      lines.map((line, index) =>
+        patch.execute(`call-3${index}`, {
+          files: [{ edits: [{ newText: `${line} changed`, oldText: line }], path: 'a.ts' }],
+        }),
+      ),
+    )
+
+    expect(await readFile(join(harness.cwd, 'a.ts'), 'utf8')).toBe(
+      `${lines.map((line) => `${line} changed`).join('\n')}\n`,
+    )
+  })
+
+  it('rejects one file named twice through a symbolic link', async () => {
+    harness = await createFiletoolsHarness([{ content: 'x\ny\n', name: 'a.ts' }])
+    await symlink(join(harness.cwd, 'a.ts'), join(harness.cwd, 'alias.ts'))
+
+    await expect(
+      harness.tool('patch').execute('call-40', {
+        files: [
+          { edits: [{ newText: '1', oldText: 'x' }], path: 'a.ts' },
+          { edits: [{ newText: '2', oldText: 'y' }], path: 'alias.ts' },
+        ],
+      }),
+    ).rejects.toThrow(/occurs more than once/)
+    expect(await readFile(join(harness.cwd, 'a.ts'), 'utf8')).toBe('x\ny\n')
+  })
+})
+
+describe('codemode scripts', () => {
+  it('read structured values and patch files through the tool pipeline', async () => {
+    harness = await createFiletoolsHarness(
+      [
+        { content: 'export const a = 1\n', name: 'a.ts' },
+        { content: report, name: 'report.json' },
+      ],
+      { codemode: true, tools: ['read', 'patch', 'codemode'] },
+    )
+
+    const result = await harness.runScript(
+      [
+        'const [source, verdict] = await Promise.all([',
+        "  tools.read({ path: 'a.ts' }),",
+        "  tools.read({ path: 'report.json', json: '.verdict' }),",
+        '])',
+        "const patched = await tools.patch({ files: [{ path: 'a.ts', edits: [{ oldText: 'a = 1', newText: 'a = 2' }] }] })",
+        'return { text: source.files[0].text, verdict: verdict.value, delta: patched.files[0].lineDelta }',
+      ].join('\n'),
+    )
+
+    expect(result.isError).toBe(false)
+    expect(result.text).toContain('{"text":"export const a = 1\\n","verdict":"pass","delta":0}')
+    expect(result.nestedCalls.map((call) => `${call.name}:${call.status}`)).toEqual([
+      'read:ok',
+      'read:ok',
+      'patch:ok',
+    ])
+    expect(await readFile(join(harness.cwd, 'a.ts'), 'utf8')).toBe('export const a = 2\n')
+  })
+
+  it('cannot reach patch from a script when patch is inactive', async () => {
+    harness = await createFiletoolsHarness([{ content: 'export const a = 1\n', name: 'a.ts' }], {
+      codemode: true,
+      tools: ['read', 'codemode'],
+    })
+
+    const result = await harness.runScript(
+      "await tools.patch({ files: [{ path: 'a.ts', content: 'gone' }] })",
+    )
+
+    expect(harness.activeTools()).toEqual(['read', 'codemode'])
+    expect(result.isError).toBe(true)
+    expect(result.nestedCalls).toEqual([])
+    expect(await readFile(join(harness.cwd, 'a.ts'), 'utf8')).toBe('export const a = 1\n')
   })
 })

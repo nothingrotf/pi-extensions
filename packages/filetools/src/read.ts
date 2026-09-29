@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from 'node:path'
 import {
   createReadToolDefinition,
   defineTool,
+  type AgentToolResult,
   type ReadToolInput,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
@@ -49,6 +50,38 @@ export const ReadSchema = Type.Object(
 
 export type ReadInput = Static<typeof ReadSchema>
 
+const ReadFileOutputSchema = Type.Object(
+  {
+    path: Type.String(),
+    text: Type.String({
+      description: 'Text returned to the model for the file, including any continuation notice.',
+    }),
+    images: Type.Number({ description: 'Image blocks returned to the model for the file.' }),
+    bounded: Type.Boolean({
+      description: 'Whether a large file returned only its head and a declaration map.',
+    }),
+  },
+  { additionalProperties: false },
+)
+
+export const ReadOutputSchema = Type.Object(
+  {
+    files: Type.Array(ReadFileOutputSchema),
+    unread: Type.Array(Type.String(), {
+      description: 'Paths left unread because the multi-path budget was reached.',
+    }),
+    value: Type.Optional(
+      Type.Unknown({
+        description:
+          'Selected JSON value. One selector returns its value, several return an array of values.',
+      }),
+    ),
+  },
+  { additionalProperties: false },
+)
+
+type JsonValue = Exclude<AgentToolResult['structuredContent'], undefined>
+type ReadFileOutput = Static<typeof ReadFileOutputSchema>
 function absolutePath(path: string, cwd: string): string {
   const expanded = path.startsWith('~/') ? `${homedir()}/${path.slice(2)}` : path
   return isAbsolute(expanded) ? expanded : resolve(cwd, expanded)
@@ -130,6 +163,21 @@ export function projectJson(content: string, json: string | readonly string[]): 
 type ReadDefinition = ReturnType<typeof createReadToolDefinition>
 type Block = Awaited<ReturnType<ReadDefinition['execute']>>['content'][number]
 
+function readFileOutput(path: string, blocks: readonly Block[], bounded: boolean): ReadFileOutput {
+  let images = 0
+  const text: string[] = []
+  for (const block of blocks) {
+    if (block.type === 'text') text.push(block.text)
+    else images += 1
+  }
+  return { bounded, images, path, text: text.join('\n') }
+}
+
+function parseProjection(text: string): JsonValue {
+  const value: JsonValue = JSON.parse(text)
+  return value
+}
+
 /**
  * Replace the native read tool with a bounded reader.
  *
@@ -169,6 +217,7 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
     }
   }
   return defineTool({
+    annotations: { openWorldHint: false, readOnlyHint: true },
     description: `${native.description} Large files return a bounded head plus a map of declarations. Pass paths to read several files in one call, or json to select part of a JSON document before truncation.`,
     async execute(toolCallId, input, signal, onUpdate, ctx) {
       assertReadInput(input)
@@ -181,7 +230,15 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
           )
         }
         const text = projectJson(await readFile(target, 'utf8'), input.json)
-        return { content: [{ text, type: 'text' }], details: { path: input.path } }
+        return {
+          content: [{ text, type: 'text' }],
+          details: { path: input.path },
+          structuredContent: {
+            files: [{ bounded: false, images: 0, path: input.path, text }],
+            unread: [],
+            value: parseProjection(text),
+          },
+        }
       }
       if (input.path !== undefined) {
         const result = await readOne(
@@ -191,15 +248,23 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
           onUpdate,
           ctx,
         )
-        return { content: [...result.blocks], details: { path: input.path } }
+        return {
+          content: [...result.blocks],
+          details: { path: input.path },
+          structuredContent: {
+            files: [readFileOutput(input.path, result.blocks, result.bounded)],
+            unread: [],
+          },
+        }
       }
       const paths = input.paths ?? []
       const blocks: Block[] = []
+      const files: ReadFileOutput[] = []
       let used = 0
       let readPaths = 0
       for (const path of paths) {
         if (used >= MULTI_READ_BUDGET) break
-        let result: { blocks: readonly Block[] }
+        let result: { blocks: readonly Block[]; bounded: boolean }
         const window =
           input.limit === undefined ? { path } : { limit: input.limit, offset: 1, path }
         try {
@@ -209,6 +274,7 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
             `Cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`,
           )
         }
+        files.push(readFileOutput(path, result.blocks, result.bounded))
         blocks.push({ text: `===== ${path} =====`, type: 'text' })
         for (const block of result.blocks) {
           blocks.push(block)
@@ -223,10 +289,15 @@ export function createBoundedReadTool(cwd: string): ToolDefinition<typeof ReadSc
           type: 'text',
         })
       }
-      return { content: blocks, details: { paths: paths.slice(0, readPaths) } }
+      return {
+        content: blocks,
+        details: { paths: paths.slice(0, readPaths) },
+        structuredContent: { files, unread: paths.slice(readPaths) },
+      }
     },
     label: 'read',
     name: 'read',
+    outputSchema: ReadOutputSchema,
     parameters: ReadSchema,
     promptGuidelines: [
       ...(native.promptGuidelines ?? []),

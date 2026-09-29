@@ -56,6 +56,28 @@ Two guards protect the workspace:
 - A structural check reports an unbalanced delimiter with its line, and invalid JSON, right in the patch result. It skips strings, templates, comments, and regular expressions, and it never replaces a type check.
 - Content or replacement text that carries a bounded read marker is refused, because writing a bounded read back to disk deletes every line the read omitted.
 
+## Codemode and structured results
+
+Both tools declare an `outputSchema` and return `structuredContent`, so Pi `codemode` scripts receive data instead of text.
+The model still receives the same text content.
+
+- `read` resolves to `{ files, unread, value? }`. Each file record has `path`, `text`, `images`, and `bounded`. `unread` lists paths left for another call after the multi-path budget. `value` holds the parsed JSON selection.
+- `patch` resolves to `{ files }` with the same fields as the text report: `path`, `created`, `edits`, `lineDelta`, and an optional `warning`.
+
+```js
+const [source, report] = await Promise.all([
+  tools.read({ path: 'src/a.ts' }),
+  tools.read({ path: 'report.json', json: '.verdict' }),
+])
+return { firstLine: source.files[0].text.split('\n')[0], verdict: report.value }
+```
+
+`read` declares `readOnlyHint`. `patch` declares `destructiveHint` and is not idempotent.
+
+`patch` holds Pi's file mutation queue for every target file from planning through writing.
+Parallel `patch` calls, built-in `edit` and `write` calls, and codemode scripts therefore cannot overwrite each other's changes.
+A patch that names one file twice, including through a symbolic link, fails before it writes anything.
+
 ## System prompt
 
 Both tools contribute a snippet and guidelines to the session system prompt, in the root session and in every child that receives the capability:

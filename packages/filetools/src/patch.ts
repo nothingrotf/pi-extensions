@@ -1,8 +1,12 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, extname, isAbsolute, resolve } from 'node:path'
 
-import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent'
+import {
+  defineTool,
+  withFileMutationQueue,
+  type ToolDefinition,
+} from '@earendil-works/pi-coding-agent'
 import { Type, type Static } from 'typebox'
 
 import { readArtifact } from './artifacts.ts'
@@ -51,6 +55,26 @@ export const PatchSchema = Type.Object(
 
 export type PatchInput = Static<typeof PatchSchema>
 
+export const PatchOutputSchema = Type.Object(
+  {
+    files: Type.Array(
+      Type.Object(
+        {
+          path: Type.String(),
+          created: Type.Boolean({ description: 'Whether the patch created the file.' }),
+          edits: Type.Number({ description: 'Applied edits. Full content counts as one.' }),
+          lineDelta: Type.Number({ description: 'Line count after the patch minus before.' }),
+          warning: Type.Optional(
+            Type.String({ description: 'Unbalanced delimiter or invalid JSON in the result.' }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+)
+
 export interface PatchFileResult {
   created: boolean
   edits: number
@@ -68,6 +92,23 @@ export class PatchError extends Error {}
 function absolutePath(path: string, cwd: string): string {
   const expanded = path.startsWith('~/') ? `${homedir()}/${path.slice(2)}` : path
   return isAbsolute(expanded) ? expanded : resolve(cwd, expanded)
+}
+
+async function fileIdentity(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch {
+    return path
+  }
+}
+
+async function withFileMutationQueues<Result>(
+  paths: readonly string[],
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const [first, ...rest] = paths
+  if (first === undefined) return operation()
+  return withFileMutationQueue(first, () => withFileMutationQueues(rest, operation))
 }
 
 function applyEdits(
@@ -122,10 +163,11 @@ export async function planPatch(input: PatchInput, cwd: string): Promise<PatchPl
   const files: { absolutePath: string; content: string; result: PatchFileResult }[] = []
   for (const file of input.files) {
     const target = absolutePath(file.path, cwd)
-    if (seen.has(target)) {
+    const identity = await fileIdentity(target)
+    if (seen.has(identity)) {
       throw new PatchError(`File ${file.path} occurs more than once. Merge its edits.`)
     }
-    seen.add(target)
+    seen.add(identity)
     if ((file.content === undefined) === (file.edits === undefined)) {
       throw new PatchError(`File ${file.path} requires either content or edits, not both.`)
     }
@@ -180,6 +222,19 @@ export async function writePatch(plan: PatchPlan): Promise<readonly PatchFileRes
   return plan.files.map((file) => file.result)
 }
 
+function structuredPatchFile(
+  result: PatchFileResult,
+): Static<typeof PatchOutputSchema>['files'][number] {
+  const file: Static<typeof PatchOutputSchema>['files'][number] = {
+    created: result.created,
+    edits: result.edits,
+    lineDelta: result.lineDelta,
+    path: result.path,
+  }
+  if (result.warning !== undefined) file.warning = result.warning
+  return file
+}
+
 export function formatPatchResults(results: readonly PatchFileResult[]): string {
   const lines = results.map((result) => {
     const delta = result.lineDelta > 0 ? `+${result.lineDelta}` : `${result.lineDelta}`
@@ -192,21 +247,39 @@ export function formatPatchResults(results: readonly PatchFileResult[]): string 
   return [`Patched ${results.length} file${results.length === 1 ? '' : 's'}.`, ...lines].join('\n')
 }
 
+export async function applyPatch(
+  input: PatchInput,
+  cwd: string,
+): Promise<readonly PatchFileResult[]> {
+  const identities = await Promise.all(
+    input.files.map((file) => fileIdentity(absolutePath(file.path, cwd))),
+  )
+  const ordered = [...new Set(identities)].sort()
+  return withFileMutationQueues(ordered, async () => writePatch(await planPatch(input, cwd)))
+}
+
 export function createPatchTool(): ToolDefinition<typeof PatchSchema> {
   return defineTool({
+    annotations: {
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+      readOnlyHint: false,
+    },
     description:
       'Apply edits across multiple files in one call. Each file takes either exact-match edits or full content. The patch is all or nothing: nothing is written when any edit fails to match uniquely. The result reports unbalanced delimiters and invalid JSON in the changed files. Prefer this tool over repeated single-file edits.',
     execute: async (_toolCallId, input, signal, _onUpdate, ctx) => {
       signal?.throwIfAborted()
-      const plan = await planPatch(input, ctx.cwd)
-      const results = await writePatch(plan)
+      const results = await applyPatch(input, ctx.cwd)
       return {
         content: [{ text: formatPatchResults(results), type: 'text' }],
         details: { files: results },
+        structuredContent: { files: results.map(structuredPatchFile) },
       }
     },
     label: 'patch',
     name: 'patch',
+    outputSchema: PatchOutputSchema,
     parameters: PatchSchema,
     promptGuidelines: [
       'Use patch to change several files in one call instead of one edit call per file.',
