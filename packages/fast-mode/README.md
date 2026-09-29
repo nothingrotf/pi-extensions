@@ -1,6 +1,7 @@
 # @nothingrotf/fast-mode
 
-`@nothingrotf/fast-mode` requests Fast Mode for supported OpenAI Codex models.
+`@nothingrotf/fast-mode` requests Fast Mode for supported OpenAI models.
+It supports the `openai` provider, including Sign in with ChatGPT, and the legacy `openai-codex` provider.
 It changes only `service_tier` through Pi's `before_provider_request` hook.
 It preserves the provider, authentication, reasoning effort, verbosity, and other request fields.
 
@@ -26,7 +27,11 @@ The package stores the preference in `<agentDir>/state/fast-mode.json`.
 The initial preference is off.
 Other sessions read preference changes before their next request.
 
-Fast Mode increases usage. The status reports a requested tier, not proof that the server used that tier.
+Fast Mode increases usage.
+The public Responses API reports the tier that processed each response.
+For the `openai` provider, `/fast status` shows the tier from the last response.
+A response with a standard tier changes the status to `Fast not applied`.
+The Codex backend can report `default` for an accepted Fast request, so `openai-codex` status reports only the requested tier.
 `off` stops this package's tier override. It preserves tiers supplied by other request sources.
 
 ## Model support
@@ -47,7 +52,10 @@ The built-in list covers these model identifiers when the catalog lacks tier met
 - `gpt-6.1-sol`
 
 Unknown models require a catalog entry that advertises `priority` or `fast`.
-The package does not apply Codex tier rules to the public OpenAI API or other providers.
+The `openai` and `openai-codex` providers use the same catalog and compatibility list.
+The package does not apply these tier rules to other providers, such as Azure OpenAI.
+The OpenAI documentation does not list `service_tier` as an unsupported field for Sign in with ChatGPT.
+The status from the last response confirms whether that account received Fast processing.
 A model switch preserves the preference but suspends the override for an unsupported model.
 An invalid preference file disables the override and reports an error.
 
@@ -61,6 +69,8 @@ Subagents do not inherit the global preference automatically.
 
 - [Codex configuration reference](https://developers.openai.com/codex/config-reference)
 - [OpenAI Fast Mode guide](https://developers.openai.com/api/docs/guides/fast-mode)
+- [Sign in with ChatGPT preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+- [Codex speed and usage](https://learn.chatgpt.com/docs/agent-configuration/speed)
 
 ## Verification
 

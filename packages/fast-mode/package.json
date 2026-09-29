@@ -1,7 +1,7 @@
 {
   "name": "@nothingrotf/fast-mode",
   "version": "0.1.0",
-  "description": "Catalog-aware Fast Mode for OpenAI Codex sessions and subagents.",
+  "description": "Catalog-aware Fast Mode for OpenAI sessions and subagents.",
   "keywords": [
     "codex",
     "fast-mode",

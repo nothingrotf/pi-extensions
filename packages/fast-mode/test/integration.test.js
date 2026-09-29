@@ -21,7 +21,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close()
 })
 
-async function harness(modelId) {
+async function harness(modelId, { provider = 'openai-codex', responseTier } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-fast-mode-'))
   cleanup.push(() => rm(dir, { recursive: true, force: true }))
   const requests = []
@@ -63,7 +63,7 @@ async function harness(modelId) {
           id: 'resp_test',
           status: 'completed',
           output: [item],
-          service_tier: payload.service_tier ?? 'default',
+          service_tier: responseTier ?? payload.service_tier ?? 'default',
           usage: { input_tokens: 10, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } },
         },
       },
@@ -82,9 +82,9 @@ async function harness(modelId) {
     modelsStorePath: join(dir, 'models-store.json'),
     refreshOnCreate: false,
   })
-  runtime.registerProvider('openai-codex', {
-    api: 'openai-codex-responses',
-    apiKey: token,
+  runtime.registerProvider(provider, {
+    api: provider === 'openai' ? 'openai-responses' : 'openai-codex-responses',
+    apiKey: provider === 'openai' ? 'siwc-access-token' : token,
     baseUrl,
     models: ['gpt-6-astra', 'gpt-6.1-sol', 'not-fast'].map((id) => ({
       id,
@@ -103,6 +103,7 @@ async function harness(modelId) {
   })
   const catalogPath = join(dir, 'catalog.json')
   const notices = []
+  const statuses = []
   const loader = new DefaultResourceLoader({
     agentDir: dir,
     cwd: dir,
@@ -120,7 +121,7 @@ async function harness(modelId) {
     agentDir: dir,
     resourceLoader: loader,
     modelRuntime: runtime,
-    model: runtime.getModel('openai-codex', modelId),
+    model: runtime.getModel(provider, modelId),
     thinkingLevel: 'medium',
     sessionManager: SessionManager.inMemory(dir),
     settingsManager,
@@ -128,14 +129,52 @@ async function harness(modelId) {
   })
   cleanup.push(() => created.session.dispose())
   await created.session.bindExtensions({
-    uiContext: { notify: (text) => notices.push(text), setStatus() {} },
+    uiContext: {
+      notify: (text) => notices.push(text),
+      setStatus: (key, text) => {
+        if (key === 'fast-mode') statuses.push(text)
+      },
+    },
     commandContextActions: {},
     onError: (error) => {
       throw new Error(error.error)
     },
   })
-  return { session: created.session, runtime, requests, dir, catalogPath, notices }
+  return { session: created.session, runtime, requests, dir, catalogPath, notices, statuses }
 }
+
+describe('Fast Mode through the OpenAI provider', () => {
+  it('requests the tier and reports the tier that the API used', async () => {
+    const instance = await harness('gpt-6.1-sol', { provider: 'openai' })
+    await instance.session.prompt('/fast on')
+    expect(instance.notices.at(-1)).toContain('gpt-6.1-sol: service_tier=priority')
+    await instance.session.prompt('Reply OK')
+    expect(instance.requests.at(-1)).toMatchObject({
+      model: 'gpt-6.1-sol',
+      service_tier: 'priority',
+      reasoning: { effort: 'medium' },
+    })
+    await instance.session.prompt('/fast status')
+    expect(instance.notices.at(-1)).toContain('Last response: service_tier=priority.')
+    expect(instance.statuses.at(-1)).toBe('Fast requested')
+    await instance.session.prompt('/fast off')
+    await instance.session.prompt('Reply OK again')
+    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+    expect(instance.statuses.at(-1)).toBeUndefined()
+  })
+
+  it('reports a response that the API processed at the standard tier', async () => {
+    const instance = await harness('gpt-6.1-sol', { provider: 'openai', responseTier: 'default' })
+    await instance.session.prompt('/fast on')
+    await instance.session.prompt('Reply OK')
+    expect(instance.requests.at(-1).service_tier).toBe('priority')
+    expect(instance.statuses.at(-1)).toBe('Fast not applied')
+    await instance.session.prompt('/fast status')
+    expect(instance.notices.at(-1)).toContain('Last response: service_tier=default.')
+    await instance.session.setModel(instance.runtime.getModel('openai', 'gpt-6-astra'))
+    expect(instance.statuses.at(-1)).toBe('Fast requested')
+  })
+})
 
 describe.each(['gpt-6-astra', 'gpt-6.1-sol'])('Fast Mode through Codex with %s', (modelId) => {
   it('toggles the tier without changing reasoning, verbosity, or other payload fields', async () => {

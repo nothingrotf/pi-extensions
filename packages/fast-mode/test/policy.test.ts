@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 
-import { applyFastTier, getFastSupport } from '../src/policy.ts'
+import { applyFastTier, getFastSupport, reportedServiceTier } from '../src/policy.ts'
 import { loadFastMode, saveFastMode } from '../src/state.ts'
 
 const directories: string[] = []
@@ -35,7 +35,32 @@ describe('Fast Mode capability policy', () => {
     ).toBe(false)
     expect(getFastSupport({ ...astra, api: 'openai-completions' }).supported).toBe(false)
     expect(getFastSupport({ ...astra, provider: 'openai' }).supported).toBe(false)
+    expect(getFastSupport({ ...astra, api: 'openai-responses' }).supported).toBe(false)
+    expect(
+      getFastSupport(
+        { api: 'openai-responses', id: 'gpt-6.1-sol', provider: 'openai' },
+        '/missing/catalog.json',
+      ),
+    ).toEqual({ supported: true, tier: 'priority', source: 'builtin' })
     expect(getFastSupport(undefined).supported).toBe(false)
+  })
+
+  it('reads the processed tier only from public Responses API completion events', () => {
+    const event = {
+      type: 'provider_stream_event' as const,
+      provider: 'openai',
+      api: 'openai-responses',
+      model: 'gpt-6.1-sol',
+      data: { type: 'response.completed', response: { service_tier: 'default' } },
+    }
+    expect(reportedServiceTier(event)).toBe('default')
+    expect(reportedServiceTier({ ...event, api: 'openai-codex-responses' })).toBeUndefined()
+    expect(
+      reportedServiceTier({ ...event, data: { type: 'response.output_text.delta' } }),
+    ).toBeUndefined()
+    expect(
+      reportedServiceTier({ ...event, data: { type: 'response.completed', response: {} } }),
+    ).toBeUndefined()
   })
 
   it('uses explicit catalog capabilities instead of model-name guesses', async () => {

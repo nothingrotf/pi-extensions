@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import type { ProviderStreamEvent } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
@@ -18,6 +19,17 @@ const CatalogSchema = Type.Object({
 })
 
 const PayloadSchema = Type.Object({}, { additionalProperties: true })
+
+const ResponseEventSchema = Type.Object({
+  type: Type.Union([
+    Type.Literal('response.completed'),
+    Type.Literal('response.done'),
+    Type.Literal('response.incomplete'),
+  ]),
+  response: Type.Object({ service_tier: Type.String() }),
+})
+
+const fastTransports = new Set(['openai:openai-responses', 'openai-codex:openai-codex-responses'])
 
 const knownFastModels = new Set([
   'gpt-5.4',
@@ -49,8 +61,11 @@ export function getFastSupport(
   model: FastModel | undefined,
   catalogPath = codexCatalogPath(),
 ): FastSupport {
-  if (model?.provider !== 'openai-codex' || model.api !== 'openai-codex-responses') {
-    return { supported: false, reason: 'Fast Mode requires the OpenAI Codex Responses provider.' }
+  if (model === undefined || !fastTransports.has(`${model.provider}:${model.api}`)) {
+    return {
+      supported: false,
+      reason: 'Fast Mode requires the OpenAI or OpenAI Codex Responses provider.',
+    }
   }
   try {
     const parsed: unknown = JSON.parse(readFileSync(catalogPath, 'utf8'))
@@ -81,6 +96,17 @@ function knownFastSupport(model: FastModel): FastSupport {
   return knownFastModels.has(model.id)
     ? { supported: true, tier: 'priority', source: 'builtin' }
     : { supported: false, reason: 'Fast Mode support is unknown for this model.' }
+}
+
+export function reportedServiceTier(event: ProviderStreamEvent): string | undefined {
+  if (event.api !== 'openai-responses' || !Value.Check(ResponseEventSchema, event.data)) {
+    return undefined
+  }
+  return event.data.response.service_tier
+}
+
+export function isFastTier(tier: string): boolean {
+  return tier === 'priority' || tier === 'fast'
 }
 
 export function applyFastTier<Input>(payload: Input, tier: 'priority' | 'fast'): Input | object {

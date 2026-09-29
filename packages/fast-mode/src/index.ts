@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 
-import { applyFastTier, getFastSupport } from './policy.ts'
+import { applyFastTier, getFastSupport, isFastTier, reportedServiceTier } from './policy.ts'
 import { loadFastMode, saveFastMode } from './state.ts'
 
 interface FastModeOptions {
@@ -18,6 +18,7 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
   return function fastMode(pi: ExtensionAPI): void {
     const statePath = join(options.agentDir ?? getAgentDir(), 'state', 'fast-mode.json')
     let stateErrorReported = false
+    let lastTier: string | undefined
 
     const status = async (ctx: ExtensionContext): Promise<string> => {
       const enabled = await loadFastMode(statePath)
@@ -27,8 +28,13 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
         ctx.ui.setStatus('fast-mode', enabled ? 'Fast unavailable' : undefined)
         return `Fast Mode: ${label}. ${support.reason}`
       }
-      ctx.ui.setStatus('fast-mode', enabled ? 'Fast requested' : undefined)
-      return `Fast Mode: ${label}. ${ctx.model?.id}: service_tier=${support.tier} (${support.source}).`
+      const applied = lastTier === undefined || isFastTier(lastTier)
+      ctx.ui.setStatus(
+        'fast-mode',
+        enabled ? (applied ? 'Fast requested' : 'Fast not applied') : undefined,
+      )
+      const observed = lastTier === undefined ? '' : ` Last response: service_tier=${lastTier}.`
+      return `Fast Mode: ${label}. ${ctx.model?.id}: service_tier=${support.tier} (${support.source}).${observed}`
     }
 
     const refresh = async (ctx: ExtensionContext): Promise<void> => {
@@ -48,6 +54,13 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
       await refresh(ctx)
     })
     pi.on('model_select', async (_event, ctx) => {
+      lastTier = undefined
+      await refresh(ctx)
+    })
+    pi.on('provider_stream_event', async (event, ctx) => {
+      const tier = reportedServiceTier(event)
+      if (tier === undefined) return
+      lastTier = tier
       await refresh(ctx)
     })
     pi.on('session_shutdown', (_event, ctx) => {
@@ -66,7 +79,7 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
     })
 
     const command = {
-      description: 'Set or inspect Codex Fast Mode: /fast on, off, or status.',
+      description: 'Set or inspect OpenAI Fast Mode: /fast on, off, or status.',
       getArgumentCompletions(prefix: string) {
         const items = ['on', 'off', 'status']
           .filter((value) => value.startsWith(prefix))
@@ -86,7 +99,10 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
             return
           }
         }
-        if (action !== 'status') await saveFastMode(statePath, action === 'on')
+        if (action !== 'status') {
+          await saveFastMode(statePath, action === 'on')
+          lastTier = undefined
+        }
         stateErrorReported = false
         ctx.ui.notify(await status(ctx), 'info')
       },

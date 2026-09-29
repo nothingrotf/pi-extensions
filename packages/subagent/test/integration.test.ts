@@ -1109,6 +1109,11 @@ async function createHarness(restoreRecordCount = 0, runTimeoutMs?: number): Pro
   const config = providerConfig(state)
   const modelRuntime = await ModelRuntime.create({ refreshOnCreate: false })
   modelRuntime.registerProvider('openai-codex', config)
+  modelRuntime.registerProvider('openai', {
+    ...config,
+    api: 'openai-responses',
+    models: (config.models ?? []).map((entry) => ({ ...entry, api: 'openai-responses' })),
+  })
   const model = modelRuntime.getModel('openai-codex', 'gpt-5.6-sol')
   if (model === undefined) throw new Error('The test model was not registered.')
 
@@ -4556,6 +4561,25 @@ describe('subagent Task integration', () => {
           .map((payload) => Value.Decode(PayloadSchema, payload))
         expect(payloads.some((payload) => payload.service_tier === 'priority')).toBe(true)
       }
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('applies explicit fast mode through the OpenAI provider', async () => {
+    const harness = await createHarness()
+    try {
+      const payloadStart = harness.state.payloads.length
+      const result = await runTask(harness, {
+        ...baseInput,
+        model: 'openai/gpt-6-sol:high [fast]',
+      })
+      expect(result).toContain('Agent ID:')
+      expect(latestState(harness).records.at(-1)?.model).toBe('openai/gpt-6-sol')
+      const payloads = harness.state.payloads
+        .slice(payloadStart)
+        .map((payload) => Value.Decode(PayloadSchema, payload))
+      expect(payloads.some((payload) => payload.service_tier === 'priority')).toBe(true)
     } finally {
       await harness.close()
     }
