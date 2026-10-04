@@ -178,7 +178,7 @@ describe('Mermaid code blocks', () => {
     expect(lines[0]).toBe('│ Flowchart')
     expect(connections).toBeGreaterThan(-1)
     for (const label of nodeLabels) {
-      expect(output).toContain(label.replaceAll(/<br\s*\/?\s*>/giu, ' '))
+      expect(output).toContain(label.replaceAll(/\s*<br\s*\/?\s*>\s*/giu, ' - '))
     }
     for (const label of edgeLabels) expect(output).toContain(label)
     expect(lines.slice(connections + 1)).toHaveLength(edgeCount)
@@ -325,6 +325,77 @@ describe('Mermaid code blocks', () => {
 
       expect(plain(renderProseMarkdown(markdown, 24))[0]).toBe('│ flowchart TD')
     }
+  })
+
+  test('compacts oversized flowcharts with subgraphs and composite shapes', () => {
+    const source = [
+      '```mermaid',
+      'flowchart LR',
+      '  subgraph OUT["Outside the owner"]',
+      '    WEB["web client deliberately made wide"]',
+      '  end',
+      '  subgraph OWNER["Owner"]',
+      '    direction TB',
+      '    subgraph MODS["Modules"]',
+      '      CAT["catalog module deliberately made wide"]',
+      '    end',
+      '    DB[("owner tables deliberately made wide")]',
+      '  end',
+      '  WEB -->|"reads<br/>through http"| CAT',
+      '  CAT --- DB',
+      '  WEB --> OWNER',
+      '```',
+    ].join('\n')
+    const lines = plain(renderProseMarkdown(source, 40))
+    const output = lines
+      .map((line) => line.replace(/^│ ?/u, ''))
+      .join(' ')
+      .replaceAll(/\s+/gu, ' ')
+
+    expect(lines[0]).toBe('│ Flowchart')
+    expect(output).toContain('Outside the owner')
+    expect(output).toContain('Owner › Modules')
+    expect(output).toContain('owner tables deliberately made wide')
+    expect(output).toContain('1 --> 2 · reads - through http')
+    expect(output).toContain('4. Owner')
+    expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true)
+  })
+
+  test('paints compact relations alike and keeps edge labels readable', () => {
+    const source = [
+      '```mermaid',
+      'flowchart TD',
+      'A[First node deliberately made wide] -->|"labeled"| B[Second node deliberately made wide]',
+      'A --> B',
+      '```',
+    ].join('\n')
+    const raw = renderProseMarkdown(source, 24)
+    const relations = raw.filter((line) => /1 --> 2/u.test(plain([line])[0] ?? ''))
+
+    expect(relations).toHaveLength(2)
+    const prefix = (line: string) => line.slice(0, line.indexOf('1 --> 2'))
+    expect(prefix(relations[0] ?? '')).toBe(prefix(relations[1] ?? ''))
+    expect(plain(raw).join(' ')).toContain('1 --> 2 · labeled')
+  })
+
+  test('falls back for unbalanced subgraphs', () => {
+    for (const body of [
+      'subgraph G["Group"]\nA[First node deliberately made wide] --> B[Second node deliberately made wide]',
+      'direction LR\nA[First node deliberately made wide] --> B[Second node deliberately made wide]',
+    ]) {
+      const markdown = `\`\`\`mermaid\nflowchart TD\n${body}\n\`\`\``
+
+      expect(plain(renderProseMarkdown(markdown, 24))[0]).toBe('│ flowchart TD')
+    }
+  })
+
+  test('keeps the diagram when an edge label uses a line break', () => {
+    const lines = plain(
+      renderProseMarkdown('```mermaid\nflowchart LR\nA -->|"one<br/>two"| B\n```', 80),
+    )
+
+    expect(lines[0]).not.toBe('│ Flowchart')
+    expect(lines.join('\n')).toContain('one two')
   })
 
   test('falls back for grapheme widths that differ from Pi', () => {

@@ -10,13 +10,19 @@ const compactSourceLimit = 64_000
 const compactNodeLimit = 128
 const compactEdgeLimit = 512
 const compactStatementLimit = 1_024
+const compactLineBreak = ' - '
 function isCompactNodeCharacter(char: string): boolean {
   return char === '_' || /[\p{Letter}\p{Number}]/v.test(char)
 }
 
-type CompactNode = { id: string; label: string }
+type CompactNode = { group: string | undefined; id: string; label: string; labeled: boolean }
 type CompactEdge = { from: number; label: string | undefined; operator: string; to: number }
-type CompactGraph = { edges: CompactEdge[]; index: Map<string, number>; nodes: CompactNode[] }
+type CompactGraph = {
+  edges: CompactEdge[]
+  groups: Map<string, string>
+  index: Map<string, number>
+  nodes: CompactNode[]
+}
 type CompactNodeRead = { id: string; label: string | undefined; next: number }
 type CompactLinkRead = { label: string | undefined; next: number; operator: string }
 
@@ -34,13 +40,13 @@ function compactLabel(source: string): string | undefined {
     const content = trimmed.slice(1, -1)
     if (content.includes('"')) return undefined
     return content
-      .replaceAll(/<br\s*\/?\s*>/giu, ' ')
+      .replaceAll(/\s*<br\s*\/?\s*>\s*/giu, compactLineBreak)
       .replaceAll(/\s+/gu, ' ')
       .trim()
   }
   if (trimmed.includes('"')) return undefined
   return trimmed
-    .replaceAll(/<br\s*\/?\s*>/giu, ' ')
+    .replaceAll(/\s*<br\s*\/?\s*>\s*/giu, compactLineBreak)
     .replaceAll(/\s+/gu, ' ')
     .trim()
 }
@@ -77,16 +83,32 @@ function compactStatements(source: string): string[] | undefined {
   return result
 }
 
+const compactLabelDelimiters: ReadonlyArray<{ closers: ReadonlyArray<string>; opener: string }> = [
+  { opener: '(((', closers: [')))'] },
+  { opener: '[(', closers: [')]'] },
+  { opener: '([', closers: ['])'] },
+  { opener: '[[', closers: [']]'] },
+  { opener: '((', closers: ['))'] },
+  { opener: '{{', closers: ['}}'] },
+  { opener: '[/', closers: ['/]', '\\]'] },
+  { opener: '[\\', closers: ['\\]', '/]'] },
+  { opener: '[', closers: [']'] },
+  { opener: '(', closers: [')'] },
+  { opener: '{', closers: ['}'] },
+  { opener: '>', closers: [']'] },
+]
+
 function readCompactNode(source: string, offset: number): CompactNodeRead | undefined {
   let next = skipSpaces(source, offset)
   const start = next
   while (isCompactNodeCharacter(source[next] ?? '')) next += 1
   if (next === start) return undefined
   const id = source.slice(start, next)
-  const opener = source[next]
-  const closer = opener === '[' ? ']' : opener === '(' ? ')' : opener === '{' ? '}' : undefined
-  if (closer === undefined) return { id, label: undefined, next }
-  const labelStart = next + 1
+  const delimiter = compactLabelDelimiters.find((candidate) =>
+    source.startsWith(candidate.opener, next),
+  )
+  if (delimiter === undefined) return { id, label: undefined, next }
+  const labelStart = next + delimiter.opener.length
   let quoted = false
   let escaped = false
   next = labelStart
@@ -97,13 +119,29 @@ function readCompactNode(source: string, offset: number): CompactNodeRead | unde
       else if (char === '\\') escaped = true
       else if (char === '"') quoted = false
     } else if (char === '"') quoted = true
-    else if (char === closer) {
-      const label = compactLabel(source.slice(labelStart, next))
-      return label === undefined ? undefined : { id, label, next: next + 1 }
+    else {
+      const closer = delimiter.closers.find((candidate) => source.startsWith(candidate, next))
+      if (closer !== undefined) {
+        const label = compactLabel(source.slice(labelStart, next))
+        return label === undefined ? undefined : { id, label, next: next + closer.length }
+      }
     }
     next += 1
   }
   return undefined
+}
+
+function readCompactSubgraph(
+  statement: string,
+): { id: string | undefined; title: string } | undefined {
+  const rest = statement.replace(/^subgraph\s+/iu, '')
+  if (rest.length === 0 || rest === statement) return undefined
+  const node = readCompactNode(rest, 0)
+  if (node !== undefined && skipSpaces(rest, node.next) === rest.length) {
+    return { id: node.id, title: node.label ?? node.id }
+  }
+  const title = compactLabel(rest)
+  return title === undefined || title.length === 0 ? undefined : { id: undefined, title }
 }
 
 function compactOperatorAt(source: string, offset: number): { next: number; operator: string } {
@@ -182,20 +220,30 @@ function readCompactLink(source: string, offset: number): CompactLinkRead | unde
   return readCompactInlineLabel(source, next)
 }
 
-function addCompactNode(graph: CompactGraph, node: CompactNodeRead): number | undefined {
+function addCompactNode(
+  graph: CompactGraph,
+  node: CompactNodeRead,
+  group: string | undefined,
+): number | undefined {
   const existing = graph.index.get(node.id)
   if (existing !== undefined) {
     if (node.label !== undefined) {
       const current = graph.nodes[existing]
       if (current === undefined) return undefined
       current.label = node.label
+      current.labeled = true
     }
     return existing
   }
   if (graph.nodes.length >= compactNodeLimit) return undefined
   const index = graph.nodes.length
   graph.index.set(node.id, index)
-  graph.nodes.push({ id: node.id, label: node.label ?? node.id })
+  graph.nodes.push({
+    group: graph.groups.has(node.id) ? undefined : group,
+    id: node.id,
+    label: node.label ?? node.id,
+    labeled: node.label !== undefined,
+  })
   return index
 }
 
@@ -205,16 +253,28 @@ function parseCompactFlowchart(source: string): CompactGraph | undefined {
   if (!/^(?:graph|flowchart)(?:\s+(?:TD|TB|BT|LR|RL))?\s*$/iu.test(statements[0] ?? '')) {
     return undefined
   }
-  const graph: CompactGraph = { edges: [], index: new Map(), nodes: [] }
+  const graph: CompactGraph = { edges: [], groups: new Map(), index: new Map(), nodes: [] }
+  const stack: string[] = []
   for (const statement of statements.slice(1)) {
-    if (
-      /^(?:subgraph|end|classDef|class|style|linkStyle|click|direction)(?:\s|$)/iu.test(statement)
-    ) {
+    if (/^subgraph(?:\s|$)/iu.test(statement)) {
+      const subgraph = readCompactSubgraph(statement)
+      if (subgraph === undefined) return undefined
+      if (subgraph.id !== undefined) graph.groups.set(subgraph.id, subgraph.title)
+      stack.push(subgraph.title)
+      continue
+    }
+    if (/^end$/iu.test(statement)) {
+      if (stack.pop() === undefined) return undefined
+      continue
+    }
+    if (/^direction\s+(?:TD|TB|BT|LR|RL)$/iu.test(statement) && stack.length > 0) continue
+    if (/^(?:end|classDef|class|style|linkStyle|click|direction)(?:\s|$)/iu.test(statement)) {
       return undefined
     }
+    const group = stack.length === 0 ? undefined : stack.join(' › ')
     let current = readCompactNode(statement, 0)
     if (current === undefined) return undefined
-    let from = addCompactNode(graph, current)
+    let from = addCompactNode(graph, current, group)
     if (from === undefined) return undefined
     for (;;) {
       const link = readCompactLink(statement, current.next)
@@ -224,12 +284,17 @@ function parseCompactFlowchart(source: string): CompactGraph | undefined {
       }
       const target = readCompactNode(statement, link.next)
       if (target === undefined) return undefined
-      const to = addCompactNode(graph, target)
+      const to = addCompactNode(graph, target, group)
       if (to === undefined || graph.edges.length >= compactEdgeLimit) return undefined
       graph.edges.push({ from, label: link.label, operator: link.operator, to })
       current = target
       from = to
     }
+  }
+  if (stack.length > 0) return undefined
+  for (const node of graph.nodes) {
+    const title = graph.groups.get(node.id)
+    if (title !== undefined && !node.labeled) node.label = title
   }
   return graph.nodes.length === 0 ? undefined : graph
 }
@@ -240,10 +305,10 @@ function appendCompactText(
   first: string,
   rest: string,
   width: number,
-  style: ProseStyleTable[keyof ProseStyleTable],
+  style: ProseStyleTable[keyof ProseStyleTable] | undefined,
 ): void {
   const contentWidth = Math.max(1, width - Math.max(visibleWidth(first), visibleWidth(rest)))
-  const wrapped = wrapTextWithAnsi(paint(text, style), contentWidth)
+  const wrapped = wrapTextWithAnsi(style === undefined ? text : paint(text, style), contentWidth)
   if (wrapped.length === 0) {
     lines.push(first)
     return
@@ -261,29 +326,32 @@ function renderCompactFlowchart(
   const lines: string[] = []
   appendCompactText(lines, 'Flowchart', '', '', width, styles.subheading)
   appendCompactText(lines, 'Nodes', '', '', width, styles.subheading)
+  const grouped = graph.nodes.some((node) => node.group !== undefined)
+  let currentGroup: string | undefined
   graph.nodes.forEach((node, index) => {
+    if (grouped && index > 0 ? node.group !== currentGroup : node.group !== undefined) {
+      appendCompactText(lines, node.group ?? 'Ungrouped', '', '', width, styles.linkLabel)
+    }
+    currentGroup = node.group
+    const indent = grouped ? '  ' : ''
     const marker = `${index + 1}. `
     appendCompactText(
       lines,
       node.label,
-      paint(marker, styles.linkLabel),
-      ' '.repeat(marker.length),
+      `${indent}${paint(marker, styles.linkLabel)}`,
+      ' '.repeat(indent.length + marker.length),
       width,
       styles.text,
     )
   })
   appendCompactText(lines, 'Connections', '', '', width, styles.subheading)
   graph.edges.forEach((edge) => {
-    const relation = `${edge.from + 1} ${edge.operator} ${edge.to + 1}`
-    const text = edge.label === undefined ? relation : `${relation} · ${edge.label}`
-    appendCompactText(
-      lines,
-      text,
-      '',
-      '  ',
-      width,
-      edge.label === undefined ? styles.codeBorder : styles.linkUrl,
-    )
+    const relation = paint(`${edge.from + 1} ${edge.operator} ${edge.to + 1}`, styles.codeBorder)
+    const text =
+      edge.label === undefined
+        ? relation
+        : `${relation}${paint(' · ', styles.linkUrl)}${paint(edge.label, styles.text)}`
+    appendCompactText(lines, text, '', '  ', width, undefined)
   })
   return lines
 }
@@ -345,18 +413,28 @@ function hasParallelRoutes(source: string): boolean {
   return false
 }
 
+function normalizedEdgeLabel(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim()
+  const unquoted =
+    trimmed?.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed
+  const label = unquoted
+    ?.replaceAll(/<br\s*\/?\s*>/giu, ' ')
+    .replaceAll(/\s+/gu, ' ')
+    .trim()
+  return label === undefined || label.length === 0 ? undefined : label
+}
+
 function sourceEdgeLabels(source: string): string[] {
   const labels: string[] = []
   for (const match of source.matchAll(/\|([^|\n]+)\|/gu)) {
-    const raw = match[1]?.trim()
-    const label = raw?.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw
-    if (label !== undefined && label.length > 0) labels.push(label)
+    const label = normalizedEdgeLabel(match[1])
+    if (label !== undefined) labels.push(label)
   }
   for (const match of source.matchAll(
     /(?:--|==|-\.)[ \t]+(?:"([^"\n]+)"|([^|\n]+?))[ \t]+(?:-->|==>|\.->)/gu,
   )) {
-    const label = (match[1] ?? match[2])?.trim()
-    if (label !== undefined && label.length > 0) labels.push(label)
+    const label = normalizedEdgeLabel(match[1] ?? match[2])
+    if (label !== undefined) labels.push(label)
   }
   return labels
 }
