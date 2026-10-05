@@ -48,4 +48,4 @@ Write Overview, Key Concepts, How It Works, Where Things Live, and Gotchas when 
 Link claims to source ranges or executed evidence. Distinguish observations from inferences and unresolved questions.
 Use a diagram when it clarifies ownership or data flow.
 Do not dump annotated source or duplicate the complete investigation transcript.
-For a pending change, retain the original question, decisive evidence, constraints, and open questions for the same owner.
+For a pending change, retain the original question, decisive evidence, constraints, and open questions for the issue owner's next round.

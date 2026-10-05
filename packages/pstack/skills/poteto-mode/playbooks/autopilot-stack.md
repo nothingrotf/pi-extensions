@@ -6,11 +6,13 @@ This playbook grants no merge authority.
 Use `../references/delivery-operations.md` for root model selection, compact checkpoints, waiting, and recovery.
 
 1. **Keep durable issue owners.**
-   Assign one persistent implementer per issue and one independent reviewer that never wrote its code.
+   Assign one implementer role per issue and one independent reviewer that never wrote its code.
+   Give each round to a fresh agent with consolidated scope, per poteto-mode's Subagents section.
    Pass the per-issue fields from `../references/delivery-contract.md` inside the Task prompt.
    Retain the accepted design, artifact identities, verification owner, acceptance criteria, and an uncommitted `decisions.tsv`.
    Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
-   Resume the same implementer for compatible corrections after verifying the retained artifact and reconstruction instructions.
+   Give each fix round, follow-up, and retry to a fresh implementer with the retained artifact and the consolidated scope from the checkpoint.
+   After each verifiable unit, publish a WIP snapshot through `../references/delivery-operations.md`.
    Diagnose repeated incomplete returns through the delivery operations procedure before another equivalent dispatch.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
    If the owner must delegate, use `pstack-nested` within its depth limit.
@@ -26,14 +28,18 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 
 3. **Honor operator gates and audit wakeups.**
    If the operator requests a plan, state it and wait for an explicit go.
-   After that go, arm a `/goal` with the full stack objective.
-   Arm audits with the installed `loop` skill, event watchers when available, and a 30-minute heartbeat fallback.
+   Run an audit tick every hour.
+   On that go, arm `/loop 1h` through the installed `loop` skill with a prompt that runs this tick.
+   Add event watchers when they exist, and keep the 1-hour heartbeat as their fallback.
+   Never leave the cadence to memory or lossy completion notifications.
    Use `TaskControl.wait` when no independent work remains, with the typed arguments from `../references/task-contracts.md`.
    Never use shell `sleep` to await children or wait for the heartbeat after a completion.
    At each audit, read the compact checkpoint and inspect changed evidence.
    Reload this playbook only when its instructions change or a decision requires it.
    Inspect Task status, evidence, checks, branch changes, and decision trails.
+   Judge each owner by its WIP snapshot branch and decision trail.
    Diagnose a lane that exceeds its expected runtime without evidence before replacing its owner.
+   Replace an owner whose agent cannot start a turn.
    Cancel a stuck writer before replacing it from retained scope and evidence.
    On an operator stop, cancel isolated writers and stop publication dispatches.
    Steering alone cannot enforce an immediate zero-write hold.
@@ -46,10 +52,10 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    For combined static and runtime checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
    For static-only review, use `role: "code review"` with read-only tools.
    Select one permitted model from the required family, not every pool entry.
-   Preserve that role and contract on compatible corrections, and require one complete verdict.
+   Keep that role and contract for each correction round's fresh reviewer, and require one complete verdict.
    Reuse the pinned harness, not an unverified surrogate artifact.
    For distinct high-risk boundaries or an explicit swarm requirement, partition verification through the **swarm** skill.
-   Return findings to the same implementer and affected evidence to the same reviewer.
+   Send findings to a fresh implementer and affected evidence to a fresh independent reviewer, each with consolidated scope.
    Apply the delivery contract's evidence invalidation rules after corrections.
    Keep unresolved or unavailable proofs blocked, not clean.
 
@@ -65,7 +71,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    When publication returns the PR URL, the root starts the assigned loop through `playbooks/babysit.md`.
    Keep one babysitter at the stack's merge frontier while independent builds continue.
    Use `background` while independent builds continue, or `check` for small or docs-only PRs.
-   Return code fixes to the same implementer and publish accepted corrections through the foreground destination boundary.
+   Give code fixes to a fresh implementer and publish accepted corrections through the foreground destination boundary.
    Update the checkpoint after each verdict and publication before advancing to the next issue.
 
 6. **Keep one topology writer.**
@@ -81,7 +87,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 7. **Reverify affected drift.**
    For Graphite, use `gt restack` and `gt sync`.
    For GitHub, use `gh stack rebase` and `gh stack sync`.
-   Return conflicts to the implementer that owns the affected files, then push through the foreground destination boundary.
+   Give conflicts to a fresh implementer for the issue that owns the affected files, then push through the foreground destination boundary.
    Compare each old and new base-to-head diff with `git patch-id --stable`.
    A changed patch returns to verification.
    An unchanged patch retains its code verdict but still requires current mergeability and CI.

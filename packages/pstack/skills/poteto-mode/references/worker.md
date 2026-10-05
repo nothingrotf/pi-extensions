@@ -80,7 +80,7 @@ Keep an acceptance matrix with executed evidence for every criterion.
 Return incomplete work as WIP with its exact remaining obligations, never as a verification candidate.
 An edit mismatch is recoverable and does not justify abandoning actionable work.
 
-Before resuming edits, verify the current workspace identity and any retained continuation receipt.
+Before editing in a fresh or resumed attempt, verify the current workspace identity and any retained continuation receipt.
 A resumed conversation does not preserve previous processes, dependencies, or incidental harness files.
 Use `delivery-operations.md` for reconstruction or runtime setup that the retained evidence does not already resolve.
 Never write through an absolute source-checkout path or recover WIP by resetting unrelated files.

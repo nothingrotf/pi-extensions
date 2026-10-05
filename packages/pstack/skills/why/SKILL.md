@@ -7,7 +7,7 @@ disable-model-invocation: true
 # Why
 
 Investigate motivation in the current session by default, including inside a leaf Task.
-Keep the same issue owner from evidence collection through an authorized implementation.
+Within one round, keep evidence collection and an authorized implementation in the same issue owner.
 Do not assign one agent per source category or create a separate synthesis Task by default.
 
 Read [Epistemics](references/epistemics.md) before interpreting historical evidence.
@@ -63,7 +63,7 @@ Use these settings for an investigator:
 
 Omit `Task.model` for the scalar policy. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
 Use [Investigator prompt](references/investigator-prompt.md) with the original question, code anchor, and bounded evidence bundle.
-Resume the investigator only for necessary follow-up evidence. Check its citations through the original sources before accepting its findings.
+Give necessary follow-up evidence to a fresh investigator with the original question and its prior findings. Check its citations through the original sources before accepting its findings.
 The `why synthesizer` role remains available for explicitly delegated standalone synthesis, not an automatic handoff.
 Use [Synthesizer prompt](references/synthesizer-prompt.md) for that explicit assignment.
 

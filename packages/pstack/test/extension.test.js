@@ -72,7 +72,7 @@ describe('pstack extension', () => {
         },
         {
           description:
-            'Scoped Poteto issue owner or reviewer. Preserves evidence and conversation across compatible corrections. Loads its worker contract and assigned workflow without the full coordinator catalog.',
+            "Scoped Poteto issue owner or reviewer for one round of work. Spawn a fresh `poteto-agent` for each new round, and resume one only in the strict cases that poteto-mode's Subagents section names. Loads its worker contract and assigned workflow without the full coordinator catalog.",
           capabilityProfile: 'pstack-leaf',
           is_background: true,
           name: 'poteto-agent',

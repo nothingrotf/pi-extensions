@@ -77,8 +77,8 @@ A recurring contract defect or a structural regression also requires diagnosis b
 Classify the cause as implementation, environment, execution contract, context, or external decision.
 A new passing criterion establishes progress. A changed captured result tree also establishes progress when the completed attempt cites a successful command receipt. Cite that receipt in a criterion or finding. Patch changes alone, repeated result trees, and uncited commands do not establish progress. This check permits another correction without promoting WIP or proving an unresolved criterion.
 Fix shared environment failures once before redispatching affected work.
-Preserve compatible owners when they can continue from a precise correction brief.
-If context or artifact access requires replacement, consolidate the checkpoint before creating a fresh owner.
+Give each correction to a fresh owner with a precise correction brief.
+Consolidate the checkpoint before creating that fresh owner.
 Cancel a still-running writer before replacing it.
 
 For a structural diagnosis, dispatch one `pstack-leaf` with `role: "hardest tasks"` and the configured selector.
@@ -86,8 +86,26 @@ Do not hardcode a model override or reopen accepted design automatically.
 Supply the exact artifact, prior findings, failed correction, and executable reproduction.
 Require a cause, bounded correction proposal, and regression test plan.
 Diagnosis grants no implementation, publication, or acceptance authority.
-Return the diagnosis to the implementation owner and retain independent verification afterward.
+Give the diagnosis to the next fresh implementation owner and retain independent verification afterward.
 A retry threshold triggers diagnosis, never automatic acceptance or silent abandonment.
+
+## WIP snapshots
+
+In Autopilot-full and Autopilot-stack, the root publishes a WIP snapshot after each verifiable unit.
+The snapshot gives the audit tick and the next fresh owner a durable remote trail before acceptance.
+
+1. Record the terminal attempt and read its isolation receipt.
+2. Create a scratch worktree at the recorded base SHA. If the baseline is not a commit, skip the push and record the gap.
+3. Apply the retained WIP patch through the new-attempt steps in Artifact and continuation preflight.
+4. Commit only the applied patch, with hooks on, as `wip: <issue> <unit>`. Never bypass a hook.
+5. Push to the issue's own `wip/<issue>` branch. Before a rewritten push, verify the remote tip with `git ls-remote` and use `--force-with-lease=<branch>:<observed-tip>`.
+6. Record the branch, commit SHA, and patch digest in the checkpoint, then remove the scratch worktree.
+
+If a hook fails, keep the unit as unpublished WIP and record the failure in the checkpoint.
+A WIP snapshot is not a candidate, an acceptance, or a PR publication.
+Never push isolation snapshot history, open a PR from a `wip/` branch, or push WIP to a PR branch.
+Publication still starts from the accepted artifact after independent verification.
+Delete the `wip/<issue>` branch after the issue lands or closes.
 
 ## Managed dispatch binding
 
@@ -158,8 +176,9 @@ The failure retains the original receipt and names its artifacts for recovery.
 Use a fresh authorized issue owner to reconcile that evidence when the original baseline cannot be restored safely.
 Never reset unrelated source edits or discard WIP to force a resume.
 
-Before resuming, retain the WIP patch URI, SHA-256, baseline tree, result tree, and per-criterion evidence.
+Before a correction round, retain the WIP patch URI, SHA-256, baseline tree, result tree, and per-criterion evidence.
 Pass retained evidence and any required runtime setup in the correction brief.
+A fresh owner applies the retained WIP through the steps below.
 
 Before editing in a new attempt:
 

@@ -8,7 +8,6 @@ Install the required tools first:
 
 ```sh
 pi install npm:@nothingrotf/ask
-pi install npm:@nothingrotf/goal
 pi install npm:@nothingrotf/loop
 pi install npm:@nothingrotf/session-history
 pi install npm:@nothingrotf/subagent
@@ -25,15 +24,17 @@ Restart Pi after installation.
 
 ## Resources
 
-The package provides 46 upstream skills and four Pi compatibility skills. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 49 upstream skills and four Pi compatibility skills. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
 - `automate-me`
+- `benchmark-checklist`
 - `blast-radius`
 - `bro`
 - `control-cli`
 - `control-ui`
+- `correct`
 - `create-skill`
 - `create-verification-skill`
 - `deslop`
@@ -48,6 +49,7 @@ The package provides 46 upstream skills and four Pi compatibility skills. `make-
 - `principle-encode-lessons-in-structure`
 - `principle-exhaust-the-design-space`
 - `principle-experience-first`
+- `principle-explain-the-number`
 - `principle-fix-root-causes`
 - `principle-foundational-thinking`
 - `principle-guard-the-context-window`
@@ -110,6 +112,21 @@ The following reviewed heads provide the baseline for selective synchronization:
 The port preserves configured model defaults, panel sizes, Pi tools, Task contracts, and stack backends.
 [#416](https://github.com/cursor/plugins/pull/416) at `e6773141c087933005b2a8e3f6cb28a637bda142` only updates upstream documentation.
 
+These later upstream commits are also synchronized:
+
+- [`23e4138d`](https://github.com/cursor/plugins/commit/23e4138daa01c42d4969f7a5465f82704e64f798) adds `principle-explain-the-number`, `benchmark-checklist`, fresh subagents by default, the hourly audit loop, PR body headings, and a schema-first cast example.
+- [#494](https://github.com/cursor/plugins/pull/494) at `9511e60321f7e533a187d62854a3d53a53752874` adds `correct`.
+- [#495](https://github.com/cursor/plugins/pull/495) at `a58628271271837ef5f386adca29c0812683a19a` makes `architect` judge candidates as an agent contributor would change them.
+- [#496](https://github.com/cursor/plugins/pull/496) at `e43c7ee26e0038c6c1fa8380dd34ce86ff94cb2a` replaces the Perf issue strategy families with the performance mantras.
+
+The Pi port adapts these commits:
+
+- A fix round, a follow-up, a retry, and the next queue item go to a fresh agent. The managed delivery ledger supplies the consolidated scope.
+- Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
+- Isolated owners do not push. The root publishes each verifiable unit as a WIP snapshot on a `wip/<issue>` branch.
+- The built-in PR tool rule is omitted because Pi has no built-in PR tool.
+- The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
+
 `how` now explains architecture without a Critique mode.
 Existing `how critics:` configuration lines remain valid but no longer publish a dispatch role.
 `setup-pstack` announces which known legacy rows its rewrite removes before confirmation.
@@ -150,11 +167,12 @@ Older records without a role remain unlabeled rather than receiving a guessed ro
 
 ## Delivery throughput
 
-Bounded work uses an accepted design, one persistent implementer, and one independent reviewer.
+Bounded work uses an accepted design, one implementer role, and one independent reviewer.
+Each round, including every correction, goes to a fresh agent with consolidated scope.
 Assign the implementer before reproduction or discovery, not after a separate investigation handoff.
 Run `how` and `why` in that owner's session by default. Delegate only independent slices or explicitly required perspectives.
 Scoped workers load their assigned workflow instead of the coordinator's full routing catalog.
-Compatible corrections retain those owners instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools and manual isolation from their first dispatch. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
+Corrections carry the accepted design, harness, and findings into fresh agents instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools and manual isolation from their first dispatch. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
 New or contested architecture defaults to two candidates and one independent judge.
 A configured model pool does not determine fanout.
 

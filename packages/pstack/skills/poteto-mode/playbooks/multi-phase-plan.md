@@ -32,15 +32,14 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Arm the program
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on her explicit go.
-- [ ] On her go, arm a `/goal` with this exact text. "<The plan path, the PR ids in order, the verification rule, who merges, and the done condition.>"
 - [ ] Read these from trunk at program start. Reload changed instructions or sections needed for a pending decision.
   - [ ] `playbooks/<execution playbook>.md` from the bundled `poteto-mode` skill.
   - [ ] `../swarm/SKILL.md` from the bundled skills.
   - [ ] The bundled `control-ui` or `control-cli` skill used by this program.
   - [ ] `playbooks/opening-a-pr.md` from the bundled `poteto-mode` skill.
   - [ ] `<each other bundled leaf skill path the program uses>`.
-- [ ] Arm the 30-minute audit tick. Use the installed `loop` skill with a watcher and heartbeat fallback. Never leave the cadence to memory.
-- [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the armed /goal and execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint. Send a status message only for changed verdicts, queue states, operator gates, and blockers not already reported. If none changed, produce no reply text. Record which changes the operator status covered in the checkpoint. Always append the tick's row to the decision log named in that checkpoint."
+- [ ] On her go, arm the audit tick as `/loop 1h` with the tick prompt below through the installed `loop` skill. Add an event watcher when one exists, with the 1-hour heartbeat as its fallback. Never leave the cadence to memory.
+- [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint. Send a status message only for changed verdicts, queue states, operator gates, and blockers not already reported. If none changed, produce no reply text. Record which changes the operator status covered in the checkpoint. Always append the tick's row to the decision log named in that checkpoint."
 - [ ] Use `TaskControl.wait` when no independent work remains. Handle completion without waiting for the audit tick.
 - [ ] Follow `../references/delivery-operations.md` for reconstruction, runtime preflight, checkpoints, and stalled corrections.
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.

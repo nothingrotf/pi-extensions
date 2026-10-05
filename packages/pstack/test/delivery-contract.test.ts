@@ -73,7 +73,13 @@ describe('pstack delivery contract', () => {
     expect(poteto).toContain('Crossing a function is not a design trigger')
     expect(poteto).toContain('genuinely new or contested contracts, ownership, state, or security')
     expect(poteto).toContain('references/delivery-contract.md')
-    expect(poteto).toContain('Assign the persistent implementer before reproduction or discovery')
+    expect(poteto).toContain('Assign the implementer before reproduction or discovery')
+    expect(poteto).toContain('**Fresh subagents by default.**')
+    expect(poteto).toContain(
+      'This holds for a fix round, a follow-up, a retry, and the next queue item.',
+    )
+    expect(poteto).toContain('A stop or hold order to a running agent is not reuse.')
+    expect(poteto).not.toContain('Keep compatible owners')
     expect(poteto).toContain('One independent reviewer')
     expect(poteto).toContain('Two independent issue lanes')
     expect(poteto).toContain(laneRule)
@@ -90,7 +96,7 @@ describe('pstack delivery contract', () => {
     expect(poteto).toContain('references/throughput.md')
   })
 
-  it('keeps one implementer, one reviewer, and two issue lanes in the autopilots', () => {
+  it('keeps one implementer role, fresh rounds, and two issue lanes in the autopilots', () => {
     for (const playbook of ['autopilot-full', 'autopilot-stack']) {
       const source = skill(`poteto-mode/playbooks/${playbook}.md`)
       expect(source, playbook).toContain('pstack-nested')
@@ -104,11 +110,19 @@ describe('pstack delivery contract', () => {
       expect(source, playbook).toContain('runtime preflight')
       expect(source, playbook).toContain('explicit swarm requirement')
       expect(source, playbook).not.toContain('gets a fresh swarm')
-      expect(source, playbook).toContain('same reviewer')
+      expect(source, playbook).toContain('fresh independent reviewer')
+      expect(source, playbook).not.toContain('same implementer')
+      expect(source, playbook).not.toContain('/goal')
+      expect(source, playbook).toContain('`/loop 1h`')
+      expect(source, playbook).toContain('publish a WIP snapshot')
     }
+    const operations = skill('poteto-mode/references/delivery-operations.md')
+    expect(operations).toContain('## WIP snapshots')
+    expect(operations).toContain('Never bypass a hook.')
+    expect(operations).toContain('Never push isolation snapshot history')
   })
 
-  it('retains compatible review owners and separates destination publication from prose', () => {
+  it('dispatches fresh review rounds and separates destination publication from prose', () => {
     const contract = skill(deliveryContractPath)
     expect(contract).toContain('one complete verdict')
     expect(contract).toContain(
@@ -124,7 +138,10 @@ describe('pstack delivery contract', () => {
       'can own implementation submissions and candidate artifacts',
     )
     expect(contract).toContain('Do not allocate a separate worktree or preparation owner')
-    expect(contract).toContain('Resume a compatible reviewer to complete a missing verdict')
+    expect(contract).toContain(
+      'Give a missing verdict that requires additional inspection or execution to a fresh reviewer',
+    )
+    expect(contract).not.toContain('Resume the same implementer')
     const task = skill('poteto-mode/references/task-contracts.md')
     expect(task).toContain('Never weaken resume validation')
     expect(task).toContain(
@@ -132,9 +149,11 @@ describe('pstack delivery contract', () => {
     )
     const orchestrate = skill('poteto-mode/playbooks/orchestrate.md')
     expect(orchestrate).not.toContain('Never resume-chain a brief')
-    expect(orchestrate).toContain('Resume the same implementer and independent reviewer')
+    expect(orchestrate).toContain(
+      'Give each correction round to a fresh implementer and a fresh independent reviewer',
+    )
     const trail = skill('show-me-your-work/SKILL.md')
-    expect(trail).toContain('Reuse the existing independent reviewer')
+    expect(trail).toContain("Add the trail audit to the brief of the round's independent reviewer")
     expect(trail).toContain('role: "code review"')
     for (const playbook of ['opening-a-pr', 'autopilot-full', 'autopilot-stack']) {
       const source = skill(`poteto-mode/playbooks/${playbook}.md`)

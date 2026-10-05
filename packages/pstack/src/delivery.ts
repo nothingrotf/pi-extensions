@@ -816,7 +816,9 @@ export function recordDelivery(
       (entry) => entry.agentId === submission.agentId && entry.attempt === submission.attempt,
     )
   ) {
-    return reject('This attempt is already recorded. Resume the owner for new evidence.')
+    return reject(
+      'This attempt is already recorded. Dispatch a fresh owner with consolidated scope for new evidence.',
+    )
   }
   if (
     !uniqueIds(report.criteria) ||

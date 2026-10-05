@@ -30,8 +30,8 @@ Verification and publication require resolved artifact identities, not branch na
 
 | Work | Default |
 | --- | --- |
-| Bounded implementation against an accepted design | One persistent implementer and one independent reviewer |
-| Local correction | Same implementer, affected tests, and the same independent reviewer |
+| Bounded implementation against an accepted design | One implementer and one independent reviewer per round |
+| Local correction | A fresh implementer, affected tests, and a fresh independent reviewer, each with consolidated scope |
 | New or contested architecture | Two structurally distinct candidates and one independent judge |
 | Runtime validation | A reusable harness on the actual artifact and configuration |
 
@@ -42,8 +42,8 @@ Preserve explicit user review gates, including a requested full swarm.
 
 ## Lanes and ownership
 
-Assign one implementer before reproduction or discovery and retain it through compatible corrections.
-The same owner gathers evidence, investigates, implements, and executes self-proof.
+Assign the implementer before reproduction or discovery.
+Within one round, the same agent gathers evidence, investigates, implements, and executes self-proof.
 Run `how` and `why` locally by default. A phase boundary alone does not justify a new Task.
 For managed delivery, keep the issue owner as a direct Task of the coordinator that owns the ledger.
 Delegated coordinators do not inherit that ledger or its managed acceptance hooks.
@@ -133,14 +133,18 @@ Those phases do not rerun `how` or `architect` for the same decision.
 Return missing, incompatible, or contested design to the coordinator before implementing a different contract.
 A leaf returns required delegation instead of bypassing its capability profile.
 
-Resume the same implementer and verifier while their execution contracts remain compatible.
+Give each new round to a fresh agent with consolidated scope, per the poteto-mode Subagents section.
+A fix round, a follow-up, a retry, and the next queue item are new rounds.
+Consolidated scope is the original brief, every later directive, the evidence brief, the prior report, the current artifact, the harness, and open findings.
+Resume an existing agent only when the new work strictly needs state that lives in it and is costly to move.
+Unaccepted WIP that no retained patch captures and a process that the agent still runs are such state.
 Use report repair for a malformed verdict backed by complete retained evidence.
-Resume a compatible reviewer to complete a missing verdict that requires additional inspection or execution.
+Give a missing verdict that requires additional inspection or execution to a fresh reviewer with the prior report and receipt locators.
+A fresh reviewer must also never have written the code under review.
 If runtime resume validation rejects a changed contract, create a fresh child from the saved brief and evidence.
 A new role, required tool set, model family, or incompatible artifact access requires a fresh contract.
-A diagnosed context failure can also require a fresh owner with a consolidated brief.
 Follow the stalled-correction procedure before repeating an equivalent incomplete dispatch.
-Carry the existing harness and findings into that replacement instead of restarting discovery.
+Carry the existing harness and findings into each fresh agent instead of restarting discovery.
 Do not weaken capability checks to retain an identity.
 
 Keep publication separately scoped and foreground after artifact acceptance and required verification.

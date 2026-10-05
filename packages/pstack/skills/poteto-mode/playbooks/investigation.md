@@ -9,6 +9,6 @@ Investigation requests are read-only. They produce a cited explanation or a reco
 3. Produce the `how`-shaped output (Overview / Key Concepts / How It Works / Where Things Live / Gotchas), or a recommendation with a tradeoffs table if the request is a decision between alternatives.
 4. Apply the **unslop** skill to the reply.
 
-No PR, no babysit, and no `architect` for a read-only answer. If the user authorizes a code change, keep the same compatible owner and re-route to Bug fix or Feature with its original evidence.
+No PR, no babysit, and no `architect` for a read-only answer. If the user authorizes a code change, give the work to a fresh owner with the investigation's evidence and re-route to Bug fix or Feature with its original evidence.
 
 **Reply:** the investigation output. For "are we sure?" answers, include your real judgment with reasons. Push back if the premise is wrong (see Autonomy).

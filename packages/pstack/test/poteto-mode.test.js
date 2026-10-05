@@ -135,6 +135,20 @@ describe('poteto-mode', () => {
     expect(result.stdout).toContain('1 PR sections, 0 problems')
   })
 
+  it('rejects a plan that does not arm the hourly audit loop', () => {
+    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
+    const plan = playbook
+      .split('````markdown\n')[1]
+      .split('\n````')[0]
+      .replace('`/loop 1h`', '`/loop 30m`')
+    const path = join(tmpdir(), `poteto-plan-loop-${process.pid}.md`)
+    writeFileSync(path, plan)
+    const result = run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
+    rmSync(path, { force: true })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Program checklist lacks "/loop 1h"')
+  })
+
   it('runs the orchestration store through the bundled CLI', () => {
     const orch = join(skillRoot, 'scripts', 'orch', 'orch')
     const store = join(tmpdir(), `poteto-orch-${process.pid}`)
