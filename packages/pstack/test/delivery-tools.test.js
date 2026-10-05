@@ -26,9 +26,11 @@ import {
   registerDeliveryProtocol,
   validateDeliveryTerminal,
 } from '../src/delivery-tools.ts'
+import { deliveryView } from '../src/delivery-views.ts'
 import {
   deliveryRepairIdentity,
   DeliveryOutputSchema,
+  parseDeliveryIssue,
   recordDelivery,
   repairDeliveryReport,
 } from '../src/delivery.ts'
@@ -62,6 +64,125 @@ function reply(model, content, stopReason) {
       output: 0,
       totalTokens: 0,
     },
+  }
+}
+
+const PACKET_LIMIT_BYTES = 32 * 1024
+
+function packetEvidence(index, command, reference = `artifact://log-${index}`) {
+  return {
+    command,
+    id: `command:${index}`,
+    kind: 'command',
+    passed: true,
+    reference,
+    sha256: digest(`${index}`),
+    status: 'success',
+  }
+}
+
+function packetSubmission(issue, attempt, evidence, findingIds) {
+  return {
+    agentId: `implementation-${attempt}`,
+    artifact: {
+      repositories: [
+        {
+          base: 'a'.repeat(40),
+          patch: digest(`patch-${attempt}`),
+          relativePath: '',
+          root: '/repo',
+          tree: 'b'.repeat(40),
+        },
+      ],
+    },
+    attempt,
+    evidence,
+    execution: 'completed',
+    integration: 'captured',
+    recordedAt: attempt,
+    report: {
+      criteria: issue.criteria.map((criterion) => ({
+        evidence: [evidence[0]?.id ?? 'command:1'],
+        id: criterion.id,
+        result: 'pass',
+      })),
+      failureClass: 'none',
+      findings: findingIds.map((id) => ({
+        blocking: true,
+        disposition: 'corrected',
+        evidence: [evidence[0]?.id ?? 'command:1'],
+        id,
+      })),
+      issue: issue.issue,
+      kind: 'implementation',
+      reason: 'Candidate ready.',
+      state: 'candidate',
+    },
+    role: 'feature',
+  }
+}
+
+function expectSchemaValid(issue) {
+  const parsed = parseDeliveryIssue(issue)
+  if (!parsed.ok) throw parsed.error
+}
+
+function packetJson(packet, prefix) {
+  const line = packet.split('\n').find((entry) => entry.startsWith(prefix))
+  if (line === undefined) throw new Error(`Missing packet line: ${prefix}`)
+  return JSON.parse(line.slice(line.indexOf(': ') + 2))
+}
+
+function expectRequiredContract(packet, issue) {
+  const lines = packet.split('\n')
+  for (const criterion of issue.criteria) {
+    expect(lines).toContain(`${criterion.id}: ${criterion.description}`)
+  }
+  expect(packet).toContain(
+    `Registered criterion IDs: ${issue.criteria.map((criterion) => criterion.id).join(', ')}.`,
+  )
+  const latest = issue.submissions.at(-1)
+  expect(packet).toContain(`Implementation owner: ${latest?.agentId ?? 'none'}.`)
+  expect(packet).toContain(`Exact candidate identity: ${JSON.stringify(latest?.artifact ?? null)}`)
+  expect(packet).toContain('They are not current command:n or read:n aliases')
+  const terminal = lines.at(-1)
+  expect(terminal?.startsWith('PSTACK_DELIVERY_PACKET:')).toBe(true)
+  const parsed = JSON.parse(terminal?.slice('PSTACK_DELIVERY_PACKET:'.length) ?? 'null')
+  const expected = {
+    criteria: issue.criteria,
+    issue: issue.issue,
+    ownerSessionId: issue.ownerSessionId,
+    runtimeRequired: issue.runtimeRequired,
+  }
+  if (latest?.artifact !== undefined) expected.artifact = latest.artifact
+  expect(parsed).toEqual(expected)
+  const findingIds = [
+    ...new Set(
+      issue.submissions.flatMap((submission) =>
+        submission.report.findings.map((finding) => finding.id),
+      ),
+    ),
+  ]
+  expect(packet).toContain(`Registered finding IDs: ${findingIds.join(', ') || 'none'}.`)
+}
+
+function expectRetrievableOmissions(issue, omitted) {
+  expect(omitted.reads.length).toBeGreaterThan(0)
+  for (const read of omitted.reads) {
+    const view = deliveryView(issue, read)
+    if (!view.ok) throw view.error
+    const page = JSON.parse(view.value.text)
+    if (read.view === 'submission') {
+      const submission = issue.submissions.find(
+        (entry) => entry.agentId === read.agentId && entry.attempt === read.attempt,
+      )
+      expect(page.sha256).toBe(read.sha256)
+      expect(page.sha256).toBe(digest(JSON.stringify(submission)))
+    } else {
+      expect(read).toMatchObject({ offset: 0, view: 'submissions' })
+      expect(page.submissionCount).toBe(issue.submissions.length)
+      expect(page.submissions.length).toBeGreaterThan(0)
+    }
   }
 }
 
@@ -863,6 +984,272 @@ describe('pstack delivery tool interception', () => {
     expect(packet).toContain('"command":"bun run test"')
     expect(packet).toContain('They are not current command:n or read:n aliases')
     expect(packet).toContain('Exact candidate identity')
+  })
+
+  it('bounds repeated maximum-length command history within 32 KiB', () => {
+    const issue = emptyDeliveryIssue('owner', 'bounded-history')
+    issue.criteria.push({
+      description: '\u00dcber-criterion keeps its exact text. \u{1F9EA}',
+      id: 'utf8',
+    })
+    for (let attempt = 1; attempt <= 80; attempt += 1) {
+      issue.submissions.push(
+        packetSubmission(issue, attempt, [packetEvidence(1, 'x'.repeat(4096))], [`F-${attempt}`]),
+      )
+    }
+    expectSchemaValid(issue)
+    const packet = deliveryReviewerPacket(issue)
+    expect(Buffer.byteLength(packet)).toBeLessThanOrEqual(PACKET_LIMIT_BYTES)
+    expectRequiredContract(packet, issue)
+    const receipts = packetJson(packet, 'Digest-addressable retained receipt index: ')
+    const commands = packetJson(packet, 'Prior harness and gate command/log locators: ')
+    const findings = packetJson(packet, 'Prior findings with severity and disposition: ')
+    const omitted = packetJson(packet, 'Omitted retained history: ')
+    expect(receipts.length).toBeGreaterThan(0)
+    expect(receipts.at(-1)).toMatchObject({ agentId: 'implementation-80', attempt: 80 })
+    expect(findings.at(-1)).toMatchObject({ attempt: 80, id: 'F-80' })
+    expect(omitted.included).toEqual({
+      commands: commands.length,
+      findings: findings.length,
+      receipts: receipts.length,
+    })
+    expect(omitted.omitted.receipts + receipts.length).toBe(80)
+    expect(omitted.omitted.commands + commands.length).toBe(80)
+    expect(omitted.omitted.findings + findings.length).toBe(80)
+    expect(omitted.omitted.receipts).toBeGreaterThan(0)
+    expect(omitted.limitBytes).toBe(PACKET_LIMIT_BYTES)
+    expect(commands.at(-1)).toMatchObject({
+      command: 'x'.repeat(512),
+      commandCharacters: 4096,
+      commandTruncated: true,
+    })
+    expect(packet).not.toContain('x'.repeat(513))
+    expectRetrievableOmissions(issue, omitted)
+  }, 60_000)
+
+  it('keeps current owner, repaired review, and recent history order in a bounded packet', () => {
+    let issue = emptyDeliveryIssue('owner', 'bounded-repair')
+    for (let attempt = 1; attempt <= 80; attempt += 1) {
+      issue.submissions.push(
+        packetSubmission(issue, attempt, [packetEvidence(1, 'w'.repeat(4096))], [`F-${attempt}`]),
+      )
+    }
+    const candidate = issue.submissions[79]
+    const patchSha256 = digest('patch-80')
+    const review = {
+      agentId: 'reviewer',
+      artifact: candidate.artifact,
+      attempt: 1,
+      evidence: [
+        {
+          id: 'patch:.',
+          kind: 'patch',
+          passed: true,
+          reference: 'artifact://patch-80',
+          sha256: patchSha256,
+        },
+      ],
+      execution: 'completed',
+      integration: 'captured',
+      recordedAt: 81,
+      report: {
+        criteria: [{ evidence: [], id: 'receipt', result: 'pending' }],
+        failureClass: 'none',
+        findings: [{ blocking: false, disposition: 'open', evidence: ['patch:.'], id: 'R-1' }],
+        issue: issue.issue,
+        kind: 'technical-review',
+        reason: 'Original review reason.',
+        state: 'wip',
+      },
+      role: 'code review',
+    }
+    const recorded = recordDelivery(issue, review)
+    if (!recorded.ok) throw recorded.error
+    const repaired = repairDeliveryReport(recorded.value, {
+      agentId: 'reviewer',
+      attempt: 1,
+      recordedAt: 82,
+      report: {
+        ...review.report,
+        findings: [{ blocking: true, disposition: 'open', evidence: ['patch:.'], id: 'R-1' }],
+        reason: 'Repaired review reason.',
+      },
+      revision: 1,
+      ...deliveryRepairIdentity(review),
+    })
+    if (!repaired.ok) throw repaired.error
+    issue = repaired.value
+    expectSchemaValid(issue)
+    const packet = deliveryReviewerPacket(issue)
+    expect(Buffer.byteLength(packet)).toBeLessThanOrEqual(PACKET_LIMIT_BYTES)
+    const lines = packet.split('\n')
+    expect(lines).toContain(
+      'Implementation owner: implementation-80. Last reporter: reviewer. Last reason: Repaired review reason..',
+    )
+    expect(packet).not.toContain('Original review reason.')
+    expect(lines).toContain('Open blocking findings: R-1.')
+    expect(lines).toContain('Open criteria: none.')
+    expect(lines).toContain(
+      `Registered finding IDs: ${Array.from({ length: 80 }, (_, index) => `F-${index + 1}`).join(', ')}, R-1.`,
+    )
+    expect(lines).toContain(`Exact candidate identity: ${JSON.stringify(candidate.artifact)}`)
+    expect(JSON.parse(lines.at(-1)?.slice('PSTACK_DELIVERY_PACKET:'.length) ?? 'null')).toEqual({
+      artifact: candidate.artifact,
+      criteria: [{ description: 'The report identifies the evidence.', id: 'receipt' }],
+      issue: 'bounded-repair',
+      ownerSessionId: 'owner',
+      runtimeRequired: false,
+    })
+    const findings = packetJson(packet, 'Prior findings with severity and disposition: ')
+    expect(findings.at(-1)).toEqual({
+      agentId: 'reviewer',
+      attempt: 1,
+      disposition: 'open',
+      evidence: ['patch:.'],
+      id: 'R-1',
+      severity: 'blocking',
+    })
+    const receipts = packetJson(packet, 'Digest-addressable retained receipt index: ')
+    expect(receipts.at(-1)).toEqual({
+      agentId: 'reviewer',
+      attempt: 1,
+      id: 'patch:.',
+      kind: 'patch',
+      reference: 'artifact://patch-80',
+      sha256: patchSha256,
+      status: 'success',
+    })
+    const included = receipts.slice(0, -1).map((receipt) => receipt.attempt)
+    const first = included[0]
+    expect(included).toEqual(Array.from({ length: included.length }, (_, index) => first + index))
+    expect(included.at(-1)).toBe(80)
+    const commands = packetJson(packet, 'Prior harness and gate command/log locators: ')
+    expect(commands.map((command) => command.attempt)).toEqual(included)
+    const omitted = packetJson(packet, 'Omitted retained history: ')
+    expect(omitted.omitted).toEqual({
+      commands: first - 1,
+      findings: 81 - findings.length,
+      receipts: first - 1,
+    })
+    expect(omitted.reads[0]).toEqual({
+      action: 'read',
+      agentId: `implementation-${first - 1}`,
+      attempt: first - 1,
+      issue: 'bounded-repair',
+      sha256: digest(JSON.stringify(issue.submissions[first - 2])),
+      view: 'submission',
+    })
+    expectRetrievableOmissions(issue, omitted)
+    const reviewPage = deliveryView(issue, {
+      action: 'read',
+      agentId: 'reviewer',
+      attempt: 1,
+      issue: 'bounded-repair',
+      view: 'submission',
+    })
+    if (!reviewPage.ok) throw reviewPage.error
+    const reviewChunk = JSON.parse(reviewPage.value.text)
+    expect(reviewChunk.sha256).toBe(digest(JSON.stringify(issue.submissions[80])))
+    expect(JSON.parse(reviewChunk.content).reportCorrections[0].report.reason).toBe(
+      'Repaired review reason.',
+    )
+  }, 60_000)
+
+  it('bounds a single submission with the maximum legal evidence rows', () => {
+    const issue = emptyDeliveryIssue('owner', 'bounded-rows')
+    const evidence = Array.from({ length: 8192 }, (_, index) =>
+      packetEvidence(index + 1, 'y'.repeat(4096), 'r'.repeat(4096)),
+    )
+    issue.submissions.push(packetSubmission(issue, 1, evidence, ['F-only']))
+    expectSchemaValid(issue)
+    const packet = deliveryReviewerPacket(issue)
+    expect(Buffer.byteLength(packet)).toBeLessThanOrEqual(PACKET_LIMIT_BYTES)
+    expectRequiredContract(packet, issue)
+    const receipts = packetJson(packet, 'Digest-addressable retained receipt index: ')
+    const omitted = packetJson(packet, 'Omitted retained history: ')
+    expect(receipts.at(-1)).toMatchObject({
+      id: 'command:8192',
+      reference: 'r'.repeat(512),
+      referenceCharacters: 4096,
+      referenceTruncated: true,
+    })
+    expect(omitted.omitted.receipts + receipts.length).toBe(8192)
+    expect(omitted.omitted.receipts).toBeGreaterThan(8000)
+    expect(omitted.reads).toContainEqual({
+      action: 'read',
+      agentId: 'implementation-1',
+      attempt: 1,
+      issue: 'bounded-rows',
+      sha256: digest(JSON.stringify(issue.submissions[0])),
+      view: 'submission',
+    })
+    expectRetrievableOmissions(issue, omitted)
+  }, 120_000)
+
+  it('keeps multibyte history previews well formed and within the UTF-8 budget', () => {
+    const issue = emptyDeliveryIssue('owner', 'bounded-utf8')
+    const command = `a${'\u{1F9EA}'.repeat(2048)}`.slice(0, 4096)
+    const reference = '\u00e9'.repeat(4096)
+    for (let attempt = 1; attempt <= 40; attempt += 1) {
+      issue.submissions.push(
+        packetSubmission(
+          issue,
+          attempt,
+          [packetEvidence(1, command, reference)],
+          [`F-\u00fc-${attempt}`],
+        ),
+      )
+    }
+    expectSchemaValid(issue)
+    const packet = deliveryReviewerPacket(issue)
+    expect(Buffer.byteLength(packet)).toBeLessThanOrEqual(PACKET_LIMIT_BYTES)
+    expect(packet.isWellFormed()).toBe(true)
+    expectRequiredContract(packet, issue)
+    const commands = packetJson(packet, 'Prior harness and gate command/log locators: ')
+    const latest = commands.at(-1)
+    expect(latest.command.isWellFormed()).toBe(true)
+    expect(latest.command).toBe(command.slice(0, 511))
+    expect(latest.commandCharacters).toBe(4096)
+    expect(latest.log).toBe('\u00e9'.repeat(512))
+    expect(latest.logTruncated).toBe(true)
+  })
+
+  it('keeps a multibyte required contract that fits the UTF-8 budget', () => {
+    const issue = emptyDeliveryIssue('owner', 'bounded-fit')
+    issue.criteria = Array.from({ length: 4 }, (_, index) => ({
+      description: '\u20ac'.repeat(1100),
+      id: `criterion-${index}`,
+    }))
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      issue.submissions.push(
+        packetSubmission(issue, attempt, [packetEvidence(1, 'z'.repeat(4096))], [`F-${attempt}`]),
+      )
+    }
+    expectSchemaValid(issue)
+    const packet = deliveryReviewerPacket(issue)
+    expect(Buffer.byteLength(packet)).toBeLessThanOrEqual(PACKET_LIMIT_BYTES)
+    expect(Buffer.byteLength(packet)).toBeGreaterThan(packet.length + 8000)
+    expectRequiredContract(packet, issue)
+    const omitted = packetJson(packet, 'Omitted retained history: ')
+    expect(omitted.omitted.receipts + omitted.included.receipts).toBe(3)
+    expectRetrievableOmissions(issue, omitted)
+  })
+
+  it('rejects a required contract that exceeds the UTF-8 packet budget', () => {
+    const issue = emptyDeliveryIssue('owner', 'bounded-overflow')
+    issue.criteria = Array.from({ length: 4 }, (_, index) => ({
+      description: '\u20ac'.repeat(2048),
+      id: `criterion-${index}`,
+    }))
+    expectSchemaValid(issue)
+    const descriptionUnits = issue.criteria.reduce(
+      (sum, entry) => sum + entry.description.length,
+      0,
+    )
+    expect(descriptionUnits * 2).toBeLessThan(PACKET_LIMIT_BYTES)
+    expect(() => deliveryReviewerPacket(issue)).toThrow(
+      /managed delivery contract needs \d+ UTF-8 bytes, above the 32768-byte packet limit/,
+    )
   })
 
   it('uses report kind, role, and readonly together for read receipt aliases', () => {
@@ -2366,6 +2753,52 @@ describe('pstack delivery tool interception', () => {
         (message) => message.role === 'toolResult' && message.toolCallId === 'mixed-batch',
       )
       expect(result?.content[0]?.text).toContain('issue binding')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rejects an oversized required delivery contract before any Task starts', async () => {
+    const harness = await sessionWithDeliveryTool({
+      beforePrompt(sessionManager) {
+        const issue = emptyDeliveryIssue(sessionManager.getSessionId(), 'oversized-contract')
+        issue.criteria = Array.from({ length: 4 }, (_, index) => ({
+          description: '\u20ac'.repeat(2048),
+          id: `criterion-${index}`,
+        }))
+        sessionManager.appendCustomEntry('@nothingrotf/pstack/delivery-v1', issue)
+      },
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: {
+                description: 'Oversized contract',
+                prompt: 'issue: oversized-contract\nImplement the correction.',
+                role: 'feature',
+                subagent_type: 'generalPurpose',
+              },
+              id: 'oversized',
+              name: 'Task',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Dispatch the oversized contract.', {
+        expandPromptTemplates: false,
+      })
+      expect(harness.observed).toHaveLength(0)
+      const result = harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'oversized',
+      )
+      expect(result?.isError).toBe(true)
+      expect(result?.content[0]?.text).toMatch(
+        /managed delivery contract needs \d+ UTF-8 bytes, above the 32768-byte packet limit/,
+      )
     } finally {
       await harness.close()
     }

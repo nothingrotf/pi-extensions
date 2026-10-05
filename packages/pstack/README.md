@@ -205,6 +205,18 @@ Checkpoint previews expose counts and omission markers. They never replace the f
 Ready-to-use `repair` locators appear in the checkpoint's `recentAttempts`, `view: "submissions"` entries, and the `view: "submission"` paging envelope. Spread that locator into a `pstack_delivery` call and add only the corrected `report`. It pins the issue, agent, attempt, next revision, current report digest, evidence digest, and artifact digest, so callers never hash a guess or inspect raw session JSONL.
 Reading a checkpoint does not reverify its evidence or change acceptance.
 
+Managed Task preflight appends a delivery packet of at most 32 KiB of UTF-8.
+The packet always carries every registered criterion with its exact description.
+It also carries every registered finding ID, the open criteria, and the open blocking findings.
+The current implementation owner, the candidate artifact, and the exact terminal packet are always present.
+Retained findings, receipts, and command locators fill the remaining budget from the most recent attempt backward.
+Commands and references longer than 512 characters appear as marked previews.
+`Omitted retained history` reports included and omitted counts with exact `read` inputs for the omitted rows.
+These inputs resolve only in the coordinator session that owns the issue ledger.
+A leaf Task gains no ledger access from them. It asks its coordinator for omitted detail.
+Retained rows remain prior-attempt locators, not current receipt aliases or proof.
+Preflight rejects the dispatch before any Task starts when the required contract alone exceeds the budget.
+
 `pstack_delivery` declares an output schema for codemode scripts.
 A script receives `{ issue, truncated, page }`, where `page` is the parsed JSON of the text result.
 A script can page through a submission and return only the verdict instead of every chunk.

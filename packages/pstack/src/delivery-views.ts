@@ -97,6 +97,13 @@ function submissionLocator(issue: string, submission: DeliverySubmission) {
   }
 }
 
+export function submissionDigestLocator(issue: string, submission: DeliverySubmission) {
+  return {
+    ...submissionLocator(issue, submission),
+    sha256: createHash('sha256').update(JSON.stringify(submission)).digest('hex'),
+  }
+}
+
 function repairLocator(issue: string, submission: DeliverySubmission) {
   if (
     submission.artifact === undefined ||

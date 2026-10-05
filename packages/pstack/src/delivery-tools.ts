@@ -29,7 +29,12 @@ import {
   readDeliveryJournal,
 } from './delivery-journal.ts'
 import { isDeliveryRole, isImplementationRole } from './delivery-roles.ts'
-import { DeliveryReadSchema, DeliveryToolOutputSchema, deliveryView } from './delivery-views.ts'
+import {
+  DeliveryReadSchema,
+  DeliveryToolOutputSchema,
+  deliveryView,
+  submissionDigestLocator,
+} from './delivery-views.ts'
 import {
   DELIVERY_REASON_LIMIT,
   DeliveryArtifactSchema,
@@ -775,46 +780,209 @@ export function normalizeCompletionWait(input: Static<typeof CompletionWaitSchem
   return true
 }
 
+const deliveryPacketLimitBytes = 32 * 1024
+const historyPreviewCharacters = 512
+
+function previewText(value: string): { text: string; truncated: boolean } {
+  if (value.length <= historyPreviewCharacters) return { text: value, truncated: false }
+  const last = value.charCodeAt(historyPreviewCharacters - 1)
+  const end =
+    last >= 0xd800 && last <= 0xdbff ? historyPreviewCharacters - 1 : historyPreviewCharacters
+  return { text: value.slice(0, end), truncated: true }
+}
+
+function priorFindingRow(entry: DeliverySubmission, finding: DeliveryReport['findings'][number]) {
+  return {
+    agentId: entry.agentId,
+    attempt: entry.attempt,
+    id: finding.id,
+    severity: finding.blocking ? 'blocking' : 'non-blocking',
+    disposition: finding.disposition,
+    evidence: finding.evidence,
+  }
+}
+
+interface ReceiptRow {
+  agentId: string
+  attempt: number
+  id: string
+  kind: DeliveryEvidence['kind']
+  status: 'success' | 'error'
+  sha256: string
+  reference: string
+  referenceCharacters?: number
+  referenceTruncated?: true
+}
+
+function receiptRow(entry: DeliverySubmission, evidence: DeliveryEvidence): ReceiptRow {
+  const reference = previewText(evidence.reference)
+  const row: ReceiptRow = {
+    agentId: entry.agentId,
+    attempt: entry.attempt,
+    id: evidence.id,
+    kind: evidence.kind,
+    status: evidence.status ?? (evidence.passed ? 'success' : 'error'),
+    sha256: evidence.sha256,
+    reference: reference.text,
+  }
+  if (reference.truncated) {
+    row.referenceCharacters = evidence.reference.length
+    row.referenceTruncated = true
+  }
+  return row
+}
+
+interface CommandRow {
+  agentId: string
+  attempt: number
+  id: string
+  command: string | null
+  commandCharacters?: number
+  commandTruncated?: true
+  sha256: string
+  log: string
+  logCharacters?: number
+  logTruncated?: true
+}
+
+function commandRow(entry: DeliverySubmission, evidence: DeliveryEvidence): CommandRow {
+  const log = previewText(evidence.reference)
+  const row: CommandRow = {
+    agentId: entry.agentId,
+    attempt: entry.attempt,
+    id: evidence.id,
+    command: null,
+    sha256: evidence.sha256,
+    log: log.text,
+  }
+  if (evidence.command !== undefined) {
+    const command = previewText(evidence.command)
+    row.command = command.text
+    if (command.truncated) {
+      row.commandCharacters = evidence.command.length
+      row.commandTruncated = true
+    }
+  }
+  if (log.truncated) {
+    row.logCharacters = evidence.reference.length
+    row.logTruncated = true
+  }
+  return row
+}
+
+function isCommandEvidence(evidence: DeliveryEvidence): boolean {
+  return evidence.kind === 'command' || evidence.kind === 'failure'
+}
+
+interface PacketHistory {
+  findings: ReturnType<typeof priorFindingRow>[]
+  receipts: ReceiptRow[]
+  commands: CommandRow[]
+  boundary: number
+}
+
+function selectPacketHistory(issue: DeliveryIssue, budget: number): PacketHistory {
+  const history: PacketHistory = { findings: [], receipts: [], commands: [], boundary: -1 }
+  let used = 0
+  const fits = (rows: readonly object[]) => {
+    const bytes = rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row)) + 1, 0)
+    if (used + bytes > budget) return false
+    used += bytes
+    return true
+  }
+  const finish = (boundary: number) => {
+    history.boundary = boundary
+    history.findings.reverse()
+    history.receipts.reverse()
+    history.commands.reverse()
+    return history
+  }
+  for (let index = issue.submissions.length - 1; index >= 0; index -= 1) {
+    const entry = issue.submissions[index]
+    if (entry === undefined) continue
+    const findings = currentDeliveryReport(entry).findings
+    for (let row = findings.length - 1; row >= 0; row -= 1) {
+      const finding = findings[row]
+      if (finding === undefined) continue
+      const priorFinding = priorFindingRow(entry, finding)
+      if (!fits([priorFinding])) return finish(index)
+      history.findings.push(priorFinding)
+    }
+    for (let row = entry.evidence.length - 1; row >= 0; row -= 1) {
+      const evidence = entry.evidence[row]
+      if (evidence === undefined) continue
+      const receipt = receiptRow(entry, evidence)
+      const command = isCommandEvidence(evidence) ? commandRow(entry, evidence) : undefined
+      if (!fits(command === undefined ? [receipt] : [receipt, command])) return finish(index)
+      history.receipts.push(receipt)
+      if (command !== undefined) history.commands.push(command)
+    }
+  }
+  return finish(-1)
+}
+
+function omittedHistory(issue: DeliveryIssue, history: PacketHistory) {
+  const totals = issue.submissions.reduce(
+    (sum, entry) => ({
+      commands: sum.commands + entry.evidence.filter(isCommandEvidence).length,
+      findings: sum.findings + currentDeliveryReport(entry).findings.length,
+      receipts: sum.receipts + entry.evidence.length,
+    }),
+    { commands: 0, findings: 0, receipts: 0 },
+  )
+  const boundary = issue.submissions[history.boundary]
+  return {
+    limitBytes: deliveryPacketLimitBytes,
+    previewCharacters: historyPreviewCharacters,
+    submissions: issue.submissions.length,
+    included: {
+      commands: history.commands.length,
+      findings: history.findings.length,
+      receipts: history.receipts.length,
+    },
+    omitted: {
+      commands: totals.commands - history.commands.length,
+      findings: totals.findings - history.findings.length,
+      receipts: totals.receipts - history.receipts.length,
+    },
+    earlierSubmissions: Math.max(0, history.boundary),
+    reads: [
+      ...(boundary === undefined ? [] : [submissionDigestLocator(issue.issue, boundary)]),
+      ...(history.boundary > 0
+        ? [{ action: 'read', issue: issue.issue, view: 'submissions', offset: 0, limit: 20 }]
+        : []),
+    ],
+  }
+}
+
 export function deliveryReviewerPacket(issue: DeliveryIssue): string {
+  const empty = selectPacketHistory(issue, -1)
+  const required = Buffer.byteLength(packetText(issue, empty))
+  if (required > deliveryPacketLimitBytes) {
+    throw new DeliveryRejected(
+      `The managed delivery contract needs ${required} UTF-8 bytes, above the ${deliveryPacketLimitBytes}-byte packet limit. Registered criteria, finding IDs, and the terminal packet are never truncated, so the dispatch is rejected before any Task starts.`,
+    )
+  }
+  let budget = deliveryPacketLimitBytes - required
+  for (;;) {
+    const packet = packetText(issue, selectPacketHistory(issue, budget))
+    const excess = Buffer.byteLength(packet) - deliveryPacketLimitBytes
+    if (excess <= 0) return packet
+    budget -= excess
+  }
+}
+
+function packetText(issue: DeliveryIssue, history: PacketHistory): string {
   const summary = summarizeDelivery(issue)
   const latest = issue.submissions.at(-1)
   const owner = issue.submissions.findLast(
     (entry) =>
       currentDeliveryReport(entry).kind === 'implementation' && isImplementationRole(entry.role),
   )
-  const priorFindings = issue.submissions.flatMap((entry) =>
-    currentDeliveryReport(entry).findings.map((finding) => ({
-      agentId: entry.agentId,
-      attempt: entry.attempt,
-      id: finding.id,
-      severity: finding.blocking ? 'blocking' : 'non-blocking',
-      disposition: finding.disposition,
-      evidence: finding.evidence,
-    })),
-  )
-  const findingIds = new Set(priorFindings.map((finding) => finding.id))
-  const receiptIndex = issue.submissions.flatMap((entry) =>
-    entry.evidence.map((evidence) => ({
-      agentId: entry.agentId,
-      attempt: entry.attempt,
-      id: evidence.id,
-      kind: evidence.kind,
-      status: evidence.status ?? (evidence.passed ? 'success' : 'error'),
-      sha256: evidence.sha256,
-      reference: evidence.reference,
-    })),
-  )
-  const commandLocators = issue.submissions.flatMap((entry) =>
-    entry.evidence
-      .filter((evidence) => evidence.kind === 'command' || evidence.kind === 'failure')
-      .map((evidence) => ({
-        agentId: entry.agentId,
-        attempt: entry.attempt,
-        id: evidence.id,
-        command: evidence.command ?? null,
-        sha256: evidence.sha256,
-        log: evidence.reference,
-      })),
+  const findingIds = new Set(
+    issue.submissions.flatMap((entry) =>
+      currentDeliveryReport(entry).findings.map((finding) => finding.id),
+    ),
   )
   return [
     `Managed issue: ${issue.issue}. Delivery: ${summary.state}.`,
@@ -824,13 +992,15 @@ export function deliveryReviewerPacket(issue: DeliveryIssue): string {
     `Open criteria: ${summary.unresolvedCriteria.join(', ') || 'none'}.`,
     ...issue.criteria.map((criterion) => `${criterion.id}: ${criterion.description}`),
     `Registered finding IDs: ${[...findingIds].join(', ') || 'none'}.`,
-    `Prior findings with severity and disposition: ${JSON.stringify(priorFindings)}`,
+    `Prior findings with severity and disposition: ${JSON.stringify(history.findings)}`,
     'Reuse complete finding IDs. Do not abbreviate or renumber them. Put dispositions in findings and explanations in reason.',
     `Open blocking findings: ${summary.unresolvedFindings.join(', ') || 'none'}.`,
     `Implementation owner: ${owner?.agentId ?? 'none'}. Last reporter: ${latest?.agentId ?? 'none'}. Last reason: ${latest === undefined ? 'none' : currentDeliveryReport(latest).reason || 'none'}.`,
     `Exact candidate identity: ${JSON.stringify(summary.artifact ?? null)}`,
-    `Digest-addressable retained receipt index: ${JSON.stringify(receiptIndex)}`,
-    `Prior harness and gate command/log locators: ${JSON.stringify(commandLocators)}`,
+    `Digest-addressable retained receipt index: ${JSON.stringify(history.receipts)}`,
+    `Prior harness and gate command/log locators: ${JSON.stringify(history.commands)}`,
+    `Omitted retained history: ${JSON.stringify(omittedHistory(issue, history))}`,
+    `History rows above are the most recent entries that fit the ${deliveryPacketLimitBytes}-byte packet. Long commands and references show a marked preview. Omitted history stays noncurrent. The listed reads, and view: submission with a row's agentId and attempt, are pstack_delivery inputs for the coordinator session that owns this issue ledger. They do not grant ledger access to this Task. Ask that coordinator for omitted or truncated detail you need.`,
     'Retained receipt entries are prior-attempt locators only. They are not current command:n or read:n aliases and do not establish proof reuse. Current-attempt aliases are created only by tools in this attempt.',
     'Preserve explicit reading requirements. Reuse accepted grounding and inspect only necessary changes when that policy permits.',
     'Return only the JSON report. Do not wrap it in Markdown or surrounding text.',
@@ -1295,9 +1465,10 @@ async function preflight(
       'Managed delivery uses its exact report schema. Do not replace an existing resume contract. Omit outputSchema and schemaMode; the managed preflight installs them.',
     )
   }
+  const packet = deliveryReviewerPacket(issue)
   task.outputSchema = structuredClone(DeliveryOutputSchema)
   task.schemaMode = 'strict'
-  task.prompt = `${promptIssue === undefined ? `issue: ${issueId}\n` : ''}${task.prompt}\n\n${deliveryReviewerPacket(issue)}`
+  task.prompt = `${promptIssue === undefined ? `issue: ${issueId}\n` : ''}${task.prompt}\n\n${packet}`
 }
 
 export function registerDeliveryProtocol(pi: ExtensionAPI): void {
