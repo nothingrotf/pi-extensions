@@ -1,6 +1,8 @@
 ### Autopilot-stack
 
-Build and verify the queue, then deliver one linear reviewed stack for the operator to land.
+Build, verify, and publish the queue one layer at a time.
+Each layer enters the stack as a draft pull request at its first verifiable unit and becomes ready after independent acceptance.
+Deliver one linear reviewed stack for the operator to land.
 Select a backend through `../references/stack-backends.md` before the first topology mutation.
 This playbook grants no merge authority.
 Use `../references/delivery-operations.md` for root model selection, compact checkpoints, waiting, and recovery.
@@ -12,7 +14,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Retain the accepted design, artifact identities, verification owner, acceptance criteria, and an uncommitted `decisions.tsv`.
    Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
    Give each fix round, follow-up, and retry to a fresh implementer with the retained artifact and the consolidated scope from the checkpoint.
-   After each verifiable unit, publish a WIP snapshot through `../references/delivery-operations.md`.
+   After each verifiable unit, publish a WIP snapshot to the layer's draft pull request through `../references/delivery-operations.md`.
    Diagnose repeated incomplete returns through the delivery operations procedure before another equivalent dispatch.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
    If the owner must delegate, use `pstack-nested` within its depth limit.
@@ -23,6 +25,9 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Verify disjoint files, dependencies, branches, and mutable resources before parallel dispatch.
    Lane count follows verified independence, never the size of a configured model pool.
    Serialize dependent changes and shared topology writes.
+   Keep issues in flight at or below the lane count, per Local footprint in `../references/delivery-operations.md`.
+   Start a dependent layer only after its parent layer is accepted and published, and create its destination from the pushed parent branch.
+   Never implement the whole queue first and split it into pull requests later.
    Measure the first two issues through the time-to-acceptance procedure in `../references/throughput.md`.
    Review the pilot before increasing concurrency.
 
@@ -37,7 +42,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    At each audit, read the compact checkpoint and inspect changed evidence.
    Reload this playbook only when its instructions change or a decision requires it.
    Inspect Task status, evidence, checks, branch changes, and decision trails.
-   Judge each owner by its WIP snapshot branch and decision trail.
+   Judge each owner by its draft layer pull request and decision trail.
    Diagnose a lane that exceeds its expected runtime without evidence before replacing its owner.
    Replace an owner whose agent cannot start a turn.
    Cancel a stuck writer before replacing it from retained scope and evidence.
@@ -59,16 +64,20 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Apply the delivery contract's evidence invalidation rules after corrections.
    Keep unresolved or unavailable proofs blocked, not clean.
 
-5. **Publish accepted patches separately.**
+5. **Publish each accepted layer immediately.**
+   Publish a layer as soon as its independent verdict accepts it. Never hold accepted layers locally for a later batch submission.
    Accept the patch before a separately scoped foreground Task commits and pushes the destination branch.
    Pass `role: "publication"` and `capability_profile: "pstack-leaf"` to publication.
    Include commit and PR text in that operation without a separate prose-preparation Task.
    Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
-   Open the PR ready when its intended base exists.
-   Otherwise, open it immediately after attaching it to the stack topology.
+   Publication replaces the draft's snapshot commit with the accepted commit through `--force-with-lease=<branch>:<observed-snapshot-tip>`.
+   It updates the PR title and body, then marks the draft ready with `gh pr ready <number>`.
+   If the layer has no draft PR, publication opens the PR ready on its parent branch.
    Append only accepted patches in verified order or the operator's specified order.
    No implementer or publication Task merges, arms auto-merge, or closes the PR.
-   When publication returns the PR URL, the root starts the assigned loop through `playbooks/babysit.md`.
+   When publication returns the PR URL, confirm through step 6 that the layer is ready and in the stack, in the same root turn.
+   Release the issue's local footprint through `../references/delivery-operations.md` before the next dispatch.
+   Then the root starts the assigned loop through `playbooks/babysit.md`.
    Keep one babysitter at the stack's merge frontier while independent builds continue.
    Use `background` while independent builds continue, or `check` for small or docs-only PRs.
    Give code fixes to a fresh implementer and publish accepted corrections through the foreground destination boundary.
@@ -81,12 +90,15 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Use `git push --force-with-lease=<branch>:<observed-tip>` only for an authorized rewritten child branch.
    If the selected backend cannot enforce that observed tip, block the rewritten push instead of using an implicit lease.
    For Graphite, run `gt track -p <current-tip>` and `gt submit --no-interactive --stack`.
-   For GitHub, run `gh stack init --base <trunk> <branches...>` and `gh stack submit --auto --open`.
+   For GitHub, attach each new layer PR with `gh stack link --remote <remote> --base <trunk> <bottom-to-top PR numbers>` when it opens.
+   Omit `--open` for a draft layer. A ready layer that the stack already contains needs no second link.
+   That command reads remote pull requests and needs no local stack checkout, so the footprint release can follow at once.
    Never mix backend metadata within one run.
 
 7. **Reverify affected drift.**
    For Graphite, use `gt restack` and `gt sync`.
    For GitHub, use `gh stack rebase` and `gh stack sync`.
+   Run a rebase in one temporary stacker worktree created from the remote branches, and release it after the push.
    Give conflicts to a fresh implementer for the issue that owns the affected files, then push through the foreground destination boundary.
    Compare each old and new base-to-head diff with `git patch-id --stable`.
    A changed patch returns to verification.
@@ -95,7 +107,10 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Require a fresh root countersign for a genuinely new increase in a pinned gate or budget.
 
 8. **Deliver without landing.**
+   Run the final footprint audit from `../references/delivery-operations.md`.
+   Leave no run-owned worktree, local branch, container, or volume for a published layer.
    Return the ordered PR chain, owners, head identities, independent verdicts, pilot limits, and evidence locations.
+   Report the local footprint before and after the audit, with the reason for each held resource.
    Include each verifier verdict in the PR body or a comment through the authorized publication boundary.
    The operator reviews and lands the stack through the selected backend.
 

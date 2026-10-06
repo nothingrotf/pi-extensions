@@ -123,7 +123,10 @@ The Pi port adapts these commits:
 
 - A fix round, a follow-up, a retry, and the next queue item go to a fresh agent. The managed delivery ledger supplies the consolidated scope.
 - Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
-- Isolated owners do not push. The root publishes each verifiable unit as a WIP snapshot on a `wip/<issue>` branch.
+- Isolated owners do not push. In Autopilot-full, the root publishes each verifiable unit as a WIP snapshot on a `wip/<issue>` branch.
+- In Autopilot-stack, the root publishes each WIP snapshot to the layer's draft pull request in the stack. Publication marks it ready only after independent acceptance.
+- The root keeps one destination worktree per issue in flight and releases it after publication with `scripts/release-worktree.sh`.
+- Autopilot-stack starts a dependent layer only after its parent layer is accepted and published.
 - The built-in PR tool rule is omitted because Pi has no built-in PR tool.
 - The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
 
@@ -188,6 +191,18 @@ Two incomplete returns without meaningful progress trigger diagnosis, not an ide
 Candidates require a passing criterion matrix before independent verification.
 Structural diagnosis uses the configured `hardest tasks` role without reopening accepted design automatically.
 The root session model remains separate from Task model policy.
+
+## Local footprint
+
+The remote stack holds delivered state. Local worktrees, branches, and services exist only while an issue is in flight.
+The [delivery operations](skills/poteto-mode/references/delivery-operations.md) reference defines the resource ledger and the release triggers.
+
+A completed managed publication Task result ends with a release notice for its destination.
+The notice names `scripts/release-worktree.sh` from the `poteto-mode` skill.
+That script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
+Otherwise, it prints `held` with the reason and exits with status 1.
+
+`scripts/worktree-audit.sh` compares merge state with the remote default branch. Set `POTETO_TRUNK` to override it.
 
 ## Managed delivery protocol
 

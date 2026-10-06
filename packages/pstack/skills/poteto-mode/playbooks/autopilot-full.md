@@ -27,6 +27,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Verify disjoint files, dependencies, branches, and mutable resources before parallel dispatch.
    Lane count follows verified independence, never the size of a configured model pool.
    Serialize overlapping work and shared topology changes.
+   Keep issues in flight at or below the lane count, per Local footprint in `../references/delivery-operations.md`.
    Branch self-contained issues from main and use merge-then-branch for sequenced work.
    If a genuinely dependent split needs a private stack, follow `../references/stack-backends.md`.
    Record the first two issues as the time-to-acceptance pilot through `../references/throughput.md`.
@@ -56,7 +57,8 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Include commit and PR text in that operation without a separate prose-preparation Task.
    Never publish synthetic snapshot history or join a runtime verifier's incidental patch.
    Rebase onto current trunk through the foreground destination boundary before babysit.
-   When publication returns the PR URL, the root starts the assigned loop through `playbooks/babysit.md`.
+   When publication returns the PR URL, release the issue's local footprint through `../references/delivery-operations.md`.
+   Then the root starts the assigned loop through `playbooks/babysit.md`.
    This lifecycle assignment does not require another babysit request or completion of other independent PRs.
    Use `background` while independent builds continue, or `check` for small or docs-only PRs.
    Give code fixes to a fresh implementer and publish accepted corrections through the foreground destination boundary.
@@ -73,7 +75,8 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Also check that no path in `git diff --name-only $(git merge-base HEAD origin/main) origin/main` is a path the PR changes or a path that decides which CI runs for it, such as the repository's CI configuration.
    If either check fails, rebase again through the foreground destination boundary, record the new head SHA, wait for CI on it, and repeat these checks.
    Dispatch landing only with explicit queue landing authority and the root's clean independent verdict.
-   Squash-merge only the accepted PR. A fresh implementer takes the next independent issue.
+   Squash-merge only the accepted PR. Release any worktree or service that the landing recreated.
+   A fresh implementer takes the next independent issue.
    Operator-named items remain merge-ready until the operator acts.
 
 6. **Audit the root layer.**
@@ -102,3 +105,4 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 
 **Reply:** Report each issue's implementer, state, head SHA, and independent verdict.
 List landed work, the next issue each fresh implementer took, countersigns, operator gates, pilot limits, and retained evidence locations.
+Report the final local footprint audit and the reason for each held resource.

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
@@ -4637,7 +4637,16 @@ describe('pstack delivery tool interception', () => {
           (message) => message.role === 'toolResult' && message.toolCallId === 'publication',
         )
         expect(publication?.isError).toBe(blocked)
+        const notice = publication?.content
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n')
+        if (blocked) expect(notice).not.toContain('Release the local footprint')
         if (!blocked) {
+          expect(notice).toContain('Release the local footprint of roundtrip now.')
+          expect(notice).toContain(
+            `bash '${fileURLToPath(new URL('../skills/poteto-mode/scripts/release-worktree.sh', import.meta.url))}' '${workspace}'`,
+          )
           const recorded = harness.session.messages.findLast(
             (message) =>
               message.role === 'toolResult' && message.toolCallId === 'publication-record',

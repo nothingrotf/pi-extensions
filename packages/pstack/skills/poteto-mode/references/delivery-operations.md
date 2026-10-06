@@ -93,19 +93,83 @@ A retry threshold triggers diagnosis, never automatic acceptance or silent aband
 
 In Autopilot-full and Autopilot-stack, the root publishes a WIP snapshot after each verifiable unit.
 The snapshot gives the audit tick and the next fresh owner a durable remote trail before acceptance.
+The snapshot branch depends on the playbook:
+
+- In Autopilot-full, use the issue's own `wip/<issue>` branch.
+- In Autopilot-stack, use the layer branch and keep its pull request as a draft. Follow Draft layer pull requests below.
 
 1. Record the terminal attempt and read its isolation receipt.
-2. Create a scratch worktree at the recorded base SHA. If the baseline is not a commit, skip the push and record the gap.
+2. Create a detached scratch worktree at the recorded base SHA under the system temporary directory. If the baseline is not a commit, skip the push and record the gap.
 3. Apply the retained WIP patch through the new-attempt steps in Artifact and continuation preflight.
 4. Commit only the applied patch, with hooks on, as `wip: <issue> <unit>`. Never bypass a hook.
-5. Push to the issue's own `wip/<issue>` branch. Before a rewritten push, verify the remote tip with `git ls-remote` and use `--force-with-lease=<branch>:<observed-tip>`.
-6. Record the branch, commit SHA, and patch digest in the checkpoint, then remove the scratch worktree.
+5. Push with `git push <remote> HEAD:refs/heads/<snapshot-branch>`, without a local branch. Before a rewritten push, verify the remote tip with `git ls-remote` and use `--force-with-lease=refs/heads/<snapshot-branch>:<observed-tip>`.
+6. Record the branch, commit SHA, and patch digest in the checkpoint.
+7. Remove the scratch worktree with `git worktree remove --force` in the same step, also after a failed hook or push.
 
 If a hook fails, keep the unit as unpublished WIP and record the failure in the checkpoint.
-A WIP snapshot is not a candidate, an acceptance, or a PR publication.
-Never push isolation snapshot history, open a PR from a `wip/` branch, or push WIP to a PR branch.
+The retained isolation patch keeps that WIP, so the scratch worktree never outlives its step.
+A WIP snapshot is not a candidate or an acceptance. A draft layer pull request does not publish an accepted patch.
+Never push isolation snapshot history or open a PR from a `wip/` branch.
+Push WIP to a PR branch only for an Autopilot-stack draft layer.
 Publication still starts from the accepted artifact after independent verification.
 Delete the `wip/<issue>` branch after the issue lands or closes.
+
+### Draft layer pull requests
+
+In Autopilot-stack, each layer lives in its own draft pull request from its first WIP snapshot.
+The stack then shows every layer remotely, and no layer waits locally for a later submission.
+
+1. On the first snapshot, open the layer PR with `gh pr create --draft --base <parent-branch> --head <layer-branch>`.
+2. Use a Conventional Commits title. In the body, name the issue and state that independent verification is pending.
+3. Attach the draft to the stack with `gh stack link --remote <remote> --base <trunk> <bottom-to-top PR numbers>`.
+4. Omit `--open` from that command so that the layer stays a draft.
+5. Replace the previous snapshot commit on each later snapshot through the lease from step 5.
+
+Never mark a draft ready from a snapshot, request review on it, or start babysit for it.
+Push WIP only to the layer's own branch, never to a parent or child layer branch.
+Never start a dependent layer from a draft parent.
+If a layer stops without acceptance, keep its PR as a draft and record the blocker in a PR comment.
+Publication replaces the snapshot commit with the accepted commit and marks the PR ready.
+
+## Local footprint
+
+The remote branches and the stack hold delivered state. Local worktrees, branches, and services are temporary execution resources.
+Keep the run's local footprint bounded, and release it at each issue boundary.
+
+Record each local resource that the root creates in the checkpoint:
+
+| Resource | Owner | Release trigger |
+| --- | --- | --- |
+| Destination worktree and its local branch | The issue in flight | Publication pushes the branch |
+| WIP snapshot scratch worktree | The issue in flight | The snapshot step ends |
+| Container, volume, port, or scratch directory | The issue or the shared harness | The last dependent issue publishes or stops |
+
+Keep one destination worktree per issue in flight, and reuse it across rounds.
+Create it from the pushed parent, for example `git worktree add -b <branch> <path> <remote>/<parent>`.
+Never create a worktree per attempt, proof, review, candidate, or publication.
+Task isolation already gives each writer and verifier a private workspace and releases it after capture.
+Read a staged writer's result through its patch or result commit. Its execution tree no longer exists.
+Keep issues in flight at or below the verified lane count.
+Start another issue only after an issue in flight publishes and releases its footprint.
+
+After each publication, release the issue's footprint before the next dispatch:
+
+1. Confirm the pushed tip with `git ls-remote <remote> refs/heads/<branch>`.
+2. Run `scripts/release-worktree.sh <destination>` from the poteto-mode skill directory.
+3. Remove the issue's containers and volumes with `docker rm -fv` and `docker volume rm`.
+4. Record each release and each held reason in the checkpoint.
+
+The script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
+It reports `held` with a reason otherwise. Resolve the reason instead of forcing the removal.
+A later correction recreates the destination worktree from the remote branch.
+
+Label run-owned containers and volumes with `pstack.issue=<issue>`, and set a memory limit.
+Share one disposable service per engine across the run instead of one service per issue.
+Remove a shared service after the last dependent issue publishes or stops.
+
+Before the final report, run `scripts/worktree-audit.sh` and release each published run-owned resource.
+Report the remaining footprint and the reason for each held resource.
+Never remove a resource that another session, the operator, or unpublished work owns.
 
 ## Managed dispatch binding
 

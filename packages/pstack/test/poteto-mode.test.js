@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -46,6 +47,7 @@ describe('poteto-mode', () => {
       'scripts/orch/orch.bundle',
       'scripts/orch/gt-compat.mjs',
       'scripts/worktree-audit.sh',
+      'scripts/release-worktree.sh',
       'scripts/watch-pr/watch-pr',
       'scripts/watch-pr/watch-pr.bundle',
     ])
@@ -412,10 +414,108 @@ exit 1
     rmSync(root, { force: true, recursive: true })
   })
 
+  it('releases only a published clean destination worktree', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-release-')))
+    const release = join(skillRoot, 'scripts', 'release-worktree.sh')
+    const repo = join(root, 'repo')
+    const lane = join(root, 'lane')
+    const git = (args, cwd = repo) => run('git', args, { cwd })
+    try {
+      expect(run('git', ['init', '--quiet', '--bare', join(root, 'remote.git')]).status).toBe(0)
+      expect(run('git', ['clone', '--quiet', join(root, 'remote.git'), repo]).status).toBe(0)
+      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
+      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
+      writeFileSync(join(repo, '.gitignore'), 'node_modules/\n')
+      writeFileSync(join(repo, 'main.txt'), 'main\n')
+      expect(git(['add', '.']).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
+      expect(git(['push', '--quiet', 'origin', 'HEAD:main']).status).toBe(0)
+      expect(git(['worktree', 'add', '--quiet', '-b', 'stack/one', lane]).status).toBe(0)
+      writeFileSync(join(lane, 'one.txt'), 'one\n')
+      expect(git(['add', 'one.txt'], lane).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'one'], lane).status).toBe(0)
+      mkdirSync(join(lane, 'node_modules'))
+      writeFileSync(join(lane, 'node_modules', 'large.bin'), 'dependency\n')
+
+      const unpublished = run('bash', [release, lane])
+      expect(unpublished.status).toBe(1)
+      expect(unpublished.stdout).toBe(
+        `held\t${lane}\tremote branch origin/stack/one is unavailable\n`,
+      )
+
+      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
+      writeFileSync(join(lane, 'one.txt'), 'local edit\n')
+      const dirty = run('bash', [release, lane])
+      expect(dirty.status).toBe(1)
+      expect(dirty.stdout).toBe(`held\t${lane}\tuncommitted or untracked changes\n`)
+      expect(git(['checkout', '--quiet', '--', 'one.txt'], lane).status).toBe(0)
+
+      writeFileSync(join(lane, 'two.txt'), 'two\n')
+      expect(git(['add', 'two.txt'], lane).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'two'], lane).status).toBe(0)
+      const ahead = run('bash', [release, lane])
+      expect(ahead.status).toBe(1)
+      expect(ahead.stdout).toBe(`held\t${lane}\tHEAD is not on origin/stack/one\n`)
+      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
+
+      const main = run('bash', [release, repo])
+      expect(main.status).toBe(1)
+      expect(main.stdout).toBe(`held\t${repo}\tmain worktree\n`)
+
+      const released = run('bash', [release, lane])
+      expect(released.stderr).toBe('')
+      expect(released.status).toBe(0)
+      expect(released.stdout).toMatch(
+        new RegExp(`^released\\t${lane}\\tstack/one\\torigin/stack/one\\t\\d+\\n$`),
+      )
+      expect(() => readdirSync(lane)).toThrow(/ENOENT/)
+      expect(git(['branch', '--list', 'stack/one']).stdout).toBe('')
+      expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(lane)
+      expect(git(['ls-remote', 'origin', 'refs/heads/stack/one']).stdout).not.toBe('')
+    } finally {
+      rmSync(root, { force: true, recursive: true })
+    }
+  })
+
+  it('audits merged worktrees against the remote default branch', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-audit-')))
+    const repo = join(root, 'repo')
+    const lane = join(root, 'lane')
+    const bin = join(root, 'bin')
+    const git = (args, cwd = repo) => run('git', args, { cwd })
+    try {
+      mkdirSync(bin)
+      writeFileSync(join(bin, 'gh'), '#!/usr/bin/env bash\nexit 1\n')
+      chmodSync(join(bin, 'gh'), 0o755)
+      expect(run('git', ['init', '--quiet', '--bare', join(root, 'remote.git')]).status).toBe(0)
+      expect(run('git', ['clone', '--quiet', join(root, 'remote.git'), repo]).status).toBe(0)
+      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
+      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
+      writeFileSync(join(repo, 'next.txt'), 'next\n')
+      expect(git(['add', '.']).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'next']).status).toBe(0)
+      expect(git(['push', '--quiet', 'origin', 'HEAD:next']).status).toBe(0)
+      expect(git(['remote', 'set-head', 'origin', 'next']).status).toBe(0)
+      expect(git(['worktree', 'add', '--quiet', '--detach', lane, 'origin/next']).status).toBe(0)
+      const audit = run('bash', [join(skillRoot, 'scripts', 'worktree-audit.sh'), repo], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
+      })
+      expect(audit.stderr).toBe('')
+      expect(audit.status).toBe(0)
+      const row = audit.stdout.split('\n').find((line) => line.endsWith(`\t${lane}`))
+      expect(row?.split('\t').slice(2, 7)).toEqual(['YES', 'clean', 'detached', '-', 'safe'])
+    } finally {
+      rmSync(root, { force: true, recursive: true })
+    }
+  })
+
   it('loads the bundled CLIs and parses the audit script', () => {
     const orch = run(join(skillRoot, 'scripts', 'orch', 'orch'), ['--help'])
     const watcher = run(join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'), ['--help'])
     const audit = run('bash', ['-n', join(skillRoot, 'scripts', 'worktree-audit.sh')])
+    const release = run('bash', [join(skillRoot, 'scripts', 'release-worktree.sh')])
+    expect(release.status).toBe(2)
+    expect(release.stderr).toContain('usage: release-worktree.sh <worktree>')
     expect(orch.status).toBe(0)
     expect(orch.stdout).toContain('Plain-file orchestrate bookkeeping')
     expect(watcher.status).toBe(0)

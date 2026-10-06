@@ -2,7 +2,7 @@
 
 Invoked at the end of every other playbook.
 
-**Worktree.** Follow [Task contracts](../references/task-contracts.md). Repository writers use managed isolation and return patches for acceptance. Publication uses a separately scoped foreground Task in the destination worktree after acceptance and verification. Never publish synthetic snapshot history or reset unrelated work. If the destination contains unrelated changes, create a clean destination worktree without deleting the original.
+**Worktree.** Follow [Task contracts](../references/task-contracts.md). Repository writers use managed isolation and return patches for acceptance. Publication uses a separately scoped foreground Task in the destination worktree after acceptance and verification. Never publish synthetic snapshot history or reset unrelated work. If the destination contains unrelated changes, create a clean destination worktree without deleting the original. Release each destination worktree after publication, per Local footprint in [Delivery operations](../references/delivery-operations.md).
 
 **Commits.** Commit liberally. Rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit. New commit when separable.
 
@@ -29,9 +29,9 @@ An upload can fail after a partial success. `gh` preserves successful uploads, p
 
 A commit body does not restate its subject.
 
-**Size and stacks.** Prefer five narrow PRs to one large PR. Stack follow-ups through `../references/stack-backends.md`, and keep the ordered stack visible to reviewers. Branch from main only for independent work. Rebase on `main` before substantial stack work.
+**Size and stacks.** Prefer five narrow PRs to one large PR. Stack follow-ups through `../references/stack-backends.md`, and keep the ordered stack visible to reviewers. In Autopilot-stack, open each layer as its own draft PR at its first WIP snapshot, and mark it ready when it is accepted. Never accumulate layers locally for a later split. Branch from main only for independent work. Rebase on `main` before substantial stack work.
 
-**Readiness.** Open every PR ready, never as a draft. Set `draft: false` on API or tool calls. Omit `--draft` from `gh pr create`. If a PR still opens as a draft, run `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
+**Readiness.** Open every PR ready, never as a draft. Autopilot-stack layer PRs are the one exception. They open as drafts at the first WIP snapshot, and publication marks each one ready after independent acceptance. Set `draft: false` on API or tool calls. Omit `--draft` from `gh pr create`. If a PR still opens as a draft, run `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
 
 **Babysit.** Opening a PR alone does not authorize babysit.
 For ordinary publication, return the URL and continue the build until a separate user request starts babysit.

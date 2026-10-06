@@ -51,6 +51,7 @@ If `gh stack` exits with code 9, the repository does not support GitHub stacks. 
 |---|---|---|
 | Inspect | `gt log short --stack --reverse` and `gt info <branch>` | `gh stack view --json` |
 | Initialize existing branches | `gt track -p <parent>` | `gh stack init --base <trunk> <branches...>` |
+| Append a published layer | `gt track -p <parent>`, then submit | `gh stack link --remote <name> --base <trunk> <bottom-to-top PR numbers>` |
 | Submit | `gt submit --no-interactive --stack` | `gh stack submit --auto --open` |
 | Rebase | `gt restack` | `gh stack rebase` |
 | Synchronize | `gt sync` | `gh stack sync` |
@@ -64,6 +65,10 @@ Read the existing stack with `gh stack view --json` before any mutating command.
 Initialize only a branch that no stack already contains, and give the accepted parent branch as the base.
 `gh stack init` exits with code 5 when a listed branch already belongs to a stack, and a second attempt fails the same way.
 When the branch is already tracked, link it to its parent and submit instead of initializing again.
+
+`gh stack link` reads remote pull requests and needs no local stack checkout.
+Use it to grow a stack one published layer at a time. Pass PR numbers so that it pushes no local branch.
+A stack that grows this way needs no local branch after each publication.
 
 Always use `gh stack submit --auto`. The command without `--auto` can prompt for titles.
 

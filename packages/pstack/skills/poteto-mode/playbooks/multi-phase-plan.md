@@ -55,7 +55,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### PR mechanics, for every PR
 
-- [ ] Open the PR ready, never draft, with `gh pr create` and `draft: false`, or through `../references/stack-backends.md` for a stack.
+- [ ] Open the PR ready, never draft, with `gh pr create` and `draft: false`, or through `../references/stack-backends.md` for a stack. Under Autopilot-stack, open each layer as a draft at its first WIP snapshot and mark it ready only after independent acceptance.
 - [ ] Run the repo's lint and typecheck once before the PR-facing push. Push with hooks on.
 - [ ] Run `/deslop` before each commit and `/no-comments` before review.
 - [ ] Triage every Bugbot and security-reviewer comment per `../references/bugbot-triage.md`.

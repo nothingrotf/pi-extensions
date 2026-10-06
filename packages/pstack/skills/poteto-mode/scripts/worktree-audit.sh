@@ -6,7 +6,9 @@ repo="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 cd "$repo" || exit 1
 
 main_wt=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
-git fetch origin main --quiet 2>/dev/null || echo "warn: could not fetch origin/main; merged state may be stale" >&2
+trunk="${POTETO_TRUNK:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
+trunk="${trunk:-main}"
+git fetch origin "$trunk" --quiet 2>/dev/null || echo "warn: could not fetch origin/$trunk; merged state may be stale" >&2
 prs=$(mktemp)
 trap 'rm -f "$prs"' EXIT
 gh pr list --author "@me" --state all --limit 1000 --json number,state,headRefName 2>/dev/null > "$prs" || echo "[]" > "$prs"
@@ -20,7 +22,7 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
   head=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
   head_ts=$(git -C "$wt" log -1 --format='%ct' HEAD 2>/dev/null || echo 0)
   age=$([ "$head_ts" -gt 0 ] 2>/dev/null && echo "$(((now - head_ts) / 86400))d" || echo "?")
-  git merge-base --is-ancestor "$head" origin/main 2>/dev/null && merged=YES || merged=no
+  git merge-base --is-ancestor "$head" "origin/$trunk" 2>/dev/null && merged=YES || merged=no
   porcelain=$(git -C "$wt" status --porcelain 2>/dev/null)
   if [ -z "$porcelain" ]; then
     dirty=clean

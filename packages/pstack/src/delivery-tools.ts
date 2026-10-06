@@ -80,6 +80,26 @@ const TaskResultSchema = Type.Object(
   { agentId: id, attemptStarted: Type.Optional(Type.Boolean()) },
   { additionalProperties: true },
 )
+const CompletedTaskResultSchema = Type.Object(
+  { agentId: id, status: Type.Optional(Type.Literal('completed')) },
+  { additionalProperties: true },
+)
+const releaseScript = fileURLToPath(
+  new URL('../skills/poteto-mode/scripts/release-worktree.sh', import.meta.url),
+)
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function publicationReleaseNotice(issue: string, destination: string): string {
+  return [
+    `Release the local footprint of ${issue} now. Its remote branch holds the published state.`,
+    `1. Run \`bash ${shellQuote(releaseScript)} ${shellQuote(destination)}\`. It removes the destination worktree and its local branch only when the worktree is clean and the remote branch contains HEAD.`,
+    `2. Remove containers, volumes, scratch worktrees, and temporary directories that ${issue} owns.`,
+    '3. Record each release or held reason in the checkpoint. A later correction recreates the worktree from the remote branch.',
+  ].join('\n')
+}
 const BatchResultSchema = Type.Object(
   {
     items: Type.Array(
@@ -1650,6 +1670,23 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
       event.details.attemptStarted !== false
     )
       bind(event.input, event.details.agentId)
+    if (
+      event.isError ||
+      !Value.Check(TaskViewSchema, event.input) ||
+      !Value.Check(CompletedTaskResultSchema, event.details) ||
+      event.input.role !== 'publication' ||
+      event.input.run_in_background !== false ||
+      event.input.delivery?.kind !== 'managed'
+    )
+      return
+    const notice = publicationReleaseNotice(
+      event.input.delivery.issue,
+      resolve(ctx.cwd, event.input.cwd ?? '.'),
+    )
+    const content = [...event.content, { text: notice, type: 'text' as const }]
+    return event.structuredContent === undefined
+      ? { content }
+      : { content, structuredContent: event.structuredContent }
   })
   pi.on('tool_call', (event) => {
     if (event.toolName !== 'TaskControl') return

@@ -74,6 +74,7 @@ Reuse unchanged readings within the same session when policy permits. Preserve e
 ## Repository writer
 
 Create the destination branch in the coordinator workspace before dispatch. Use `cwd` to select the destination, not to bypass isolation.
+Reuse one destination worktree per issue across rounds, and release it after publication. Follow Local footprint in [Delivery operations](delivery-operations.md).
 
 ```json
 {
@@ -92,7 +93,7 @@ Use relative product paths inside the effective child workspace. Treat absolute 
 
 Never change into the source checkout to edit, commit, or push. A worktree separates Git state but is not an OS sandbox.
 
-Inspect the terminal receipt and diff before `TaskControl join`. After acceptance, delegate any required destination commit, push, or stack operation separately.
+Inspect the terminal receipt and diff before `TaskControl join`. The runtime releases a staged writer's execution tree after capture, so read its result through the patch or result commit. After acceptance, delegate any required destination commit, push, or stack operation separately.
 
 Do not push a synthetic snapshot history as a product branch. Foreground destination operations require explicit scope and completed verification.
 
