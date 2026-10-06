@@ -30,6 +30,18 @@
         "typebox": "*",
       },
     },
+    "packages/cloak": {
+      "name": "@nothingrotf/cloak",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "typebox": "*",
+      },
+    },
     "packages/compact": {
       "name": "@nothingrotf/compact",
       "version": "0.1.0",
@@ -390,6 +402,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.6.0", "", {}, "sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw=="],
 
     "@nothingrotf/ask": ["@nothingrotf/ask@workspace:packages/ask"],
+
+    "@nothingrotf/cloak": ["@nothingrotf/cloak@workspace:packages/cloak"],
 
     "@nothingrotf/compact": ["@nothingrotf/compact@workspace:packages/compact"],
 

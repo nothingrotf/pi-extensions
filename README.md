@@ -24,6 +24,7 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 | Package                                                    | Purpose                                                                           |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | [`@nothingrotf/ask`](packages/ask)                         | Interactive question forms with selectable and freeform answers                   |
+| [`@nothingrotf/cloak`](packages/cloak)                     | Configurable sensitive-text masking in native and filetools read results          |
 | [`@nothingrotf/compact`](packages/compact)                 | Structured compaction with optional semantic enrichment and history recall        |
 | [`@nothingrotf/fast-mode`](packages/fast-mode)             | Catalog-aware Fast Mode for OpenAI Codex sessions and subagents                   |
 | [`@nothingrotf/filetools`](packages/filetools)             | Bounded file reads and all-or-nothing multi-file patches                          |
@@ -55,6 +56,14 @@ The `patch` tool applies edits across many files in one all-or-nothing call.
 Subagents receive both tools through the optional `filetools` capability.
 
 Read the [package documentation](packages/filetools/README.md) for limits and the subagent contract.
+
+## Sensitive text masking
+
+The `cloak` package masks configured text patterns in `read` results before the model receives them.
+It supports native reads and `filetools` reads. Configure it in `cloak.json` inside the Pi agent directory.
+It is not a security boundary, because `bash`, search tools, and files on disk remain unmasked.
+
+Read the [package documentation](packages/cloak/README.md) for configuration and limits.
 
 ## Workflow skills
 
