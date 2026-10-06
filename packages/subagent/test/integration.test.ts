@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process'
 import { getEventListeners } from 'node:events'
-import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -2212,6 +2222,46 @@ describe('subagent Task integration', () => {
       )
       expect(joined.status).toBe('joined')
       expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
+  it('releases a staged writer execution tree and joins from durable capture', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const started = await runTask(harness, {
+        description: 'Stage isolated work',
+        isolation: { integration: 'apply', mode: 'worktree' },
+        prompt: 'WRITE_ISOLATED',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.notification.promise
+      const staged = latestState(harness).records.find((record) => record.agentId === id)
+      expect(staged?.isolation?.integrationStatus).toBe('staged')
+      const workspace = latestState(harness).workspaces.find(
+        (candidate) => candidate.writerId === id,
+      )
+      if (workspace?.manifestUri === undefined) throw new Error('The writer manifest is missing.')
+      expect(workspace.lifecycleState).toBe('staged')
+      const manifest = Value.Decode(
+        ManifestSchema,
+        JSON.parse(await readFile(workspace.manifestUri, 'utf8')),
+      )
+      expect(manifest.state).toBe('staged')
+      await expect(stat(manifest.physicalRoot)).rejects.toThrow(/ENOENT/)
+
+      const joined = await harness.runtime.joinStaged(
+        id,
+        await harness.runtime.rootDestination(harness.context()),
+        harness.session.sessionManager.getSessionId(),
+      )
+      expect(joined.status).toBe('joined')
+      expect(await readFile(join(harness.dir, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+      await expect(stat(workspace.manifestUri)).rejects.toThrow(/ENOENT/)
     } finally {
       await harness.close()
     }

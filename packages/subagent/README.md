@@ -449,6 +449,9 @@ A nested writer starts from its immediate parent workspace. Its result enters th
 A successful parent closes all descendants before parent capture. A failed parent cancels descendants and blocks their root visibility.
 
 A background writer remains staged until an explicit join, successful parent closure, or coordinator dependency barrier.
+The runtime releases a staged writer's execution tree, including its dependency copies, as soon as its capture is durable.
+The manifest, patch artifacts, and durable result commit remain until the join or recovery cleanup.
+Join and resume read those retained artifacts. Read a staged result through its patch or result commit, not through the receipt's execution path.
 
 The recovery scan reads durable registries. It preserves live and ambiguous owners, then processes dead leaves before ancestors.
 

@@ -805,6 +805,13 @@ export async function cleanupWorkspaceArtifacts(workspace: WriterWorkspace): Pro
   }
 }
 
+export async function releaseExecutionTree(workspace: WriterWorkspace): Promise<void> {
+  try {
+    await workspace.dependencies
+    if (await hasValidWorkspaceLocation(workspace)) await detachTree(workspace.rootWorktree)
+  } catch {}
+}
+
 export async function cleanupCapturedReceipt(receipt: IsolationReceipt): Promise<boolean> {
   if (receipt.manifestUri === undefined) return receipt.cleanupDebt
   const manifest = await readManifest(receipt.manifestUri)

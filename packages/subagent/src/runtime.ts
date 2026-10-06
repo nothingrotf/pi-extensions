@@ -67,6 +67,7 @@ import {
   integrateStagedReceipt,
   reconstructCapturedIsolation,
   recoverIsolationStore,
+  releaseExecutionTree,
   type IsolationDestination,
   type WriterWorkspace,
 } from './isolation.ts'
@@ -2719,9 +2720,12 @@ export class SubagentRuntime {
       workspace === undefined ||
       receipt?.captureStatus !== 'captured' ||
       receipt.cleanupDebt !== false ||
-      receipt.integrationStatus === 'staged' ||
       receipt.repositories.some((repository) => repository.status === 'recovery-required')
     ) {
+      return
+    }
+    if (receipt.integrationStatus === 'staged') {
+      await releaseExecutionTree(workspace)
       return
     }
     await this.transitionWorkspace(
