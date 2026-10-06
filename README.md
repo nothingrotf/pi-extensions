@@ -67,7 +67,8 @@ Read the [package documentation](packages/cloak/README.md) for configuration and
 
 ## Workflow skills
 
-The `pstack` package provides 50 skills with Pi-specific tools, Task contracts, and model policies.
+The `pstack` package provides 54 skills with Pi-specific tools, Task contracts, and model policies.
+Publication writes every PR body with the bundled `pr` skill and its before-and-after evidence template.
 The latest upstream sync requires evidence or uncertainty labels alongside claims and checks performed by the agent when possible.
 Read the [synchronization notes](packages/pstack/README.md#upstream-synchronization) for source revisions.
 
@@ -125,7 +126,7 @@ Remove them again:
 bun run pi:remove
 ```
 
-The `subagent` package registers `Task` and `TaskControl`. The `pstack` package provides 50 skills. Remove `npm:pi-subagents` and `git:github.com/nothingrotf/oh-my-pstack` from the global settings before `pi:install`. Otherwise both stacks load at the same time.
+The `subagent` package registers `Task` and `TaskControl`. The `pstack` package provides 54 skills. Remove `npm:pi-subagents` and `git:github.com/nothingrotf/oh-my-pstack` from the global settings before `pi:install`. Otherwise both stacks load at the same time.
 
 Vite+ provides Oxfmt, Oxlint, TypeScript checks, tests, workspace tasks, and staged-file checks.
 The local Oxlint plugins reject unsafe type shortcuts, module mocks, invalid suppressions, and stale tool directives.

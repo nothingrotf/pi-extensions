@@ -24,7 +24,7 @@ Restart Pi after installation.
 
 ## Resources
 
-The package provides 49 upstream skills and four Pi compatibility skills. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 49 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -68,6 +68,7 @@ The package provides 49 upstream skills and four Pi compatibility skills. `make-
 - `principle-test-behavior-not-implementation`
 - `principle-type-system-discipline`
 - `poteto-mode`
+- `pr`
 - `recall`
 - `reflect`
 - `setup-pstack`

@@ -113,7 +113,7 @@ Recheck only the affected behavior after a change, then run the full required ga
 
 Follow [Throughput and pilot](references/throughput.md) to record time-to-acceptance, first-review findings, and corrective work for two candidate issues. Report incomplete work and comparison limits without promising measured savings. The root owns runtime preflight, telemetry, and evaluation utility.
 
-Pass the per-issue fields in the Task prompt, never as invented Task schema parameters. Publication uses `publication` and stays separately scoped and foreground. It includes commit and PR text without a separate preparation owner. Reserve `judgment and prose` for prose or evidence synthesis. Nothing here weakens capabilities, required review, user gates, manual isolation, model policy, or the no-deploy and no-merge boundaries.
+Pass the per-issue fields in the Task prompt, never as invented Task schema parameters. Publication uses `publication` and stays separately scoped and foreground. It includes commit and PR text without a separate preparation owner. It writes the PR body with the `pr` skill. Reserve `judgment and prose` for prose or evidence synthesis. Nothing here weakens capabilities, required review, user gates, manual isolation, model policy, or the no-deploy and no-merge boundaries.
 
 ## Writing the reply
 
