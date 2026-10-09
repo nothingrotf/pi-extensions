@@ -288,6 +288,7 @@ A static reviewer runs read-only and identifies the candidate tree. When the iss
 - Preparation copies ignored files listed in `.worktreeinclude`, copies `node_modules` directories with copy-on-write clones when the file system supports them, and runs `.pstack/worktree-setup.sh` once. The script receives `PSTACK_ISSUE`, `PSTACK_SOURCE_ROOT`, and `PSTACK_WORKTREE`.
 - A failed setup script returns its exit code and log path, and the worktree remains for correction.
 - Later calls return the recorded workspace. When the worktree is gone, the call prepares it again.
+- The result carries `next`, like every checkpoint.
 
 After the workspace exists, managed preflight changes fresh Tasks for that issue:
 

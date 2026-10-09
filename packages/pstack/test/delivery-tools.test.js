@@ -2706,7 +2706,11 @@ describe('pstack delivery tool interception', () => {
           (message) => message.role === 'toolResult' && message.toolCallId === id,
         )
       const workspace = JSON.parse(result('workspace').content[0].text)
-      expect(workspace).toMatchObject({ branch: 'pstack/issue-one', issue: 'issue-one' })
+      expect(workspace).toMatchObject({
+        branch: 'pstack/issue-one',
+        issue: 'issue-one',
+        next: { step: 'implement' },
+      })
       expect(workspace.worktree.startsWith(await realpath(worktrees))).toBe(true)
       expect(JSON.parse(result('workspace-again').content[0].text)).toEqual(workspace)
       expect(harness.observed).toHaveLength(1)
