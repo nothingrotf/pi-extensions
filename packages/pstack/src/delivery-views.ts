@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { Type, type Static } from 'typebox'
 
+import type { DeliveryNextStep } from './delivery-next.ts'
 import { isImplementationRole } from './delivery-roles.ts'
 import {
   currentDeliveryReport,
@@ -139,7 +140,11 @@ function submissionPreview(issue: string, submission: DeliverySubmission) {
   }
 }
 
-function issueCheckpoint(issue: DeliveryIssue, summary: ReturnType<typeof summaryView>) {
+function issueCheckpoint(
+  issue: DeliveryIssue,
+  summary: ReturnType<typeof summaryView>,
+  next: DeliveryNextStep | undefined,
+) {
   const implementation = issue.submissions.findLast(
     (entry) =>
       currentDeliveryReport(entry).kind === 'implementation' && isImplementationRole(entry.role),
@@ -156,6 +161,7 @@ function issueCheckpoint(issue: DeliveryIssue, summary: ReturnType<typeof summar
   return {
     issue: issue.issue,
     summary,
+    next,
     implementationOwner: implementation?.agentId ?? null,
     reviewOwner: review?.agentId ?? null,
     artifactSource:
@@ -204,9 +210,13 @@ function pageItems<Item>(items: readonly Item[], start: number, limit: number) {
   }
 }
 
-function readPage(issue: DeliveryIssue, input: DeliveryRead): DeliveryResult<object> {
+function readPage(
+  issue: DeliveryIssue,
+  input: DeliveryRead,
+  next: DeliveryNextStep | undefined,
+): DeliveryResult<object> {
   if (!('view' in input))
-    return { ok: true, value: issueCheckpoint(issue, summaryView(summarizeDelivery(issue))) }
+    return { ok: true, value: issueCheckpoint(issue, summaryView(summarizeDelivery(issue)), next) }
   const start = input.offset ?? 0
   if (input.view === 'submission') {
     const submission = issue.submissions.find(
@@ -303,9 +313,10 @@ interface DeliveryView {
 export function deliveryView(
   issue: DeliveryIssue,
   input: DeliveryRead,
+  next?: DeliveryNextStep,
 ): DeliveryResult<DeliveryView> {
   const summary = summaryView(summarizeDelivery(issue))
-  const page = readPage(issue, input)
+  const page = readPage(issue, input, next)
   if (!page.ok) return page
   let text = JSON.stringify(page.value)
   const truncated = Buffer.byteLength(text) > maxBytes
@@ -313,6 +324,7 @@ export function deliveryView(
     text = JSON.stringify({
       issue: issue.issue,
       summary,
+      next,
       criterionCount: issue.criteria.length,
       submissionCount: issue.submissions.length,
       repairs: issue.submissions

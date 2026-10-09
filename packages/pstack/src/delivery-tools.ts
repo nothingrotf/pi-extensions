@@ -29,6 +29,7 @@ import {
   makeDeliveryJournalEvent,
   readDeliveryJournal,
 } from './delivery-journal.ts'
+import { type DeliveryNextStep, nextDeliveryStep } from './delivery-next.ts'
 import { isDeliveryRole, isImplementationRole } from './delivery-roles.ts'
 import {
   DeliveryReadSchema,
@@ -801,6 +802,31 @@ function issueFromRecord(
   const delivery = record.execution?.version === 5 ? record.execution.delivery : undefined
   if (delivery?.kind === 'managed') return delivery.issue
   return bindings.get(record.agentId)
+}
+
+function deliveryNext(issue: DeliveryIssue, ctx: ExtensionContext): DeliveryNextStep {
+  const bindings = loadBindings(ctx)
+  const records = (
+    readSubagentState(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId())?.records ??
+    []
+  ).filter((record) => issueFromRecord(record, bindings) === issue.issue)
+  return nextDeliveryStep(issue, {
+    running: records
+      .filter((record) => record.status === 'running')
+      .map((record) => record.agentId),
+    unrecorded: records
+      .filter(
+        (record) =>
+          record.status !== 'running' &&
+          !issue.submissions.some(
+            (submission) =>
+              submission.agentId === record.agentId &&
+              submission.attempt === (record.runGeneration ?? 1),
+          ),
+      )
+      .map((record) => record.agentId),
+    workspace: loadWorkspaces(ctx).has(issue.issue),
+  })
 }
 
 function isDeliveryOutputSchema<Input>(input: Input): boolean {
@@ -1645,7 +1671,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
     label: 'Delivery',
     executionMode: 'sequential',
     description:
-      'Open criteria, prepare the issue workspace, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Workspace: creates or returns one persistent Git worktree on branch pstack/<issue>, copies .worktreeinclude files, shares node_modules, and runs .pstack/worktree-setup.sh once. Managed Tasks for that issue then default to its cwd, and writers run in place. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
+      'Open criteria, prepare the issue workspace, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Workspace: creates or returns one persistent Git worktree on branch pstack/<issue>, copies .worktreeinclude files, shares node_modules, and runs .pstack/worktree-setup.sh once. Managed Tasks for that issue then default to its cwd, and writers run in place. Every checkpoint names next: the deterministic next pipeline step. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
     parameters: DeliveryToolSchema,
     outputSchema: DeliveryToolOutputSchema,
     async execute(_callId, input, _signal, _onUpdate, ctx) {
@@ -1797,6 +1823,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
       const view = deliveryView(
         issue,
         input.action === 'read' ? input : { action: 'read', issue: issue.issue },
+        deliveryNext(issue, ctx),
       )
       if (!view.ok) throw view.error
       const page: JsonValue = JSON.parse(view.value.text)

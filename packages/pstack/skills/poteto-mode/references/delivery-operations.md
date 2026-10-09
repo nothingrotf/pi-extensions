@@ -18,6 +18,22 @@ Never change global Pi defaults or restart an active stack to enforce this recom
 A model switch does not compact existing context.
 
 Use `pstack_delivery` with `action: "read"` for a compact managed-issue checkpoint.
+Each checkpoint carries `next`, the deterministic next step of the delivery pipeline:
+
+| `next.step` | Action |
+| --- | --- |
+| `record` | Record each named agent. |
+| `wait` | Finish independent work, then wait once for the named agents. |
+| `workspace` | Prepare the issue workspace. |
+| `implement` | Dispatch the implementation owner. |
+| `review` | Dispatch the named review roles, in one batch when there are two. |
+| `correct` | Resume `next.resume` with the verdict, or dispatch a fresh owner when it is `null`. |
+| `diagnose` | Dispatch one `hardest tasks` diagnosis. |
+| `refresh` | Join the owner, then refresh its integration. |
+| `publish` | Dispatch foreground publication. |
+
+Follow `next` without deliberation unless an operator gate, a user directive, or a design decision applies.
+Spend coordinator judgment on those decisions and on the content of each brief, not on the order of steps.
 Read `view: "submissions"` or `view: "criteria"` with `offset` and `limit` for retained records.
 Follow `nextOffset`, because the byte budget can shorten a page.
 For an oversized submission, open its `detail` locator with `view: "submission"`, `agentId`, and `attempt`.

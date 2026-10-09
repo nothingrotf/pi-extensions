@@ -2730,6 +2730,59 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
+  it('names the next step from the ledger and the bound runtime records', async () => {
+    const harness = await sessionWithDeliveryTool({
+      beforePrompt(sessionManager) {
+        const owner = sessionManager.getSessionId()
+        sessionManager.appendCustomEntry(
+          '@nothingrotf/pstack/delivery-v1',
+          emptyDeliveryIssue(owner, 'issue-one'),
+        )
+        const running = runRecord(owner, 'running-owner')
+        running.status = 'running'
+        sessionManager.appendCustomEntry(
+          'pi-subagent-state',
+          runtimeState(owner, [
+            running,
+            runRecord(owner, 'settled-owner'),
+            runRecord(owner, 'other'),
+          ]),
+        )
+        for (const agentId of ['running-owner', 'settled-owner']) {
+          sessionManager.appendCustomEntry(
+            '@nothingrotf/pstack/delivery-binding-v1',
+            deliveryBinding(owner, agentId, 'issue-one'),
+          )
+        }
+      },
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: { action: 'read', issue: 'issue-one' },
+              id: 'read',
+              name: 'pstack_delivery',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Read the next step.', { expandPromptTemplates: false })
+      const result = harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'read',
+      )
+      expect(JSON.parse(result.content[0].text).next).toMatchObject({
+        agentIds: ['settled-owner'],
+        step: 'record',
+      })
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('preserves explicit independent work while a managed ledger is open', async () => {
     const harness = await sessionWithDeliveryTool({
       beforePrompt(sessionManager) {
