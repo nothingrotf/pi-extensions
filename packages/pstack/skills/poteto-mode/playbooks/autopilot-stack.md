@@ -9,11 +9,12 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 
 1. **Keep durable issue owners.**
    Assign one implementer role per issue and one independent reviewer that never wrote its code.
-   Give each round to a fresh agent with consolidated scope, per poteto-mode's Subagents section.
+   Open an issue workspace for each layer before its first dispatch, and resume its recorded owner for each correction, per poteto-mode's Subagents section.
    Pass the per-issue fields from `../references/delivery-contract.md` inside the Task prompt.
    Retain the accepted design, artifact identities, verification owner, acceptance criteria, and an uncommitted `decisions.tsv`.
    Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
-   Give each fix round, follow-up, and retry to a fresh implementer with the retained artifact and the consolidated scope from the checkpoint.
+   Resume the recorded owner for each fix round and follow-up with the consolidated scope from the checkpoint.
+   Give a retry after a diagnosis to a fresh implementer in the same workspace.
    After each verifiable unit, publish a WIP snapshot to the layer's draft pull request through `../references/delivery-operations.md`.
    Diagnose repeated incomplete returns through the delivery operations procedure before another equivalent dispatch.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
@@ -54,13 +55,13 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Require the base SHA, head SHA or result tree, stable patch-id, and acceptance evidence.
    Verify required gates, live behavior, trunk regression, receipts, and the diff at that head.
    If trunk lacks the feature, record that limit and verify the added behavior and final user-visible state.
-   For combined static and runtime checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
+   For combined static and runtime checks, use `role: "runtime verification"` with shell access, in place in the issue workspace, from the first dispatch.
    For static-only review, use `role: "code review"` with read-only tools.
    Select one permitted model from the required family, not every pool entry.
    Keep that role and contract for each correction round's fresh reviewer, and require one complete verdict.
    Reuse the pinned harness, not an unverified surrogate artifact.
    For distinct high-risk boundaries or an explicit swarm requirement, partition verification through the **swarm** skill.
-   Send findings to a fresh implementer and affected evidence to a fresh independent reviewer, each with consolidated scope.
+   Send findings to the resumed owner and affected evidence to a fresh independent reviewer, each with consolidated scope.
    Apply the delivery contract's evidence invalidation rules after corrections.
    Keep unresolved or unavailable proofs blocked, not clean.
 

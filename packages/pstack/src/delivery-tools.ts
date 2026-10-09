@@ -1654,12 +1654,13 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
       if (input.action === 'workspace') {
         if (issue === undefined) throw new DeliveryRejected('The managed issue does not exist.')
         let workspace = loadWorkspaces(ctx).get(issue.issue)
-        if (workspace !== undefined && input.base !== undefined) {
+        const live = workspace !== undefined && (await workspaceIsLive(workspace))
+        if (live && workspace !== undefined && input.base !== undefined) {
           throw new DeliveryRejected(
             `The workspace for issue ${issue.issue} already exists on base ${workspace.base}. Omit base.`,
           )
         }
-        if (workspace === undefined || !(await workspaceIsLive(workspace))) {
+        if (workspace === undefined || !live) {
           const request: Parameters<typeof prepareIssueWorkspace>[0] = {
             cwd: ctx.cwd,
             issue: issue.issue,

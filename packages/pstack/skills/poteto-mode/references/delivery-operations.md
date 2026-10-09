@@ -77,8 +77,10 @@ A recurring contract defect or a structural regression also requires diagnosis b
 Classify the cause as implementation, environment, execution contract, context, or external decision.
 A new passing criterion establishes progress. A changed captured result tree also establishes progress when the completed attempt cites a successful command receipt. Cite that receipt in a criterion or finding. Patch changes alone, repeated result trees, and uncited commands do not establish progress. This check permits another correction without promoting WIP or proving an unresolved criterion.
 Fix shared environment failures once before redispatching affected work.
-Give each correction to a fresh owner with a precise correction brief.
-Consolidate the checkpoint before creating that fresh owner.
+Without an issue workspace, give each correction to a fresh owner with a precise correction brief.
+In an issue workspace, resume the recorded owner for a correction, per the delivery contract.
+After a diagnosis, give the next correction to a fresh owner. In an issue workspace, it continues in the same worktree.
+Consolidate the checkpoint before creating a fresh owner.
 Cancel a still-running writer before replacing it.
 
 For a structural diagnosis, dispatch one `pstack-leaf` with `role: "hardest tasks"` and the configured selector.
@@ -98,7 +100,7 @@ The snapshot branch depends on the playbook:
 - In Autopilot-full, use the issue's own `wip/<issue>` branch.
 - In Autopilot-stack, use the layer branch and keep its pull request as a draft. Follow Draft layer pull requests below.
 
-1. Record the terminal attempt and read its isolation receipt.
+1. Record the terminal attempt and read its isolation receipt. In an issue workspace, run `git -C <worktree> add -N .`, then take the patch from `git -C <worktree> diff --binary <base>`.
 2. Create a detached scratch worktree at the recorded base SHA under the system temporary directory. If the baseline is not a commit, skip the push and record the gap.
 3. Apply the retained WIP patch through the new-attempt steps in Artifact and continuation preflight.
 4. Commit only the applied patch, with hooks on, as `wip: <issue> <unit>`. Never bypass a hook.
@@ -145,10 +147,11 @@ Record each local resource that the root creates in the checkpoint:
 | Container, volume, port, or scratch directory | The issue or the shared harness | The last dependent issue publishes or stops |
 
 Keep one destination worktree per issue in flight, and reuse it across rounds.
-Create it from the pushed parent, for example `git worktree add -b <branch> <path> <remote>/<parent>`.
+Create it with `pstack_delivery` and `action: "workspace"`. Pass `base: "<remote>/<parent>"` to start from the pushed parent.
 Never create a worktree per attempt, proof, review, candidate, or publication.
-Task isolation already gives each writer and verifier a private workspace and releases it after capture.
-Read a staged writer's result through its patch or result commit. Its execution tree no longer exists.
+Managed writers and verifiers for the issue run in that worktree in place, so it always holds the current candidate.
+Without an issue workspace, Task isolation gives each writer and verifier a private workspace and releases it after capture.
+Read such a staged writer's result through its patch or result commit. Its execution tree no longer exists.
 Keep issues in flight at or below the verified lane count.
 Start another issue only after an issue in flight publishes and releases its footprint.
 
@@ -242,7 +245,8 @@ Never reset unrelated source edits or discard WIP to force a resume.
 
 Before a correction round, retain the WIP patch URI, SHA-256, baseline tree, result tree, and per-criterion evidence.
 Pass retained evidence and any required runtime setup in the correction brief.
-A fresh owner applies the retained WIP through the steps below.
+In an issue workspace, the worktree already holds the WIP, so skip the steps below.
+Otherwise, a fresh owner applies the retained WIP through the steps below.
 
 Before editing in a new attempt:
 

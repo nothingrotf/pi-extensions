@@ -46,7 +46,7 @@ Publication instead requires an accepted checkpoint and explicit foreground exec
 
 A role never grants permissions. The runtime never infers it from a model or prompt.
 
-Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and manual isolation. Static review alone uses `code review` with read-only tools. Give code corrections and missing proof to a fresh agent with consolidated scope, per the poteto-mode Subagents section. Resume only when the new work strictly needs state that lives in the agent and is costly to move. Use managed report repair for malformed reports backed by retained proof, without another Task or workspace. A changed role, model family, capability set, or artifact access always requires a fresh agent. Carry the saved brief, harness, and evidence into each fresh agent. Never weaken resume validation.
+Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and in-place execution in the issue workspace or manual isolation without one. Static review alone uses `code review` with read-only tools. Give code corrections and missing proof to a fresh agent with consolidated scope, per the poteto-mode Subagents section. In an issue workspace, resume the recorded implementation owner for code corrections instead. Resume only when the new work strictly needs state that lives in the agent and is costly to move. Use managed report repair for malformed reports backed by retained proof, without another Task or workspace. A changed role, model family, capability set, or artifact access always requires a fresh agent. Carry the saved brief, harness, and evidence into each fresh agent. Never weaken resume validation.
 
 Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to single Task calls, not graph nodes. The graph scheduler owns node execution.
 
@@ -76,6 +76,36 @@ Reuse unchanged readings within the same session when policy permits. Preserve e
 Create the destination branch in the coordinator workspace before dispatch. Use `cwd` to select the destination, not to bypass isolation.
 Reuse one destination worktree per issue across rounds, and release it after publication. Follow Local footprint in [Delivery operations](delivery-operations.md).
 
+For a managed issue, create that worktree with `pstack_delivery` and `action: "workspace"`. Then omit `cwd` and `isolation` from its Tasks. Preflight fills in the worktree and `isolation: { mode: "in-place" }` for writers:
+
+```json
+{
+  "description": "Implement the scoped feature",
+  "delivery": { "kind": "managed", "issue": "<open issue id>" },
+  "prompt": "Read the repository brief. Implement and verify the feature in the effective workspace. Return the diff and evidence.",
+  "subagent_type": "poteto-agent",
+  "role": "feature",
+  "capability_profile": "pstack-leaf",
+  "run_in_background": true
+}
+```
+
+For a correction, record the attempt, then resume the same owner with the verdict and the open findings:
+
+```json
+{
+  "description": "Correct the scoped feature",
+  "resume": "<owner agent id>",
+  "subagent_type": "poteto-agent",
+  "prompt": "Correct these findings from the independent verdict: <findings>. Rerun the affected checks and return a new report.",
+  "run_in_background": true
+}
+```
+
+An in-place writer cannot stop with zero writes. Cancel keeps its partial edits in the worktree for the next round.
+
+Without an issue workspace, use worktree isolation:
+
 ```json
 {
   "description": "Implement the scoped feature",
@@ -99,7 +129,9 @@ Do not push a synthetic snapshot history as a product branch. Foreground destina
 
 ## Runtime verifier
 
-A runtime verifier needs shell access but must never integrate incidental files. Enforce this with `integration: "manual"`.
+A runtime verifier needs shell access but must never integrate incidental files.
+In an issue workspace, omit `isolation`. Preflight runs the verifier in place, and a changed candidate tree rejects its verdict.
+Without an issue workspace, enforce this with `integration: "manual"`.
 
 ```json
 {

@@ -1,6 +1,6 @@
 ### Autopilot-full
 
-Keep one implementer role per issue through build and corrections, and give each round to a fresh agent with consolidated scope.
+Keep one implementer role per issue through build and corrections, and resume its recorded owner in the issue workspace for each correction.
 The root owns independent verification, countersigns, and audits.
 This playbook requires explicit autonomy and landing authority for the queue.
 Use `../references/delivery-operations.md` for root model selection, compact checkpoints, waiting, and recovery.
@@ -15,7 +15,9 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Keep the accepted design, artifact identities, acceptance criteria, and verification owner attached through corrections.
    Start an uncommitted `decisions.tsv` and retain checks, findings, and the PR URL.
    Record each PR's babysit assignment and mode in the checkpoint as part of this authorized lifecycle.
-   Give each fix round, follow-up, and retry to a fresh implementer with the consolidated scope from the checkpoint.
+   Open an issue workspace for each issue before its first dispatch, and record its worktree and branch in the checkpoint.
+   Resume the recorded owner for each fix round and follow-up with the consolidated scope from the checkpoint.
+   Give a retry after a diagnosis to a fresh implementer in the same workspace.
    After each verifiable unit, publish a WIP snapshot through `../references/delivery-operations.md`.
    Diagnose repeated incomplete returns before another equivalent dispatch.
    Update the checkpoint after each handoff, verdict, and publication.
@@ -38,7 +40,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Require a passing per-criterion self-proof matrix before promoting WIP to a verification candidate.
    Apply self-proof, skeptical Bugbot triage, deslop, and comment cleanup through the delivery contract.
    Assign one independent reviewer that never wrote the implementation.
-   For combined static and live checks, use `role: "runtime verification"` with shell access and manual isolation from the first dispatch.
+   For combined static and live checks, use `role: "runtime verification"` with shell access, in place in the issue workspace, from the first dispatch.
    For static-only review, use `role: "code review"` with read-only tools.
    Select one permitted model from the required family, not every pool entry.
    Keep that role and contract for each correction round's fresh reviewer, and require one complete verdict.
@@ -48,7 +50,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    If trunk lacks the feature, record that limit and verify the added behavior and final user-visible state.
    For distinct high-risk boundaries or an explicit swarm requirement, partition verification through the **swarm** skill.
    Do not start duplicate verifiers for the same proof merely because a model pool is large.
-   Send findings to a fresh implementer and affected evidence to a fresh independent reviewer, each with consolidated scope.
+   Send findings to the resumed owner and affected evidence to a fresh independent reviewer, each with consolidated scope.
    Invalidate changed evidence according to the delivery contract, without rerunning unchanged passing checks unnecessarily.
 
 5. **Separate publication and landing.**
