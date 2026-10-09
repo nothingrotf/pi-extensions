@@ -270,7 +270,27 @@ Three deterministic repairs settle without a correction turn. A passing criterio
 
 A command receipt uses the deterministic `command:1`, `command:2`, and later aliases in shell execution order. Reports cite those aliases only when the receipts exist. Read-only static reviews and diagnoses may cite recorded read receipts as `read:1`, `read:2`, and later values. Read receipts cannot replace the shell proof required for runtime verification. To bound the record, runs retain the first and final 128 shell or read receipts plus any cited intermediate receipt. A receipt proves that Pi ran and retained the tool output. It does not prove that the tool tested the right behavior.
 
-A static reviewer runs read-only and identifies the candidate tree. A runtime verifier runs with a writable shell in worktree isolation with `integration: "manual"`. It starts from the integrated candidate tree and must leave its product tree unchanged. Put verifier caches and scratch output outside the product tree or in ignored paths. Manual isolation never integrates verifier output.
+A static reviewer runs read-only and identifies the candidate tree. Without an issue workspace, a runtime verifier runs with a writable shell in worktree isolation with `integration: "manual"`. It starts from the integrated candidate tree and must leave its product tree unchanged. Put verifier caches and scratch output outside the product tree or in ignored paths. Manual isolation never integrates verifier output.
+
+### Issue workspaces
+
+`action: "workspace"` gives an open issue one persistent Git worktree. The [issue workspace ADR](../../docs/adr/0001-issue-workspaces.md) records the design.
+
+- The worktree lives under `~/.pi/worktrees/<repository>-<id>/<issue>` on branch `pstack/<issue>`. Set `PSTACK_WORKTREE_ROOT` to move it.
+- The branch starts at `base`, or at the session `HEAD` when `base` is absent. An existing branch is reused.
+- Preparation copies ignored files listed in `.worktreeinclude`, copies `node_modules` directories with copy-on-write clones when the file system supports them, and runs `.pstack/worktree-setup.sh` once. The script receives `PSTACK_ISSUE`, `PSTACK_SOURCE_ROOT`, and `PSTACK_WORKTREE`.
+- A failed setup script returns its exit code and log path, and the worktree remains for correction.
+- Later calls return the recorded workspace. When the worktree is gone, the call prepares it again.
+
+After the workspace exists, managed preflight changes fresh Tasks for that issue:
+
+- An omitted `cwd` becomes the worktree. A `cwd` outside the worktree fails before dispatch.
+- Implementation owners, runtime verifiers, and publication receive `isolation: { mode: "in-place" }` when they omit isolation. They write in the worktree under an exclusive writer lease.
+- Read-only reviewers read the worktree directly, so static review and runtime verification can start together on the same tree.
+
+An in-place attempt captures its base and result trees as the artifact and counts as integrated, so `refresh` and patch joins are unnecessary.
+A runtime verifier must finish with the candidate tree unchanged. A changed tree rejects its verdict.
+Resume a recorded implementation owner for a correction. It keeps its context and continues in the same worktree.
 
 Record every terminal attempt that reports an issue before another implementation dispatch. This rule applies to unlisted implementation roles. Two incomplete implementation returns without new proven criteria block the next dispatch. Record a `hardest tasks` diagnosis before the next correction. Failed runs without a report remain recordable WIP when the runtime retained no artifact.
 

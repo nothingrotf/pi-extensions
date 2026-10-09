@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -11,6 +11,7 @@ import {
 import {
   captureWorkspaceSnapshot,
   decodeJsonValue,
+  type InPlaceReceipt,
   jsonEquals,
   readSubagentState,
   type RunRecord,
@@ -35,6 +36,14 @@ import {
   deliveryView,
   submissionDigestLocator,
 } from './delivery-views.ts'
+import {
+  type DeliveryWorkspace,
+  deliveryWorkspaceEntryType,
+  isWithin,
+  prepareIssueWorkspace,
+  readDeliveryWorkspaces,
+  workspaceIsLive,
+} from './delivery-workspace.ts'
 import {
   DELIVERY_REASON_LIMIT,
   DeliveryArtifactSchema,
@@ -168,6 +177,14 @@ const DeliveryToolSchema = toolInputUnion([
   ),
   Type.Object(
     {
+      action: Type.Literal('workspace'),
+      issue: id,
+      base: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
       action: Type.Literal('repair'),
       issue: id,
       agentId: id,
@@ -190,6 +207,45 @@ function loadJournal(ctx: Pick<ExtensionContext, 'sessionManager'>) {
   )
   if (!journal.ok) throw journal.error
   return journal.value
+}
+
+function loadWorkspaces(
+  ctx: Pick<ExtensionContext, 'sessionManager'>,
+): Map<string, DeliveryWorkspace> {
+  return readDeliveryWorkspaces(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId())
+}
+
+async function physicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch {
+    return path
+  }
+}
+
+async function applyIssueWorkspace(
+  task: Static<typeof TaskViewSchema>,
+  role: string | undefined,
+  readonly: boolean | undefined,
+  workspace: DeliveryWorkspace,
+  ctx: ExtensionContext,
+): Promise<void> {
+  if (task.resume !== undefined) return
+  if (!(await workspaceIsLive(workspace))) {
+    throw new DeliveryRejected(
+      `The workspace for issue ${workspace.issue} at ${workspace.worktree} is gone. Call pstack_delivery workspace to recreate it, then dispatch.`,
+    )
+  }
+  if (task.cwd === undefined) task.cwd = workspace.worktree
+  else if (!isWithin(workspace.worktree, await physicalPath(resolve(ctx.cwd, task.cwd)))) {
+    throw new DeliveryRejected(
+      `Issue ${workspace.issue} runs in its workspace ${workspace.worktree}. Omit cwd or pass a path inside it.`,
+    )
+  }
+  const writer =
+    readonly !== true &&
+    (role === 'runtime verification' || role === 'publication' || isImplementationRole(role))
+  if (writer && task.isolation === undefined) task.isolation = { mode: 'in-place' }
 }
 
 function loadIssues(ctx: Pick<ExtensionContext, 'sessionManager'>): Map<string, DeliveryIssue> {
@@ -222,10 +278,29 @@ async function verifyReference(uri: string, expected: string): Promise<void> {
   }
 }
 
+function inPlaceArtifact(receipt: InPlaceReceipt): DeliveryArtifact {
+  if (receipt.status !== 'captured' || receipt.repositories.length === 0) {
+    throw new DeliveryRejected(
+      `The in-place result was not captured: ${receipt.error ?? 'no repository receipt'}.`,
+    )
+  }
+  return {
+    repositories: receipt.repositories.map((repository) => ({
+      root: repository.root,
+      relativePath: repository.relativePath,
+      base: repository.baseTree,
+      tree: repository.resultTree,
+      patch: repository.patch.sha256,
+    })),
+  }
+}
+
 function implementationArtifact(
   isolation: TerminalValidationInput['isolation'],
   workspaceIdentity: TerminalValidationInput['workspaceIdentity'],
+  inPlace?: InPlaceReceipt,
 ): DeliveryArtifact {
+  if (inPlace !== undefined) return inPlaceArtifact(inPlace)
   if (isolation === undefined || isolation.repositories.length === 0) {
     throw new DeliveryRejected('An implementation requires a captured isolation receipt.')
   }
@@ -260,7 +335,11 @@ function artifactFromRun(record: RunRecord): DeliveryArtifact {
     record.execution?.version === 4 || record.execution?.version === 5
       ? record.execution.workspaceIdentity
       : undefined
-  return implementationArtifact(record.isolation, workspaceIdentity)
+  return implementationArtifact(record.isolation, workspaceIdentity, record.inPlace)
+}
+
+function hasCapturedArtifact(record: RunRecord): boolean {
+  return record.inPlace !== undefined || (record.isolation?.repositories.length ?? 0) > 0
 }
 
 function artifactMismatch(
@@ -319,10 +398,34 @@ function reviewerArtifact(
   isolation: TerminalValidationInput['isolation'],
   workspaceIdentity: TerminalValidationInput['workspaceIdentity'],
   candidate: DeliveryArtifact | undefined,
+  inPlace?: InPlaceReceipt,
 ): DeliveryArtifact {
   if (candidate === undefined)
     throw new DeliveryRejected('No implementation artifact exists for this review.')
   const snapshot = workspaceIdentity?.snapshot
+  if (role === 'runtime verification' && inPlace !== undefined) {
+    if (readonly || !matchesCandidateSnapshot(candidate, snapshot)) {
+      throw new DeliveryRejected('Runtime review must start from the candidate tree in place.')
+    }
+    const unchanged =
+      inPlace.status === 'captured' &&
+      inPlace.repositories.length === candidate.repositories.length &&
+      candidate.repositories.every((expected) =>
+        inPlace.repositories.some(
+          (actual) =>
+            actual.root === expected.root &&
+            actual.relativePath === expected.relativePath &&
+            actual.baseTree === expected.tree &&
+            actual.resultTree === expected.tree,
+        ),
+      )
+    if (!unchanged) {
+      throw new DeliveryRejected(
+        'Runtime verification changed the candidate tree in place. Keep scratch output outside the worktree or in ignored paths, and restore the tree before reporting.',
+      )
+    }
+    return candidate
+  }
   if (role === 'code review') {
     if (!readonly || !matchesCandidateSnapshot(candidate, snapshot)) {
       throw new DeliveryRejected('Static review evidence does not identify the candidate tree.')
@@ -365,6 +468,7 @@ function reviewArtifact(record: RunRecord, issue: DeliveryIssue): DeliveryArtifa
     record.isolation,
     workspaceIdentity,
     summarizeDelivery(issue).artifact,
+    record.inPlace,
   )
 }
 
@@ -391,6 +495,18 @@ async function evidenceFromRun(
   includeReadReceipts: boolean,
 ): Promise<DeliveryEvidence[]> {
   const evidence: DeliveryEvidence[] = []
+  const inPlaceRepositories =
+    record.inPlace?.status === 'captured' ? record.inPlace.repositories : undefined
+  for (const repository of inPlaceRepositories ?? []) {
+    await verifyReference(repository.patch.uri, repository.patch.sha256)
+    evidence.push({
+      id: `patch:${repository.relativePath || '.'}`,
+      kind: 'patch',
+      passed: true,
+      reference: repository.patch.uri,
+      sha256: repository.patch.sha256,
+    })
+  }
   for (const repository of record.isolation?.repositories ?? []) {
     await verifyReference(repository.patch.uri, repository.patch.sha256)
     evidence.push({
@@ -402,7 +518,11 @@ async function evidenceFromRun(
     })
   }
   const execution = record.execution
-  if (record.isolation === undefined && (execution?.version === 4 || execution?.version === 5)) {
+  if (
+    record.isolation === undefined &&
+    inPlaceRepositories === undefined &&
+    (execution?.version === 4 || execution?.version === 5)
+  ) {
     for (const repository of execution.workspaceIdentity?.snapshot?.repositories ?? []) {
       await verifyReference(repository.patch.uri, repository.patch.sha256)
       evidence.push({
@@ -518,6 +638,7 @@ function fallbackReport(record: RunRecord, issue: DeliveryIssue): DeliveryReport
 }
 
 function deliveryIntegration(record: RunRecord): DeliverySubmission['integration'] {
+  if (record.inPlace?.status === 'captured') return 'integrated'
   const status = record.isolation?.integrationStatus ?? record.isolation?.status
   if (status === 'integrated') return 'integrated'
   if (status === 'conflict' || status === 'blocked' || status === 'partial') return 'conflict'
@@ -543,8 +664,7 @@ async function submissionFromRun(
   }
   let artifact: DeliveryArtifact | undefined
   if (report.kind === 'implementation') {
-    if (record.isolation !== undefined && record.isolation.repositories.length > 0)
-      artifact = artifactFromRun(record)
+    if (hasCapturedArtifact(record)) artifact = artifactFromRun(record)
   } else if (report.kind !== 'diagnosis') {
     try {
       artifact = reviewArtifact(record, issue)
@@ -647,8 +767,10 @@ async function unprovenSubmission(
     submission.failureKind = 'report-contract'
   }
   if (structured !== undefined) submission.intendedReport = structured
-  if (structured?.kind === 'implementation' && record.isolation?.repositories.length) {
-    submission.artifact = artifactFromRun(record)
+  if (structured?.kind === 'implementation' && hasCapturedArtifact(record)) {
+    try {
+      submission.artifact = artifactFromRun(record)
+    } catch {}
   } else if (structured !== undefined && structured.kind !== 'diagnosis') {
     try {
       submission.artifact = reviewArtifact(record, issue)
@@ -717,6 +839,11 @@ function effectiveRuntimeIsolation(
 ): Static<typeof IsolationViewSchema> | undefined {
   const execution = persistedExecution(resumed)
   if (resumed === undefined) {
+    if (task.isolation?.mode === 'in-place') {
+      if (task.isolation.integration !== undefined)
+        throw new DeliveryRejected('In-place runtime verification has no integration mode.')
+      return task.isolation
+    }
     if (task.isolation !== undefined && task.isolation.mode !== 'worktree')
       throw new DeliveryRejected('Runtime verification requires manual worktree isolation.')
     if (task.isolation?.integration !== undefined && task.isolation.integration !== 'manual')
@@ -1052,7 +1179,7 @@ function terminalArtifact(
   report: DeliveryReport,
 ): DeliveryArtifact | undefined {
   if (report.kind === 'implementation') {
-    return implementationArtifact(input.isolation, input.workspaceIdentity)
+    return implementationArtifact(input.isolation, input.workspaceIdentity, input.inPlace)
   }
   if (report.kind === 'diagnosis') return undefined
   return reviewerArtifact(
@@ -1061,6 +1188,7 @@ function terminalArtifact(
     input.isolation,
     input.workspaceIdentity,
     packet.artifact,
+    input.inPlace,
   )
 }
 
@@ -1069,6 +1197,18 @@ function terminalEvidence(
   report: DeliveryReport | undefined,
 ): DeliveryEvidence[] {
   const evidence: DeliveryEvidence[] = []
+  const inPlaceRepositories =
+    input.inPlace?.status === 'captured' ? input.inPlace.repositories : undefined
+  for (const repository of inPlaceRepositories ?? []) {
+    evidence.push({
+      id: `patch:${repository.relativePath || '.'}`,
+      kind: 'patch',
+      passed: true,
+      reference: repository.patch.uri,
+      sha256: repository.patch.sha256,
+      status: 'success',
+    })
+  }
   for (const repository of input.isolation?.repositories ?? []) {
     evidence.push({
       id: `patch:${repository.relativePath || '.'}`,
@@ -1079,7 +1219,7 @@ function terminalEvidence(
       status: 'success',
     })
   }
-  if (input.isolation === undefined) {
+  if (input.isolation === undefined && inPlaceRepositories === undefined) {
     for (const repository of input.workspaceIdentity?.snapshot.repositories ?? []) {
       evidence.push({
         id: `patch:${repository.relativePath || '.'}`,
@@ -1369,6 +1509,8 @@ async function preflight(
       )
     }
   }
+  const workspace = loadWorkspaces(ctx).get(issueId)
+  if (workspace !== undefined) await applyIssueWorkspace(task, role, readonly, workspace, ctx)
   const summary = summarizeDelivery(issue)
   const currentArtifact = summary.artifact
   const currentArtifactReviews =
@@ -1454,7 +1596,13 @@ async function preflight(
       )
     }
     const isolation = effectiveRuntimeIsolation(task, resumed)
-    if (isolation?.mode !== 'worktree' || isolation.integration !== 'manual') {
+    const inPlace = isolation?.mode === 'in-place'
+    if (inPlace && workspace === undefined) {
+      throw new DeliveryRejected(
+        `In-place runtime verification requires the issue workspace. Call pstack_delivery workspace for ${issueId} first, or pass isolation: { mode: "worktree", integration: "manual" }.`,
+      )
+    }
+    if (!inPlace && (isolation?.mode !== 'worktree' || isolation.integration !== 'manual')) {
       throw new DeliveryRejected(
         'Runtime verification requires manual worktree isolation. Pass isolation: { mode: "worktree", integration: "manual" }.',
       )
@@ -1497,12 +1645,37 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
     label: 'Delivery',
     executionMode: 'sequential',
     description:
-      'Open criteria, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
+      'Open criteria, prepare the issue workspace, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Workspace: creates or returns one persistent Git worktree on branch pstack/<issue>, copies .worktreeinclude files, shares node_modules, and runs .pstack/worktree-setup.sh once. Managed Tasks for that issue then default to its cwd, and writers run in place. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
     parameters: DeliveryToolSchema,
     outputSchema: DeliveryToolOutputSchema,
     async execute(_callId, input, _signal, _onUpdate, ctx) {
       const journal = loadJournal(ctx)
       let issue = journal.issues.get(input.issue)
+      if (input.action === 'workspace') {
+        if (issue === undefined) throw new DeliveryRejected('The managed issue does not exist.')
+        let workspace = loadWorkspaces(ctx).get(issue.issue)
+        if (workspace !== undefined && input.base !== undefined) {
+          throw new DeliveryRejected(
+            `The workspace for issue ${issue.issue} already exists on base ${workspace.base}. Omit base.`,
+          )
+        }
+        if (workspace === undefined || !(await workspaceIsLive(workspace))) {
+          const request: Parameters<typeof prepareIssueWorkspace>[0] = {
+            cwd: ctx.cwd,
+            issue: issue.issue,
+            ownerSessionId: ctx.sessionManager.getSessionId(),
+          }
+          if (input.base !== undefined) request.base = input.base
+          workspace = await prepareIssueWorkspace(request)
+          pi.appendEntry(deliveryWorkspaceEntryType, workspace)
+        }
+        const text = JSON.stringify(workspace)
+        return {
+          content: [{ type: 'text', text }],
+          details: { issue: issue.issue, truncated: false, workspace },
+          structuredContent: { issue: issue.issue, page: workspace, truncated: false },
+        }
+      }
       if (input.action === 'open') {
         if (issue !== undefined)
           throw new DeliveryRejected(
