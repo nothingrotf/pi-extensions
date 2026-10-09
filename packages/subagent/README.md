@@ -464,6 +464,34 @@ Cleanup requires durable result references for every repository. It preserves th
 Each repository result must remain available through its durable internal Git ref.
 Recovery retains live, ambiguous, and conflict workspaces.
 
+### In-place execution
+
+Set `isolation.mode` to `in-place` when a writer must work directly in a dedicated linked Git worktree:
+
+```ts
+Task({
+  cwd: '/Users/me/.pi/worktrees/app/issue-42',
+  description: 'Implement issue 42',
+  prompt: 'Implement the change and run the focused tests.',
+  subagent_type: 'generalPurpose',
+  run_in_background: true,
+  isolation: { mode: 'in-place' },
+})
+```
+
+The runtime creates no copy and performs no join. The child edits the worktree that contains `cwd`.
+
+- The `cwd` must be inside a linked worktree created by `git worktree add`. A primary checkout is rejected.
+- Only a direct root Task can run in place. Nested and aggregated writers keep synthetic isolation.
+- `integration` is not accepted with `in-place`.
+- The runtime holds an exclusive lease on the worktree for the run. A second in-place Task in the same worktree fails until the first one settles. Read-only Tasks do not take the lease.
+- A role that requires manual isolation also accepts `in-place`, because nothing is integrated.
+- Resume continues in the same worktree without reconstruction.
+
+The terminal record contains an `inPlace` receipt with the base tree at admission, the result tree at capture, the current `HEAD`, and a binary patch between the two trees for each repository.
+The `isolation` evidence section returns this receipt.
+Cancellation stops the turn but cannot revert edits that the child already wrote.
+
 ## Structured output and gates
 
 Set `outputSchema` to parse the final child text as JSON. A single JSON code fence is accepted.

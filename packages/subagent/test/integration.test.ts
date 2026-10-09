@@ -2084,6 +2084,131 @@ describe('subagent Task integration', () => {
     }
   }, 180_000)
 
+  async function linkedWorktree(harness: Harness): Promise<string> {
+    const parent = await mkdtemp(join(tmpdir(), 'pi-subagent-linked-'))
+    const worktree = join(parent, 'issue')
+    await execFileAsync('git', ['worktree', 'add', '-q', '-b', 'issue/in-place', worktree], {
+      cwd: harness.dir,
+    })
+    return realpath(worktree)
+  }
+
+  it('writes in place in a linked worktree and captures its base and result trees', async () => {
+    const harness = await createHarness()
+    let worktree: string | undefined
+    try {
+      await initializeHarnessRepository(harness)
+      worktree = await linkedWorktree(harness)
+      const started = await runTask(harness, {
+        cwd: worktree,
+        description: 'Write in the issue worktree',
+        isolation: { mode: 'in-place' },
+        prompt: 'WRITE_ISOLATED',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.notification.promise
+
+      expect(await readFile(join(worktree, 'isolated.txt'), 'utf8')).toBe('isolated content\n')
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.status).toBe('completed')
+      expect(record?.isolation).toBeUndefined()
+      expect(record?.execution?.version).toBe(5)
+      if (record?.execution?.version !== 5) throw new Error('The execution contract is missing.')
+      expect(record.execution.isolation).toEqual({ mode: 'in-place' })
+      const receipt = record.inPlace
+      expect(receipt?.status).toBe('captured')
+      expect(receipt?.worktree).toBe(worktree)
+      const repository = receipt?.repositories[0]
+      expect(repository?.root).toBe(worktree)
+      expect(repository?.baseTree).toBe(
+        record.execution.workspaceIdentity?.snapshot.repositories[0]?.tree,
+      )
+      expect(repository?.resultTree).not.toBe(repository?.baseTree)
+      if (repository?.patch.path === undefined) throw new Error('The in-place patch is missing.')
+      expect(await readFile(repository.patch.path, 'utf8')).toContain('+isolated content')
+
+      const second = await runTask(harness, {
+        cwd: worktree,
+        description: 'Reuse the released lease',
+        isolation: { mode: 'in-place' },
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+      })
+      expect(second).not.toContain('Task failed')
+      const status = await runTaskControl(harness, { action: 'status', agent_id: id })
+      expect(status).toContain('"isolation"')
+    } finally {
+      await harness.close()
+      if (worktree !== undefined) await rm(dirname(worktree), { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('leases an in-place worktree to one writer at a time', async () => {
+    const harness = await createHarness()
+    let worktree: string | undefined
+    try {
+      await initializeHarnessRepository(harness)
+      worktree = await linkedWorktree(harness)
+      const started = await runTask(harness, {
+        cwd: worktree,
+        description: 'Hold the issue worktree',
+        isolation: { mode: 'in-place' },
+        prompt: 'WRITE_THEN_BLOCK',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(started)
+      await harness.state.blockedReady.promise
+
+      const competing = await runTask(harness, {
+        cwd: worktree,
+        description: 'Compete for the issue worktree',
+        isolation: { mode: 'in-place' },
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+      })
+      expect(competing).toContain('Task failed')
+      expect(competing).toContain(`leased by in-place writer ${id}`)
+
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.state.notification.promise
+      const record = latestState(harness).records.find((candidate) => candidate.agentId === id)
+      expect(record?.inPlace?.status).toBe('captured')
+    } finally {
+      for (const release of harness.state.blocked.splice(0)) release()
+      await harness.close()
+      if (worktree !== undefined) await rm(dirname(worktree), { force: true, recursive: true })
+    }
+  }, 180_000)
+
+  it('rejects in-place execution in a primary checkout and with an integration mode', async () => {
+    const harness = await createHarness()
+    try {
+      await initializeHarnessRepository(harness)
+      const primary = await runTask(harness, {
+        description: 'Write in the primary checkout',
+        isolation: { mode: 'in-place' },
+        prompt: 'WRITE_ISOLATED',
+        run_in_background: true,
+        subagent_type: 'generalPurpose',
+      })
+      expect(primary).toContain('requires a linked Git worktree')
+      const integrated = await runTask(harness, {
+        description: 'Request an in-place integration',
+        isolation: { integration: 'apply', mode: 'in-place' },
+        prompt: 'WRITE_ISOLATED',
+        subagent_type: 'generalPurpose',
+      })
+      expect(integrated).toContain('has no integration mode')
+      await expect(readFile(join(harness.dir, 'isolated.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      await harness.close()
+    }
+  }, 180_000)
+
   it('attaches a recovered writer receipt without permitting aborted integration', async () => {
     const harness = await createHarness()
     try {
@@ -2756,6 +2881,55 @@ describe('subagent Task integration', () => {
     },
     180_000,
   )
+
+  it('lets a registered manual verifier run in place and resume there', async () => {
+    const harness = await createHarness()
+    harness.runtime.registerCapability({
+      extensions: [],
+      id: 'verifier-policy',
+      roleToolRequirements: [
+        { isolation: 'manual', role: 'runtime verification', tools: ['bash'] },
+      ],
+      tools: [],
+      version: '1',
+    })
+    harness.runtime.registerCapabilityProfile({
+      id: 'verifier-policy',
+      registrations: ['verifier-policy'],
+    })
+    let worktree: string | undefined
+    try {
+      await initializeHarnessRepository(harness)
+      worktree = await linkedWorktree(harness)
+      const result = await runTask(harness, {
+        ...baseInput,
+        capability_profile: 'verifier-policy',
+        cwd: worktree,
+        isolation: { mode: 'in-place' },
+        prompt: 'verify in place',
+        readonly: false,
+        role: 'runtime verification',
+        subagent_type: 'generalPurpose',
+      })
+      const id = agentId(result)
+      const record = latestState(harness).records.find((entry) => entry.agentId === id)
+      if (record?.execution?.version !== 5) throw new Error('The execution contract is missing.')
+      expect(record.execution.isolation).toEqual({ mode: 'in-place' })
+      const repository = record.inPlace?.repositories[0]
+      expect(repository?.resultTree).toBe(repository?.baseTree)
+      const resumed = await runTask(harness, {
+        ...baseInput,
+        prompt: 'verify the same tree again',
+        resume: id,
+        subagent_type: 'generalPurpose',
+      })
+      expect(resumed).toContain('verify the same tree again')
+      expect(harness.runtime.getRecord(id)?.inPlace?.status).toBe('captured')
+    } finally {
+      await harness.close()
+      if (worktree !== undefined) await rm(dirname(worktree), { force: true, recursive: true })
+    }
+  }, 180_000)
 
   it('retains runtime verifier artifacts without allowing a join', async () => {
     const harness = await createHarness()

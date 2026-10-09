@@ -392,7 +392,9 @@ export function taskStatus(
   const terminal = runtime.latestResult(snapshot.agentId)
   const evidence: EvidenceSection[] = []
   if (terminal?.artifact !== undefined) evidence.push('output')
-  if (terminal?.isolation !== undefined) evidence.push('isolation')
+  if (terminal?.isolation !== undefined || terminal?.inPlace !== undefined) {
+    evidence.push('isolation')
+  }
   if (terminal?.structuredOutput !== undefined) evidence.push('structured-output')
   if ((terminal?.toolExecutionReceipts.length ?? 0) > 0) evidence.push('tool-receipts')
   if ((terminal?.gateResults.length ?? 0) > 0) evidence.push('gates')

@@ -8,6 +8,7 @@ import {
   TaskRoleSchema,
   type ArtifactRef,
   type CapabilityContract,
+  type InPlaceReceipt,
   type IsolationReceipt,
   type StructuredOutput,
   type TaskInput,
@@ -37,6 +38,7 @@ export interface TerminalValidationInput {
   agentId: string
   artifact: ArtifactRef
   attempt: number
+  inPlace?: InPlaceReceipt
   isolation?: IsolationReceipt
   output: string
   previousOutputs: readonly TerminalOutputRevision[]
@@ -248,6 +250,13 @@ export function resolveRoleIsolation(
     (entry) => entry.role === input.role && entry.isolation === 'manual',
   )
   if (!manual) return input.isolation
+  if (
+    input.readonly !== true &&
+    input.isolation?.mode === 'in-place' &&
+    input.isolation.integration === undefined
+  ) {
+    return input.isolation
+  }
   if (
     input.readonly === true ||
     (input.isolation?.integration !== undefined && input.isolation.integration !== 'manual')

@@ -185,6 +185,7 @@ interface AggregatePlan {
 }
 
 function resolvedIsolation(policy: BatchPreflight): TaskIsolation | undefined {
+  if (policy.isolation?.mode === 'in-place') return { mode: 'in-place' }
   if (policy.isolation !== undefined) {
     return {
       integration: policy.isolation.integration ?? 'apply',

@@ -79,10 +79,12 @@ export const TransactionPhaseSchema = Type.Union([
   Type.Literal('failed'),
 ])
 
+export const IsolationModeSchema = Type.Enum(['worktree', 'in-place'])
+
 export const IsolationRequestSchema = Type.Object(
   {
     integration: Type.Optional(IsolationIntegrationSchema),
-    mode: Type.Literal('worktree'),
+    mode: IsolationModeSchema,
   },
   { additionalProperties: false },
 )
@@ -390,6 +392,23 @@ export const IsolationRepositoryReceiptSchema = Type.Object({
   transactionPhase: Type.Optional(TransactionPhaseSchema),
 })
 
+export const InPlaceRepositoryReceiptSchema = Type.Object({
+  baseTree: Type.String({ minLength: 1 }),
+  head: Type.Optional(Type.String({ minLength: 1 })),
+  patch: IsolationPatchRefSchema,
+  relativePath: Type.String(),
+  resultTree: Type.String({ minLength: 1 }),
+  root: Type.String({ minLength: 1 }),
+})
+
+export const InPlaceReceiptSchema = Type.Object({
+  capturedAt: Type.Number({ minimum: 0 }),
+  error: Type.Optional(Type.String()),
+  repositories: Type.Array(InPlaceRepositoryReceiptSchema),
+  status: Type.Union([Type.Literal('captured'), Type.Literal('failed')]),
+  worktree: Type.String({ minLength: 1 }),
+})
+
 export const IsolationReceiptSchema = Type.Object({
   attemptId: Type.String({ minLength: 1 }),
   cleanupDebt: Type.Boolean(),
@@ -618,6 +637,7 @@ export const AttemptEvidenceSchema = Type.Object({
   attempt: Type.Number({ minimum: 1 }),
   error: Type.Optional(Type.String()),
   gateResults: Type.Array(GateResultSchema),
+  inPlace: Type.Optional(InPlaceReceiptSchema),
   isolation: Type.Optional(IsolationReceiptSchema),
   status: Type.Union([Type.Literal('completed'), Type.Literal('failed'), Type.Literal('aborted')]),
   structuredOutput: Type.Optional(StructuredOutputSchema),
@@ -642,6 +662,7 @@ const RunRecordFields = {
   evidenceArtifacts: Type.Optional(Type.Array(ArtifactRefSchema)),
   fast: Type.Boolean(),
   gateResults: Type.Optional(Type.Array(GateResultSchema)),
+  inPlace: Type.Optional(InPlaceReceiptSchema),
   intercomUsage: Type.Optional(RunUsageSchema),
   isolation: Type.Optional(IsolationReceiptSchema),
   isolationAttempts: Type.Optional(Type.Array(IsolationReceiptSchema)),
@@ -814,6 +835,8 @@ export type GateResult = StaticDecode<typeof GateResultSchema>
 export type DeliveryBinding = StaticDecode<typeof DeliveryBindingSchema>
 export type DependencyMode = StaticDecode<typeof DependencyModeSchema>
 export type HeadState = StaticDecode<typeof HeadStateSchema>
+export type InPlaceReceipt = StaticDecode<typeof InPlaceReceiptSchema>
+export type InPlaceRepositoryReceipt = StaticDecode<typeof InPlaceRepositoryReceiptSchema>
 export type IsolationChangedFile = StaticDecode<typeof IsolationChangedFileSchema>
 export type IsolationIntegration = StaticDecode<typeof IsolationIntegrationSchema>
 export type IsolationPatchRef = StaticDecode<typeof IsolationPatchRefSchema>
