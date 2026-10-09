@@ -22,6 +22,14 @@ const eventSchema = Type.Object({
   }),
 })
 
+function globArguments(glob: string, indexed: boolean): string[] {
+  const name = glob.replace(/^(\*\*\/)+/, '')
+  if (indexed || glob.startsWith('!') || name.includes('/') || name.length === 0) {
+    return ['--glob', glob]
+  }
+  return ['--type-add', `pi-glob:${name}`, '--type', 'pi-glob']
+}
+
 export async function search(
   input: GrepToolInput,
   cwd: string,
@@ -45,7 +53,7 @@ export async function search(
   if (!indexed) args.push('--no-index', '--hidden')
   if (input.ignoreCase) args.push('--ignore-case')
   if (input.literal) args.push('--fixed-strings')
-  if (input.glob) args.push('--glob', input.glob)
+  if (input.glob) args.push(...globArguments(input.glob, indexed))
   if (context) args.push('--context', String(context))
   args.push('--', input.pattern, searchPath)
   const child = spawn(executable, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
