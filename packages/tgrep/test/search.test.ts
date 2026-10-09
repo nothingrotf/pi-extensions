@@ -25,6 +25,8 @@ describe.skipIf(!available)('Microsoft tgrep integration', () => {
     await writeFile(join(cwd, 'other.txt'), 'needle')
     const result = await search({ pattern: 'needle', glob: '*.ts' }, cwd)
     expect(result.content[0]?.text).toBe('.hidden.ts:1: needle')
+    const recursive = await search({ pattern: 'needle', glob: '**/*.ts' }, cwd)
+    expect(recursive.content[0]?.text).toBe('.hidden.ts:1: needle')
   })
 
   test('supports literal, case, context, and individual paths', async () => {
