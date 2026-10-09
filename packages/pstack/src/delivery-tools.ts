@@ -804,7 +804,11 @@ function issueFromRecord(
   return bindings.get(record.agentId)
 }
 
-function deliveryNext(issue: DeliveryIssue, ctx: ExtensionContext): DeliveryNextStep {
+function deliveryNext(
+  issue: DeliveryIssue,
+  ctx: ExtensionContext,
+  workspace = loadWorkspaces(ctx).has(issue.issue),
+): DeliveryNextStep {
   const bindings = loadBindings(ctx)
   const records = (
     readSubagentState(ctx.sessionManager.getBranch(), ctx.sessionManager.getSessionId())?.records ??
@@ -825,7 +829,7 @@ function deliveryNext(issue: DeliveryIssue, ctx: ExtensionContext): DeliveryNext
           ),
       )
       .map((record) => record.agentId),
-    workspace: loadWorkspaces(ctx).has(issue.issue),
+    workspace,
   })
 }
 
@@ -1701,11 +1705,11 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
           workspace = await prepareIssueWorkspace(request)
           pi.appendEntry(deliveryWorkspaceEntryType, workspace)
         }
-        const text = JSON.stringify(workspace)
+        const page = { ...workspace, next: deliveryNext(issue, ctx, true) }
         return {
-          content: [{ type: 'text', text }],
+          content: [{ type: 'text', text: JSON.stringify(page) }],
           details: { issue: issue.issue, truncated: false, workspace },
-          structuredContent: { issue: issue.issue, page: workspace, truncated: false },
+          structuredContent: { issue: issue.issue, page, truncated: false },
         }
       }
       if (input.action === 'open') {
