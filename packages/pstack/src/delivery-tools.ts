@@ -1182,6 +1182,11 @@ function packetText(issue: DeliveryIssue, history: PacketHistory): string {
     'Receipt numbering belongs to the current attempt. A resume transfers no previous alias, including command:n, read:n, and every other family.',
     'A resumed attempt starts an empty receipt index. Reopen in this attempt every file or command you cite, or cite patch:<path> for the captured artifact.',
     'An implementation candidate requires at least one successful command receipt from this attempt.',
+    ...(issue.runtimeRequired
+      ? [
+          'This issue requires runtime verification, which proves the criteria that need execution. A read-only static review passes each criterion that reading proves, marks each criterion that needs execution as pending, and returns state candidate when it finds no blocking defect. It returns accepted only when reading proves every criterion.',
+        ]
+      : []),
     'A failed command receipt never proves a passing criterion. Re-run the command after the fix and cite the successful alias, or report the criterion as not passing.',
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,

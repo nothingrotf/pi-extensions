@@ -3,6 +3,7 @@ import {
   currentDeliveryReport,
   type DeliveryIssue,
   type DeliverySubmission,
+  reviewEndorsesCandidate,
   sameDeliveryArtifact,
   summarizeDelivery,
 } from './delivery.ts'
@@ -121,9 +122,7 @@ export function nextDeliveryStep(
   }
   if (summary.state === 'candidate') {
     const reviews = currentReviews(issue, candidate)
-    const rejected = [...reviews.values()].some(
-      (review) => currentDeliveryReport(review).state !== 'accepted',
-    )
+    const rejected = [...reviews.values()].some((review) => !reviewEndorsesCandidate(issue, review))
     const roles: ReviewRole[] = []
     if (!reviews.has('code review')) roles.push('code review')
     if (issue.runtimeRequired && !reviews.has('runtime verification'))
