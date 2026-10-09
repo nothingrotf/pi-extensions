@@ -122,7 +122,7 @@ These later upstream commits are also synchronized:
 
 The Pi port adapts these commits:
 
-- A fix round, a follow-up, a retry, and the next queue item go to a fresh agent. The managed delivery ledger supplies the consolidated scope.
+- A fix round, a follow-up, a retry, and the next queue item go to a fresh agent. The managed delivery ledger supplies the consolidated scope. The implementation owner of an issue with an issue workspace is the exception: it resumes for each correction.
 - Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
 - Isolated owners do not push. In Autopilot-full, the root publishes each verifiable unit as a WIP snapshot on a `wip/<issue>` branch.
 - In Autopilot-stack, the root publishes each WIP snapshot to the layer's draft pull request in the stack. Publication marks it ready only after independent acceptance.
@@ -154,7 +154,7 @@ Absent review and verification roles inherit `arena cross-judge pool`, then `jud
 
 Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
-Runtime verifiers use `isolation: { mode: "worktree", integration: "manual" }`.
+In an issue workspace, runtime verifiers run in place. Otherwise, they use `isolation: { mode: "worktree", integration: "manual" }`.
 Their artifacts remain inspectable, but the runtime rejects `join`.
 Omitted runtime-verification isolation defaults to `manual`. Explicit `apply`, `branch`, or read-only execution fails before dispatch.
 Managed reviewer and verifier resumes inherit their recorded directory and isolation when omitted.
@@ -172,11 +172,11 @@ Older records without a role remain unlabeled rather than receiving a guessed ro
 ## Delivery throughput
 
 Bounded work uses an accepted design, one implementer role, and one independent reviewer.
-Each round, including every correction, goes to a fresh agent with consolidated scope.
+Each round, including every correction, goes to a fresh agent with consolidated scope. In an issue workspace, the implementation owner resumes for each correction instead, and reviewers stay fresh.
 Assign the implementer before reproduction or discovery, not after a separate investigation handoff.
 Run `how` and `why` in that owner's session by default. Delegate only independent slices or explicitly required perspectives.
 Scoped workers load their assigned workflow instead of the coordinator's full routing catalog.
-Corrections carry the accepted design, harness, and findings into fresh agents instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools and manual isolation from their first dispatch. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
+Corrections carry the accepted design, harness, and findings into fresh agents instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools from their first dispatch, in place in the issue workspace or with manual isolation without one. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
 New or contested architecture defaults to two candidates and one independent judge.
 A configured model pool does not determine fanout.
 

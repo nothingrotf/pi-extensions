@@ -26,6 +26,16 @@ acceptance criteria: <checkable criteria, one per line>
 Before a prospective artifact exists, mark its identity pending with a reason.
 Verification and publication require resolved artifact identities, not branch names that can move.
 
+## Issue workspace
+
+After `pstack_delivery` opens a code-writing issue, call it with `action: "workspace"` before the first dispatch.
+Pass `base` to start from a pushed parent, for example `"origin/main"`.
+The result names the worktree, the branch, the base commit, and the setup status. Copy them into the checkpoint.
+If setup failed, read its log and fix the environment once before dispatch.
+Managed Tasks for the issue then run in that worktree. Writers run in place under an exclusive lease.
+The owner, the runtime verifier, and publication reuse one prepared environment across all rounds.
+Keep coordinator scratch files outside the worktree, because any tree change replaces the candidate identity.
+
 ## Risk routing
 
 | Work | Default |
@@ -54,13 +64,15 @@ Do not create a separate cleanup agent or verdict-reducer Task for each pass.
 A verdict names the artifact, findings, executed checks, evidence, and unresolved blockers.
 
 Use `code review` for static review and `runtime verification` for combined static and executable acceptance checks.
-Dispatch both reviewers in the same turn as background Tasks, then wait once for the pair.
-Their inputs are the same immutable candidate, so the review clock is the longer reviewer, not the sum.
+Dispatch both reviewers in one `Task.tasks` batch, then wait once for the pair.
+The batch checks both against the same candidate before either starts, so the review clock is the longer reviewer, not the sum.
+In an issue workspace, the runtime verifier runs in place while the static reviewer reads the same tree.
 Scope the static reviewer to reading, style, and structure. Scope the runtime reviewer to executed acceptance.
 When only one reviewer is required, dispatch only that one.
 
 A read-only static reviewer has no shell, so it cannot run Git, materialize a diff, or confirm a patch-id.
 Write the exact diff to a readable file before dispatching one, then name that path and its digest in the prompt.
+In an issue workspace, write `git -C <worktree> diff <base>` and `git -C <worktree> status --short` to a file outside the worktree.
 State the base and head commits as context, and route every check that must execute Git to the runtime reviewer.
 A static verdict that reviews the working tree instead of the named candidate is scope drift, not a review.
 Only `feature`, `bug-fix`, `refactoring`, `perf-issue`, and `hillclimb` can own an implementation submission.
@@ -69,7 +81,8 @@ If one of those roles returns an implementation-shaped report, retain it as non-
 Choose one permitted selector from these pools, not every configured entry.
 For required cross-family review, select a different family from the actual implementation model.
 If no permitted model satisfies that requirement, return `BLOCKED` and request a policy update.
-Plan runtime reviewers with shell access and manual isolation from their first dispatch.
+Plan runtime reviewers with shell access from their first dispatch, in place in the issue workspace or with manual isolation without one.
+A runtime verifier in place must leave the candidate tree unchanged. Scratch output goes outside the worktree or into ignored paths.
 Never join the verifier's incidental patch.
 
 Start with two independent issue lanes when files, dependencies, and mutable resources are disjoint.
@@ -135,6 +148,11 @@ A leaf returns required delegation instead of bypassing its capability profile.
 
 Give each new round to a fresh agent with consolidated scope, per the poteto-mode Subagents section.
 A fix round, a follow-up, a retry, and the next queue item are new rounds.
+The implementation owner of an issue with an issue workspace is the exception.
+Record its attempt, then resume it for the next correction with the verdict, open findings, and every new directive.
+The resumed owner keeps its investigation and continues in the same worktree, so the round skips rediscovery and setup.
+Dispatch a fresh owner instead when the role, model, capability profile, or accepted design changes, after a diagnosis, or when the owner failed without a report.
+Keep reviewers fresh for every round, so that no reviewer anchors on its earlier verdict.
 Consolidated scope is the original brief, every later directive, the evidence brief, the prior report, the current artifact, the harness, and open findings.
 Resume an existing agent only when the new work strictly needs state that lives in it and is costly to move.
 Unaccepted WIP that no retained patch captures and a process that the agent still runs are such state.
@@ -180,6 +198,8 @@ Do not keep the only harness copy in incidental verifier files, and never join t
 Reuse the harness across corrections instead of rebuilding equivalent verification environments.
 Keep dependency writes private to the verifier workspace.
 
+In an issue workspace, the runtime verifier reads the owner's gate logs for the same candidate tree instead of rerunning unchanged repository gates.
+It spends its time on the acceptance checks, the actual surface, and adversarial probes that the owner did not run.
 Reuse a passing receipt only while its artifact, harness, configuration, and runtime inputs remain unchanged.
 A changed patch invalidates its code verdict.
 A changed runtime or dependency invalidates affected runtime evidence even when the patch-id is unchanged.
@@ -203,7 +223,7 @@ Resolve the exact role, model selector, capability profile, tools, and directory
 Inspect actual tool descriptors instead of guessing fields.
 Tool parameter schemas require an explicit object root.
 Nested workflow owners need `pstack-nested`, while bounded implementation against an accepted design can use `pstack-leaf`.
-A runtime verifier needs shell access and manual isolation, not a read-only tool policy.
+A runtime verifier needs shell access and in-place execution in the issue workspace, or manual isolation without one. It never uses a read-only tool policy.
 A read-only Task never receives `bash`, `edit`, or `write`, whatever the prompt asks of it.
 Supply a readable artifact for every check a read-only reviewer must perform.
 Integrate the accepted patch into the destination before dispatching an isolated verifier from that destination.

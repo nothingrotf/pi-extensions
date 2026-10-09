@@ -142,6 +142,14 @@ describe('pstack delivery contract', () => {
       'Give a missing verdict that requires additional inspection or execution to a fresh reviewer',
     )
     expect(contract).not.toContain('Resume the same implementer')
+    expect(contract).toContain(
+      'The implementation owner of an issue with an issue workspace is the exception.',
+    )
+    expect(contract).toContain('Keep reviewers fresh for every round')
+    expect(contract).toContain('call it with `action: "workspace"` before the first dispatch')
+    expect(skill('poteto-mode/SKILL.md')).toContain(
+      'One exception applies: the implementation owner of a managed issue with an issue workspace.',
+    )
     const task = skill('poteto-mode/references/task-contracts.md')
     expect(task).toContain('Never weaken resume validation')
     expect(task).toContain(
@@ -150,7 +158,7 @@ describe('pstack delivery contract', () => {
     const orchestrate = skill('poteto-mode/playbooks/orchestrate.md')
     expect(orchestrate).not.toContain('Never resume-chain a brief')
     expect(orchestrate).toContain(
-      'Give each correction round to a fresh implementer and a fresh independent reviewer',
+      'Give each correction round to the resumed issue owner and a fresh independent reviewer',
     )
     const trail = skill('show-me-your-work/SKILL.md')
     expect(trail).toContain("Add the trail audit to the brief of the round's independent reviewer")
