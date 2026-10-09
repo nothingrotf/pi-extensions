@@ -472,7 +472,7 @@ async function copyDirectory(source: string, target: string): Promise<'copy' | '
   }
 }
 
-async function materializeDependencyDirectories(
+export async function materializeDependencyDirectories(
   sourceRoot: string,
   targetRoot: string,
 ): Promise<{ dependencyMode: DependencyMode; paths: string[] }> {

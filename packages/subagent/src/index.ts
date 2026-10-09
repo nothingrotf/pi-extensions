@@ -154,7 +154,10 @@ function completedDetails(details: RuntimeCompletedDetails): OperationalComplete
     finalMessage: boundedText(details.finalMessage, MAX_DETAIL_PREVIEW_BYTES),
     gateCount: details.gateResults.length,
     intercomUsage: details.intercomUsage,
-    isolationStatus: details.isolation?.integrationStatus ?? details.isolation?.status ?? null,
+    isolationStatus:
+      details.isolation?.integrationStatus ??
+      details.isolation?.status ??
+      (details.inPlace === undefined ? null : `in-place-${details.inPlace.status}`),
     model: details.model,
     role: details.role,
     runId: details.runId,
@@ -179,7 +182,10 @@ function failedDetails(
     attemptStarted: details.attemptStarted ?? true,
     error: details.error,
     gateCount: details.gateResults?.length ?? 0,
-    isolationStatus: details.isolation?.integrationStatus ?? details.isolation?.status ?? null,
+    isolationStatus:
+      details.isolation?.integrationStatus ??
+      details.isolation?.status ??
+      (details.inPlace === undefined ? null : `in-place-${details.inPlace.status}`),
     status: details.status,
     structuredOutputStatus: details.structuredOutput?.status ?? null,
   }
@@ -607,7 +613,8 @@ async function executeTask(
 }
 
 export { acquireSubagentController } from './controller.ts'
-export { captureWorkspaceSnapshot } from './git-isolation.ts'
+export { captureWorkspaceSnapshot, materializeDependencyDirectories } from './git-isolation.ts'
+export { linkedWorktreeRoot } from './in-place.ts'
 export { latestState as readSubagentState } from './state.ts'
 export { TaskControlInputSchema } from './control.ts'
 export { toolInputUnion } from './tool-schema.ts'
@@ -647,6 +654,8 @@ export type {
   ExecutionContractV5,
   GateDefinition,
   GateResult,
+  InPlaceReceipt,
+  InPlaceRepositoryReceipt,
   IsolationChangedFile,
   IsolationIntegration,
   IsolationPatchRef,

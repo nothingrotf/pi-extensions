@@ -285,50 +285,93 @@ export interface ProcessLock {
   token: string
 }
 
-export async function acquireLock(
-  path: string,
+type LockStep =
+  | { kind: 'acquired'; lock: ProcessLock }
+  | { holder: LockOwner; kind: 'held' }
+  | { kind: 'raced' }
+
+async function lockStep(
+  gitDir: string,
+  ref: string,
+  ownerObject: string,
   owner: LockOwner,
   recoveryRoot: string,
-): Promise<ProcessLock> {
-  await mkdir(recoveryRoot, { recursive: true })
-  const gitDir = lockGitDirectory(path)
-  const ref = `refs/pi-subagent/v2/locks/${digest(path)}`
-  const ownerText = JSON.stringify(owner)
-  const objectResult = await lockGit(gitDir, ['hash-object', '-w', '--stdin'], ownerText)
-  if (objectResult.code !== 0) throw new Error(`Cannot create the lock owner for ${path}.`)
-  const ownerObject = objectResult.stdout.trim()
-  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
-    const currentResult = await lockGit(gitDir, ['rev-parse', '--verify', '--quiet', ref])
-    const currentObject = currentResult.code === 0 ? currentResult.stdout.trim() : undefined
-    if (currentObject === undefined) {
-      const acquired = await lockGit(gitDir, [
-        'update-ref',
-        ref,
-        ownerObject,
-        '0'.repeat(ownerObject.length),
-      ])
-      if (acquired.code !== 0) continue
-    } else {
-      const existing = await lockOwnerFromObject(gitDir, currentObject)
-      if (existing !== undefined && (await processLives(existing))) {
-        await delay(LOCK_RETRY_DELAY_MS)
-        continue
-      }
-      const acquired = await lockGit(gitDir, ['update-ref', ref, ownerObject, currentObject])
-      if (acquired.code !== 0) continue
-      if (existing !== undefined) {
-        await writeAtomicJson(join(recoveryRoot, `${Date.now()}-${randomUUID()}.json`), existing)
-      }
+): Promise<LockStep> {
+  const currentResult = await lockGit(gitDir, ['rev-parse', '--verify', '--quiet', ref])
+  const currentObject = currentResult.code === 0 ? currentResult.stdout.trim() : undefined
+  if (currentObject === undefined) {
+    const acquired = await lockGit(gitDir, [
+      'update-ref',
+      ref,
+      ownerObject,
+      '0'.repeat(ownerObject.length),
+    ])
+    if (acquired.code !== 0) return { kind: 'raced' }
+  } else {
+    const existing = await lockOwnerFromObject(gitDir, currentObject)
+    if (existing !== undefined && (await processLives(existing))) {
+      return { holder: existing, kind: 'held' }
     }
-    return {
+    const acquired = await lockGit(gitDir, ['update-ref', ref, ownerObject, currentObject])
+    if (acquired.code !== 0) return { kind: 'raced' }
+    if (existing !== undefined) {
+      await writeAtomicJson(join(recoveryRoot, `${Date.now()}-${randomUUID()}.json`), existing)
+    }
+  }
+  return {
+    kind: 'acquired',
+    lock: {
       path: ref,
       release: async () => {
         await lockGit(gitDir, ['update-ref', '-d', ref, ownerObject])
       },
       token: owner.token,
-    }
+    },
+  }
+}
+
+async function lockIdentity(
+  path: string,
+  owner: LockOwner,
+  recoveryRoot: string,
+): Promise<{ gitDir: string; ownerObject: string; ref: string }> {
+  await mkdir(recoveryRoot, { recursive: true })
+  const gitDir = lockGitDirectory(path)
+  const ref = `refs/pi-subagent/v2/locks/${digest(path)}`
+  const objectResult = await lockGit(
+    gitDir,
+    ['hash-object', '-w', '--stdin'],
+    JSON.stringify(owner),
+  )
+  if (objectResult.code !== 0) throw new Error(`Cannot create the lock owner for ${path}.`)
+  return { gitDir, ownerObject: objectResult.stdout.trim(), ref }
+}
+
+export async function acquireLock(
+  path: string,
+  owner: LockOwner,
+  recoveryRoot: string,
+): Promise<ProcessLock> {
+  const { gitDir, ownerObject, ref } = await lockIdentity(path, owner, recoveryRoot)
+  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
+    const step = await lockStep(gitDir, ref, ownerObject, owner, recoveryRoot)
+    if (step.kind === 'acquired') return step.lock
+    if (step.kind === 'held') await delay(LOCK_RETRY_DELAY_MS)
   }
   throw new Error(`Timed out while waiting for the lock at ${path}.`)
+}
+
+export async function tryAcquireLock(
+  path: string,
+  owner: LockOwner,
+  recoveryRoot: string,
+): Promise<{ holder: LockOwner; kind: 'held' } | { kind: 'acquired'; lock: ProcessLock }> {
+  const { gitDir, ownerObject, ref } = await lockIdentity(path, owner, recoveryRoot)
+  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
+    const step = await lockStep(gitDir, ref, ownerObject, owner, recoveryRoot)
+    if (step.kind !== 'raced') return step
+  }
+  throw new Error(`Timed out while racing for the lock at ${path}.`)
 }
 
 export async function withRepositoryLock<Result>(

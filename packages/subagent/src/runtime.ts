@@ -52,6 +52,7 @@ import {
   commonDirectory,
   repositoryRoot,
 } from './git-isolation.ts'
+import { acquireInPlaceLease, captureInPlaceReceipt, type InPlaceLease } from './in-place.ts'
 import {
   ParentSideTurnError,
   recordAutomaticReply,
@@ -101,7 +102,9 @@ import type {
   EvidenceSection,
   ExecutionContractV5,
   GateResult,
+  InPlaceReceipt,
   IsolationReceipt,
+  IsolationRequest,
   RetryFailure,
   RetryState,
   RunRecord,
@@ -162,6 +165,8 @@ interface ActiveRun {
   integrationStarted: boolean
   intercomUsage: RunUsage
   handle: SubagentHandle
+  inPlace: { lease: InPlaceLease; start: WorkspaceIdentity } | undefined
+  inPlaceReceipt: InPlaceReceipt | undefined
   isolationReceipt: IsolationReceipt | undefined
   lastActivity: string | undefined
   messages: AssistantMessage[]
@@ -309,6 +314,7 @@ export interface SubagentResult {
   error: string | undefined
   gateResults: readonly GateResult[]
   intercomUsage: RunUsage
+  inPlace?: InPlaceReceipt | undefined
   isolation?: IsolationReceipt | undefined
   model: string
   output: string | undefined
@@ -393,6 +399,7 @@ export interface RuntimeCompletedDetails {
   fast: boolean
   finalMessage: string
   gateResults: GateResult[]
+  inPlace?: InPlaceReceipt | undefined
   intercomUsage: RunUsage
   isolation?: IsolationReceipt | undefined
   model: string
@@ -437,6 +444,7 @@ export interface RuntimeFailedDetails {
   error: string
   finalMessage?: string
   gateResults?: GateResult[]
+  inPlace?: InPlaceReceipt | undefined
   isolation?: IsolationReceipt | undefined
   runId?: string
   status: 'error'
@@ -563,6 +571,16 @@ function executionContext(contract: ExecutionContractV5): string {
     )
   }
   return lines.join('\n')
+}
+
+function normalizedIsolation(request: IsolationRequest): IsolationRequest {
+  if (request.mode === 'in-place') {
+    if (request.integration !== undefined) {
+      throw new Error('In-place execution has no integration mode. Omit isolation.integration.')
+    }
+    return { mode: 'in-place' }
+  }
+  return { integration: request.integration ?? 'apply', mode: 'worktree' }
 }
 
 function emptyUsage(durationMs: number): RunUsage {
@@ -1023,7 +1041,9 @@ export class SubagentRuntime {
     if (section === 'output') {
       return evidence.artifact === undefined ? '' : readArtifact(evidence.artifact)
     }
-    if (section === 'isolation') return JSON.stringify(evidence.isolation ?? null, null, 2)
+    if (section === 'isolation') {
+      return JSON.stringify(evidence.isolation ?? evidence.inPlace ?? null, null, 2)
+    }
     if (section === 'structured-output') {
       return JSON.stringify(evidence.structuredOutput ?? null, null, 2)
     }
@@ -1507,6 +1527,14 @@ export class SubagentRuntime {
     return createRootWorkspaceContext(logicalCwd, root.scopeId, this.state.owner)
   }
 
+  private async inPlaceWorkspaceContext(
+    ctx: ExtensionContext,
+    logicalCwd: string,
+  ): Promise<WorkspaceContext> {
+    const root = await this.resolveRootWorkspaceContext(ctx)
+    return createRootWorkspaceContext(logicalCwd, root.scopeId, this.state.owner)
+  }
+
   private async rootRelativeCwd(
     ctx: ExtensionContext,
     logicalCwd: string,
@@ -1597,7 +1625,7 @@ export class SubagentRuntime {
     const policies: Array<Pick<ExecutionContractV5, 'readonly' | 'isolation' | 'logicalCwd'>> = []
     for (const input of inputs) {
       const execution = await this.resolveExecution(ctx, input, undefined, runtime, undefined)
-      if (!execution.contract.readonly) {
+      if (!execution.contract.readonly && execution.contract.isolation?.mode !== 'in-place') {
         await this.rootRelativeCwd(ctx, execution.contract.logicalCwd, true)
       }
       const policy: Pick<ExecutionContractV5, 'readonly' | 'isolation' | 'logicalCwd'> = {
@@ -1849,6 +1877,12 @@ export class SubagentRuntime {
     const model = execution.model
     const contract = execution.contract
     const requestedPhysicalCwd = contract.logicalCwd
+    const inPlace = contract.isolation?.mode === 'in-place'
+    if (inPlace && (options.parentAgentId !== undefined || options.parentWorkspace !== undefined)) {
+      throw new Error(
+        'In-place execution requires a direct root Task. Nested and aggregated writers use isolation mode "worktree".',
+      )
+    }
     const reconstruction =
       prior === undefined
         ? undefined
@@ -1886,7 +1920,9 @@ export class SubagentRuntime {
       options.parentWorkspace ??
       (contract.isolation === undefined
         ? await this.resolveRootWorkspaceContext(options.ctx)
-        : await this.taskWorkspaceContext(options.ctx, requestedPhysicalCwd))
+        : inPlace
+          ? await this.inPlaceWorkspaceContext(options.ctx, requestedPhysicalCwd)
+          : await this.taskWorkspaceContext(options.ctx, requestedPhysicalCwd))
     const identityCwd =
       options.parentWorkspace === undefined
         ? requestedPhysicalCwd
@@ -1894,6 +1930,7 @@ export class SubagentRuntime {
     const parentActive =
       options.parentAgentId === undefined ? undefined : this.active.get(options.parentAgentId)
     let isolation: WriterWorkspace | undefined
+    let inPlaceLease: InPlaceLease | undefined
     let session: AgentSession | undefined
     let record: RunRecord | undefined
     let active: ActiveRun
@@ -1906,10 +1943,13 @@ export class SubagentRuntime {
     const spawnOrdinal = parentActive?.scope.nextOrdinal() ?? 1
     try {
       let effectiveCwd: string
-      if (contract.isolation === undefined) {
+      if (contract.isolation === undefined || inPlace) {
+        if (inPlace) inPlaceLease = await acquireInPlaceLease(identityCwd, writerId)
         const identity = await captureWorkspaceIdentity(identityCwd)
-        if (identity === undefined) delete contract.workspaceIdentity
-        else contract.workspaceIdentity = identity
+        if (identity === undefined) {
+          if (inPlace) throw new Error('The in-place worktree has no workspace identity.')
+          delete contract.workspaceIdentity
+        } else contract.workspaceIdentity = identity
         effectiveCwd =
           options.parentWorkspace === undefined
             ? requestedPhysicalCwd
@@ -2115,6 +2155,11 @@ export class SubagentRuntime {
         intercomController: new AbortController(),
         integrationStarted: false,
         handle,
+        inPlace:
+          inPlaceLease === undefined || contract.workspaceIdentity === undefined
+            ? undefined
+            : { lease: inPlaceLease, start: contract.workspaceIdentity },
+        inPlaceReceipt: undefined,
         intercomUsage: emptyUsage(0),
         isolationReceipt: undefined,
         lastActivity: 'Starting',
@@ -2139,6 +2184,7 @@ export class SubagentRuntime {
       }
     } catch (error) {
       await this.cleanupUnadmitted(session, isolation).catch(() => {})
+      await inPlaceLease?.release().catch(() => {})
       parentScopeCompletion?.resolve({
         details: {
           agentId: session?.sessionId ?? writerId,
@@ -2328,10 +2374,7 @@ export class SubagentRuntime {
         throw new Error('A resumed Task must preserve the original output gates.')
       }
       if (input.isolation !== undefined) {
-        const requestedIsolation = {
-          integration: input.isolation.integration ?? 'apply',
-          mode: input.isolation.mode,
-        }
+        const requestedIsolation = normalizedIsolation(input.isolation)
         if (
           contract.isolation === undefined ||
           !jsonEquals(requestedIsolation, contract.isolation)
@@ -2485,18 +2528,16 @@ export class SubagentRuntime {
       model: model.modelRef,
       modelSelector: model.selector,
       readonly,
-      relativeCwd: await this.rootRelativeCwd(ctx, cwd, isolation !== undefined),
+      relativeCwd:
+        isolation?.mode === 'in-place'
+          ? (await createRootWorkspaceContext(cwd, 'in-place', this.state.owner)).relativeCwd
+          : await this.rootRelativeCwd(ctx, cwd, isolation !== undefined),
       schemaMode: input.schemaMode ?? 'permissive',
       systemPrompt,
       tools,
       version: 5,
     }
-    if (isolation !== undefined) {
-      contract.isolation = {
-        integration: isolation.integration ?? 'apply',
-        mode: 'worktree',
-      }
-    }
+    if (isolation !== undefined) contract.isolation = normalizedIsolation(isolation)
     if (input.role !== undefined) contract.role = input.role
     if (input.delivery !== undefined) contract.delivery = input.delivery
     if (input.outputSchema !== undefined) contract.outputSchema = input.outputSchema
@@ -2667,10 +2708,22 @@ export class SubagentRuntime {
     record.isolation = receipt
   }
 
+  private async captureInPlace(active: ActiveRun, record: RunRecord): Promise<void> {
+    if (active.inPlace === undefined || active.inPlaceReceipt !== undefined) return
+    active.lastActivity = 'Capturing in-place changes'
+    this.emitChange()
+    active.inPlaceReceipt = await captureInPlaceReceipt(
+      active.inPlace.lease.worktree,
+      active.inPlace.start,
+    )
+    record.inPlace = active.inPlaceReceipt
+  }
+
   private async captureRunIsolation(
     active: ActiveRun,
     record: RunRecord,
   ): Promise<IsolationReceipt | undefined> {
+    await this.captureInPlace(active, record)
     if (active.workspace === undefined || active.isolationReceipt !== undefined) {
       return active.isolationReceipt
     }
@@ -3163,6 +3216,7 @@ export class SubagentRuntime {
             toolExecutionReceipts,
           }
           if (isolationReceipt !== undefined) validationInput.isolation = isolationReceipt
+          if (active.inPlaceReceipt !== undefined) validationInput.inPlace = active.inPlaceReceipt
           if (record.role !== undefined) validationInput.role = record.role
           if (outputState.structuredOutput !== undefined) {
             validationInput.structuredOutput = outputState.structuredOutput
@@ -3371,6 +3425,7 @@ export class SubagentRuntime {
       if (active.isolationReceipt !== undefined) {
         attemptEvidence.isolation = active.isolationReceipt
       }
+      if (active.inPlaceReceipt !== undefined) attemptEvidence.inPlace = active.inPlaceReceipt
       if (structuredOutput !== undefined) attemptEvidence.structuredOutput = structuredOutput
       if (terminalOutputRevisions.length > 0) {
         attemptEvidence.terminalOutputRevisions = terminalOutputRevisions
@@ -3409,6 +3464,7 @@ export class SubagentRuntime {
           fast: model.fast,
           finalMessage: output,
           gateResults,
+          inPlace: active.inPlaceReceipt,
           intercomUsage: active.intercomUsage,
           isolation: active.isolationReceipt,
           model: actualModel(active.messages, model.modelRef),
@@ -3465,6 +3521,12 @@ export class SubagentRuntime {
       if (timeout !== undefined) clearTimeout(timeout)
       signal?.removeEventListener('abort', abortFromSignal)
       unsubscribe()
+      if (active.inPlace !== undefined) {
+        try {
+          await this.captureInPlace(active, record)
+        } catch {}
+        await active.inPlace.lease.release().catch(() => {})
+      }
       try {
         await this.cleanupCapturedWorkspace(active)
       } catch (error) {
@@ -3575,6 +3637,7 @@ export class SubagentRuntime {
     if (record.artifact !== undefined) evidence.artifact = { ...record.artifact }
     if (record.error !== undefined) evidence.error = record.error
     if (record.isolation !== undefined) evidence.isolation = structuredClone(record.isolation)
+    if (record.inPlace !== undefined) evidence.inPlace = structuredClone(record.inPlace)
     if (record.structuredOutput !== undefined) {
       evidence.structuredOutput = structuredClone(record.structuredOutput)
     }
@@ -3594,6 +3657,7 @@ export class SubagentRuntime {
       artifact: record.artifact === undefined ? undefined : { ...record.artifact },
       error: record.error,
       gateResults: structuredClone(record.gateResults ?? []),
+      inPlace: record.inPlace === undefined ? undefined : structuredClone(record.inPlace),
       intercomUsage: { ...(record.intercomUsage ?? emptyUsage(0)) },
       isolation: record.isolation === undefined ? undefined : structuredClone(record.isolation),
       model: record.model,
@@ -3703,6 +3767,7 @@ export class SubagentRuntime {
       agentId: record.agentId,
       error: failedRecord.error ?? error,
       finalMessage: output,
+      inPlace: active.inPlaceReceipt,
       isolation: active.isolationReceipt,
       model: record.model,
       role: record.role,
