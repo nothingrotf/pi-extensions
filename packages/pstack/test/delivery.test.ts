@@ -825,6 +825,67 @@ describe('managed delivery acceptance', () => {
     expect(summarizeDelivery(failed).state).toBe('candidate')
   })
 
+  it('lets a static review defer execution criteria to an accepted runtime verdict', () => {
+    const twoCriteria: DeliveryIssue = {
+      ...issue,
+      criteria: [...issue.criteria, { id: 'suite', description: 'The suite passes' }],
+    }
+    const candidate = save(twoCriteria, {
+      ...implementation,
+      report: {
+        ...implementation.report,
+        criteria: [
+          { id: 'replay', result: 'pass', evidence: ['test'] },
+          { id: 'suite', result: 'pass', evidence: ['test'] },
+        ],
+      },
+    })
+    const staticReview: DeliverySubmission = {
+      ...verifier,
+      agentId: 'static-reviewer',
+      role: 'code review',
+      report: {
+        ...verifier.report,
+        kind: 'technical-review',
+        state: 'candidate',
+        criteria: [
+          { id: 'replay', result: 'pass', evidence: ['test'] },
+          { id: 'suite', result: 'pending', evidence: [] },
+        ],
+        reason: 'Reading proves replay. The suite needs execution.',
+      },
+    }
+    const runtime: DeliverySubmission = {
+      ...verifier,
+      report: { ...verifier.report, criteria: candidate.submissions[0]?.report.criteria ?? [] },
+    }
+    const partial = save(candidate, staticReview)
+    expect(summarizeDelivery(partial).state).toBe('candidate')
+    expect(summarizeDelivery(save(partial, runtime)).state).toBe('accepted')
+
+    const failing = save(candidate, {
+      ...staticReview,
+      report: {
+        ...staticReview.report,
+        criteria: [
+          { id: 'replay', result: 'fail', evidence: ['test'] },
+          { id: 'suite', result: 'pending', evidence: [] },
+        ],
+      },
+    })
+    expect(summarizeDelivery(save(failing, runtime)).state).toBe('candidate')
+
+    const staticOnly = { ...twoCriteria, runtimeRequired: false }
+    const deferred = save(
+      save(staticOnly, {
+        ...implementation,
+        report: candidate.submissions[0]?.report ?? implementation.report,
+      }),
+      staticReview,
+    )
+    expect(summarizeDelivery(deferred).state).toBe('candidate')
+  })
+
   it('requires the latest runtime verdict and preserves a separate technical rejection', () => {
     const accepted = save(save(issue, implementation), verifier)
     const blocked = save(accepted, {

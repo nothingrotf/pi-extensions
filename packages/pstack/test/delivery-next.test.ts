@@ -159,6 +159,25 @@ describe('next delivery step', () => {
     })
   })
 
+  it('waits for runtime verification when the static review defers execution criteria', () => {
+    const deferring: DeliverySubmission = {
+      ...review('code review', 'b'.repeat(40), 'accepted'),
+      report: {
+        ...review('code review', 'b'.repeat(40), 'accepted').report,
+        state: 'candidate',
+        criteria: [{ id: 'works', result: 'pending', evidence: [] }],
+        reason: 'The criterion needs execution.',
+      },
+    }
+    const partial = save(opened, candidate('b'.repeat(40)), deferring)
+    expect(nextDeliveryStep(partial, idle)).toMatchObject({
+      step: 'review',
+      roles: ['runtime verification'],
+    })
+    const accepted = save(partial, review('runtime verification', 'b'.repeat(40), 'accepted'))
+    expect(nextDeliveryStep(accepted, idle)).toMatchObject({ step: 'publish' })
+  })
+
   it('requires a diagnosis after two incomplete returns', () => {
     const wip = (attempt: number): DeliverySubmission => {
       const { artifact: _artifact, ...base } = candidate('b'.repeat(40), attempt)

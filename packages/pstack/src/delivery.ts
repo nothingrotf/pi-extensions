@@ -377,6 +377,29 @@ function complete(issue: DeliveryIssue, submission: DeliverySubmission): boolean
   )
 }
 
+export function reviewEndorsesCandidate(issue: DeliveryIssue, review: DeliverySubmission): boolean {
+  const report = currentDeliveryReport(review)
+  if (report.state === 'accepted') return complete(issue, review)
+  return (
+    issue.runtimeRequired &&
+    report.kind === 'technical-review' &&
+    report.state === 'candidate' &&
+    review.execution === 'completed' &&
+    review.artifact !== undefined &&
+    report.criteria.length === issue.criteria.length &&
+    report.criteria.every((criterion) =>
+      criterion.result === 'pass'
+        ? proven(criterion.evidence, review.evidence)
+        : criterion.result === 'pending',
+    ) &&
+    report.findings.every(
+      (finding) =>
+        !finding.blocking ||
+        (finding.disposition !== 'open' && proven(finding.evidence, review.evidence)),
+    )
+  )
+}
+
 function technical(submission: DeliverySubmission): boolean {
   const report = currentDeliveryReport(submission)
   return (
@@ -514,7 +537,8 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
     complete(issue, candidate)
   const reviewReady =
     currentReviews.length > 0 &&
-    currentReviews.every(
+    currentReviews.every((review) => reviewEndorsesCandidate(issue, review)) &&
+    currentReviews.some(
       (review) => currentDeliveryReport(review).state === 'accepted' && complete(issue, review),
     )
   const runtimeReady =

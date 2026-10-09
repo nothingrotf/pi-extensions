@@ -68,6 +68,8 @@ Dispatch both reviewers in one `Task.tasks` batch, then wait once for the pair.
 The batch checks both against the same candidate before either starts, so the review clock is the longer reviewer, not the sum.
 In an issue workspace, the runtime verifier runs in place while the static reviewer reads the same tree.
 Scope the static reviewer to reading, style, and structure. Scope the runtime reviewer to executed acceptance.
+When the issue requires runtime verification, the static reviewer marks criteria that need execution as `pending` and returns `candidate` when it finds no blocking defect.
+The ledger accepts the pair when the runtime verifier accepts every criterion and neither review objects.
 When only one reviewer is required, dispatch only that one.
 
 A read-only static reviewer has no shell, so it cannot run Git, materialize a diff, or confirm a patch-id.
