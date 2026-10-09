@@ -184,6 +184,8 @@ Two independent issue lanes form the initial pilot when files, dependencies, and
 Early probes exercise risky runtime boundaries before extensive implementation.
 Reusable harnesses and artifact-bound receipts avoid repeated setup without removing required checks.
 
+[Light mode](skills/poteto-mode/references/light-mode.md) is an operator-selected setting. It keeps the issue workspace, every landing gate, and one independent review. It cuts design panels to one runner, limits runtime verification to criteria that static review cannot observe, and skips optional fan-out. An issue escalates to full mode on a high-risk path, two rejected verdicts, or a contested design.
+
 Read the [delivery contract](skills/poteto-mode/references/delivery-contract.md) for routing, ownership, preflight, and evidence invalidation.
 Read [throughput and pilot](skills/poteto-mode/references/throughput.md) for the measurement format and interpretation limits.
 Read the [continuity pilot](skills/poteto-mode/references/continuity-pilot.md) for controlled comparison and the concurrency decision.

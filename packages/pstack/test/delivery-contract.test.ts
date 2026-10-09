@@ -170,6 +170,19 @@ describe('pstack delivery contract', () => {
     }
   })
 
+  it('keeps every landing gate in light mode and escalates risky issues', () => {
+    const light = skill('poteto-mode/references/light-mode.md')
+    expect(light).toContain('keeps every gate that decides whether code lands')
+    expect(light).toContain(
+      'Every repository-required gate and every user-required acceptance check.',
+    )
+    expect(light).toContain('One independent `code review` on the current candidate')
+    expect(light).toContain('The issue has two rejected review verdicts.')
+    expect(skill('poteto-mode/SKILL.md')).toContain('(references/light-mode.md)')
+    expect(skill('architect/SKILL.md')).toContain('(../poteto-mode/references/light-mode.md)')
+    expect(skill('architect/SKILL.md')).toContain('at least two structurally distinct candidates')
+  })
+
   it('treats a configured design pool as availability, not fanout', () => {
     const architect = skill('architect/SKILL.md')
     expect(architect).not.toContain('use four inherited runners')
