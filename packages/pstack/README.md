@@ -221,6 +221,11 @@ Checkpoint previews expose counts and omission markers. They never replace the f
 Ready-to-use `repair` locators appear in the checkpoint's `recentAttempts`, `view: "submissions"` entries, and the `view: "submission"` paging envelope. Spread that locator into a `pstack_delivery` call and add only the corrected `report`. It pins the issue, agent, attempt, next revision, current report digest, evidence digest, and artifact digest, so callers never hash a guess or inspect raw session JSONL.
 Reading a checkpoint does not reverify its evidence or change acceptance.
 
+Every checkpoint carries `next`, a deterministic next step derived from the ledger, the workspace, and the runtime records bound to the issue.
+The order is: record settled attempts, wait for running ones, prepare the workspace, implement, review in parallel, correct, diagnose after two incomplete returns, refresh, and publish.
+A `correct` step names the owner to resume when the issue has a workspace and the owner completed its attempt. It names `null` when a fresh owner must take the correction.
+A `review` step names only the review roles that the current candidate still lacks.
+
 Managed Task preflight appends a delivery packet of at most 32 KiB of UTF-8.
 The packet always carries every registered criterion with its exact description.
 It also carries every registered finding ID, the open criteria, and the open blocking findings.
