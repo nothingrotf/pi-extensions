@@ -34,6 +34,8 @@ Run the **arena** skill with the design-sketch task and the Phase A grounding ar
 
 Use the parsed `architect runners` runtime policy in context for this arena invocation. Pass `role: "architect runners"` to each runner. The architect owner needs `pstack-nested`; non-delegating runners use `pstack-leaf`. If delegation is unavailable, return a blocker instead of replacing Arena with a silent single-model sketch. Concrete entries use `provider/model-id:effort [fast]`. For distinct panel choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. Omit only when unconfigured or all choices are identical. The configured pool is availability for selection, never a dispatch count. If the role is absent, inherit the parent model for each candidate the design space needs, still at least two.
 
+In [light mode](../poteto-mode/references/light-mode.md), dispatch one runner that sketches two structurally distinct candidates in one package and recommends one. Synthesize them yourself without a cross-judge, unless the design is contested or a one-way door.
+
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 
 Screen every candidate against [`references/design-red-flags.md`](references/design-red-flags.md) before synthesis. Assume the next contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Prefer the design where a change that looks right from one file is right for the whole repo.

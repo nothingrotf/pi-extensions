@@ -107,6 +107,8 @@ Read [Delivery contract](references/delivery-contract.md) before dispatching iss
 
 Implementation against an accepted design inherits its grounding. It does not rerun `how` or `architect`, and it needs no owner with `pstack-nested`.
 
+When the operator selects light mode, read [Light mode](references/light-mode.md) before dispatch. It keeps every landing gate and cuts design panels, runtime verification scope, and optional fan-out. Pass the active mode to each owner and reviewer in its brief.
+
 Two independent issue lanes are the default when issues are disjoint in files and dependencies. Lane count follows disjoint workstreams, never the size of a configured model pool.
 
 Recheck only the affected behavior after a change, then run the full required gates before commit. Run an early executable probe before implementation when the change touches security, concurrency, a real database role, or the actual configured runtime. Pin a reusable harness to the actual artifact and configuration.
