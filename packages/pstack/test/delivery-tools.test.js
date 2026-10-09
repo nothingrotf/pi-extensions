@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -1759,6 +1759,153 @@ describe('pstack delivery tool interception', () => {
     expect(longCommandResult.status).toBe('accepted')
   })
 
+  it('derives in-place artifacts and rejects runtime verifiers that change the tree', () => {
+    const issue = emptyDeliveryIssue('owner', 'in-place-artifact')
+    const patch = { byteLength: 1, sha256: 'b'.repeat(64), uri: 'artifact://in-place-patch' }
+    const inPlace = (baseTree, resultTree) => ({
+      capturedAt: 2,
+      repositories: [{ baseTree, patch, relativePath: '', resultTree, root: '/issue' }],
+      status: 'captured',
+      worktree: '/issue',
+    })
+    const identity = (tree) => ({
+      baselineCommit: 'a'.repeat(40),
+      baselineTree: tree,
+      expectedTree: tree,
+      patch,
+      repositoryRoot: '/issue',
+      snapshot: {
+        repositories: [{ base: 'a'.repeat(40), patch, relativePath: '', root: '/issue', tree }],
+      },
+      syntheticBaseline: false,
+    })
+    const receipt = {
+      callId: 'command',
+      command: 'bun test',
+      completedAt: 2,
+      isError: false,
+      output: {
+        byteLength: 1,
+        mediaType: 'text/plain',
+        sha256: 'e'.repeat(64),
+        uri: 'artifact://command',
+      },
+      startedAt: 1,
+      status: 'success',
+      tool: 'bash',
+    }
+    const terminal = (role, report, inPlaceReceipt, tree) => ({
+      agentId: role,
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: role,
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      inPlace: inPlaceReceipt,
+      output: '{}',
+      previousOutputs: [],
+      prompt: deliveryReviewerPacket(issue),
+      readonly: false,
+      role,
+      structuredOutput: { data: report, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [receipt],
+      workspaceIdentity: identity(tree),
+    })
+    const implementation = {
+      criteria: [{ evidence: ['command:1'], id: 'receipt', result: 'pass' }],
+      failureClass: 'none',
+      findings: [],
+      issue: issue.issue,
+      kind: 'implementation',
+      reason: 'Candidate ready.',
+      state: 'candidate',
+    }
+    expect(
+      validateDeliveryTerminal(
+        terminal(
+          'feature',
+          implementation,
+          inPlace('c'.repeat(40), 'd'.repeat(40)),
+          'c'.repeat(40),
+        ),
+      ).status,
+    ).toBe('accepted')
+    expect(
+      validateDeliveryTerminal(
+        terminal(
+          'feature',
+          implementation,
+          { ...inPlace('c'.repeat(40), 'd'.repeat(40)), repositories: [], status: 'failed' },
+          'c'.repeat(40),
+        ),
+      ).status,
+    ).toBe('rejected')
+
+    issue.submissions.push({
+      agentId: 'feature',
+      artifact: {
+        repositories: [
+          {
+            base: 'c'.repeat(40),
+            patch: patch.sha256,
+            relativePath: '',
+            root: '/issue',
+            tree: 'd'.repeat(40),
+          },
+        ],
+      },
+      attempt: 1,
+      evidence: [
+        {
+          id: 'command:1',
+          kind: 'command',
+          passed: true,
+          reference: 'artifact://command',
+          sha256: 'e'.repeat(64),
+        },
+      ],
+      execution: 'completed',
+      integration: 'integrated',
+      recordedAt: 1,
+      report: implementation,
+      role: 'feature',
+    })
+    const runtime = {
+      ...implementation,
+      kind: 'runtime-verification',
+      reason: 'Runtime accepted.',
+      state: 'accepted',
+    }
+    expect(
+      validateDeliveryTerminal(
+        terminal(
+          'runtime verification',
+          runtime,
+          inPlace('d'.repeat(40), 'd'.repeat(40)),
+          'd'.repeat(40),
+        ),
+      ).status,
+    ).toBe('accepted')
+    const changed = validateDeliveryTerminal(
+      terminal(
+        'runtime verification',
+        runtime,
+        inPlace('d'.repeat(40), 'f'.repeat(40)),
+        'd'.repeat(40),
+      ),
+    )
+    expect(changed.status).toBe('rejected')
+    if (changed.status !== 'rejected') throw new Error('A changed runtime tree was accepted.')
+    expect(changed.error).toContain('changed the candidate tree in place')
+  })
+
   it('normalizes oversized prose and reports errored current receipt references', () => {
     const issue = emptyDeliveryIssue('owner', 'terminal-validation')
     const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
@@ -2470,6 +2617,116 @@ describe('pstack delivery tool interception', () => {
       expect(harness.observed[0].prompt).toContain('issue: issue-one')
     } finally {
       await harness.close()
+    }
+  })
+
+  it('runs managed writers in place inside the prepared issue workspace', async () => {
+    const worktrees = await mkdtemp(join(tmpdir(), 'pstack-issue-worktrees-'))
+    const previousRoot = process.env.PSTACK_WORKTREE_ROOT
+    process.env.PSTACK_WORKTREE_ROOT = worktrees
+    const dispatch = (id, extra) =>
+      plannedReply(
+        [
+          {
+            arguments: {
+              delivery: { issue: 'issue-one', kind: 'managed' },
+              description: 'Implement managed work',
+              prompt: 'Implement the change.',
+              role: 'feature',
+              subagent_type: 'generalPurpose',
+              ...extra,
+            },
+            id,
+            name: 'Task',
+            type: 'toolCall',
+          },
+        ],
+        'toolUse',
+      )
+    const harness = await sessionWithDeliveryTool({
+      async setup(cwd) {
+        await writeFile(join(cwd, '.gitignore'), 'agent/\nsessions/\n')
+        await writeFile(join(cwd, 'README.md'), 'source\n')
+        await execFile('git', ['init', '-q'], { cwd })
+        await execFile('git', ['add', '.'], { cwd })
+        await execFile(
+          'git',
+          [
+            '-c',
+            'user.email=test@example.com',
+            '-c',
+            'user.name=Test',
+            'commit',
+            '-q',
+            '-m',
+            'init',
+          ],
+          { cwd },
+        )
+      },
+      beforePrompt(sessionManager) {
+        sessionManager.appendCustomEntry(
+          '@nothingrotf/pstack/delivery-v1',
+          emptyDeliveryIssue(sessionManager.getSessionId(), 'issue-one'),
+        )
+      },
+      messages: [
+        plannedReply(
+          [
+            {
+              arguments: { action: 'workspace', issue: 'issue-one' },
+              id: 'workspace',
+              name: 'pstack_delivery',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+        dispatch('in-workspace', {}),
+        dispatch('outside-workspace', { cwd: '.' }),
+        plannedReply(
+          [
+            {
+              arguments: { action: 'workspace', issue: 'issue-one' },
+              id: 'workspace-again',
+              name: 'pstack_delivery',
+              type: 'toolCall',
+            },
+          ],
+          'toolUse',
+        ),
+      ],
+    })
+    try {
+      await harness.session.prompt('Prepare the workspace and dispatch.', {
+        expandPromptTemplates: false,
+      })
+      const result = (id) =>
+        harness.session.messages.findLast(
+          (message) => message.role === 'toolResult' && message.toolCallId === id,
+        )
+      const workspace = JSON.parse(result('workspace').content[0].text)
+      expect(workspace).toMatchObject({ branch: 'pstack/issue-one', issue: 'issue-one' })
+      expect(workspace.worktree.startsWith(await realpath(worktrees))).toBe(true)
+      expect(JSON.parse(result('workspace-again').content[0].text)).toEqual(workspace)
+      expect(harness.observed).toHaveLength(1)
+      expect(harness.observed[0]).toMatchObject({
+        cwd: workspace.worktree,
+        isolation: { mode: 'in-place' },
+      })
+      expect(result('outside-workspace').isError).toBe(true)
+      expect(result('outside-workspace').content[0].text).toContain(
+        `runs in its workspace ${workspace.worktree}`,
+      )
+      const entries = harness.sessionManager
+        .getBranch()
+        .filter((entry) => entry.customType === '@nothingrotf/pstack/delivery-workspace-v1')
+      expect(entries).toHaveLength(1)
+    } finally {
+      await harness.close()
+      if (previousRoot === undefined) delete process.env.PSTACK_WORKTREE_ROOT
+      else process.env.PSTACK_WORKTREE_ROOT = previousRoot
+      await rm(worktrees, { force: true, recursive: true })
     }
   })
 
