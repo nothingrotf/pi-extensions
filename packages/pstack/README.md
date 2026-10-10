@@ -228,6 +228,20 @@ The order is: record settled attempts, wait for running ones, prepare the worksp
 A `correct` step names the owner to resume when the issue has a workspace and the owner completed its attempt. It names `null` when a fresh owner must take the correction.
 A `review` step names only the review roles that the current candidate still lacks.
 
+### Delivery engine
+
+`pstack_deliver` runs that order in code for one open issue. The [engine ADR](../../docs/adr/0003-delivery-engine.md) records the design.
+
+- The coordinator passes the owner role and brief, the reviewer models, and optional reviewer guidance.
+- The engine prepares the workspace, dispatches the owner, records every attempt, and dispatches static review and runtime verification in one batch.
+- It resumes the owner with the unresolved criteria, the open findings, and the reviewer reports. After a diagnosis, it gives the brief and the diagnosis to a fresh owner.
+- Every engine Task passes the same managed preflight and dispatch binding as a model-issued `Task`. Records and workspace calls run through `pstack_delivery`.
+- The engine stops at acceptance, at a running background Task, at a rejected dispatch or protocol step, after a repeated protocol step, or after `maxDispatches` Tasks. The default is 8.
+- The result lists every step with its agents and duration, and it ends with the compact checkpoint.
+- Abort the tool call to cancel the running Task. Call `pstack_deliver` for several issues in one turn to run them in parallel.
+
+The engine dispatches through the `@nothingrotf/subagent/execute-task` event. A subagent version without that event rejects the first dispatch before any Task starts.
+
 Managed Task preflight appends a delivery packet of at most 32 KiB of UTF-8.
 The packet always carries every registered criterion with its exact description.
 It also carries every registered finding ID, the open criteria, and the open blocking findings.

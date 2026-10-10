@@ -24,6 +24,14 @@ import {
 import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
+import {
+  DELIVERY_ENGINE_TOOL,
+  DeliveryEngineInputSchema,
+  type EngineAgent,
+  renderEngineResult,
+  requestTask,
+  runDeliveryEngine,
+} from './delivery-engine.ts'
 import { GATE_TOOL } from './delivery-gates.ts'
 import {
   deliveryJournalEntryType,
@@ -1707,7 +1715,158 @@ async function preflight(
   task.prompt = `${promptIssue === undefined ? `issue: ${issueId}\n` : ''}${task.prompt}\n\n${packet}`
 }
 
+function bindTaskResult<Input, Details>(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  toolCallId: string,
+  input: Input,
+  details: Details,
+): FailedManagedAttempt[] {
+  const bindings = loadBindings(ctx)
+  const failed: FailedManagedAttempt[] = []
+  const bind = (task: Static<typeof TaskViewSchema>, agentId: string) => {
+    const issue = task.delivery?.kind === 'managed' ? task.delivery.issue : undefined
+    if (issue === undefined) return
+    const previous = bindings.get(agentId)
+    if (previous === issue) return
+    if (previous !== undefined)
+      throw new DeliveryRejected('Managed dispatch cannot rebind an existing agent.')
+    pi.appendEntry(bindingEntryType, {
+      agentId,
+      issue,
+      ownerSessionId: ctx.sessionManager.getSessionId(),
+      toolCallId,
+    })
+    bindings.set(agentId, issue)
+  }
+  if (Value.Check(BatchViewSchema, input) && Value.Check(BatchResultSchema, details)) {
+    for (const result of details.items) {
+      const task = input.tasks.find((entry) => entry.id === result.taskId)
+      if (task === undefined || result.agentId === undefined || result.attemptStarted === false)
+        continue
+      bind(task, result.agentId)
+      if (
+        task.delivery?.kind === 'managed' &&
+        (result.status === 'failed' || result.status === 'aborted')
+      )
+        failed.push({ agentId: result.agentId, issue: task.delivery.issue })
+    }
+  } else if (
+    Value.Check(TaskViewSchema, input) &&
+    Value.Check(TaskResultSchema, details) &&
+    details.attemptStarted !== false
+  ) {
+    bind(input, details.agentId)
+    if (input.delivery?.kind === 'managed' && Value.Check(FailedTaskResultSchema, details))
+      failed.push({ agentId: details.agentId, issue: input.delivery.issue })
+  }
+  return failed
+}
+
+const EngineItemSchema = Type.Object(
+  { agentId: Type.Optional(id), status: Type.Optional(Type.String()) },
+  { additionalProperties: true },
+)
+const EngineBatchSchema = Type.Object(
+  { items: Type.Array(EngineItemSchema) },
+  { additionalProperties: true },
+)
+const EngineSingleSchema = Type.Object(
+  {
+    agentId: id,
+    attemptStarted: Type.Optional(Type.Boolean()),
+    status: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+)
+
+function engineAgents<Details>(details: Details): EngineAgent[] {
+  if (Value.Check(EngineBatchSchema, details))
+    return details.items.flatMap((item) =>
+      item.agentId === undefined
+        ? []
+        : [{ agentId: item.agentId, status: item.status ?? 'unknown' }],
+    )
+  if (Value.Check(EngineSingleSchema, details) && details.attemptStarted !== false)
+    return [{ agentId: details.agentId, status: details.status ?? 'completed' }]
+  return []
+}
+
+function registerDeliveryEngine(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: DELIVERY_ENGINE_TOOL,
+    label: 'Deliver',
+    executionMode: 'parallel',
+    description:
+      'Run the managed delivery loop of one open issue in code until acceptance. The engine prepares the issue workspace, dispatches the implementation owner with the brief, records every attempt, dispatches static review and runtime verification together, resumes the owner with each rejection, and dispatches a diagnosis when the ledger requires one. It stops at acceptance (next.step publish), at a running background Task, at a rejected dispatch or protocol step, or at maxDispatches (default 8). Call it once per issue after pstack_delivery open. Call it for several issues in one turn to run them in parallel. Publication stays with the coordinator.',
+    parameters: DeliveryEngineInputSchema,
+    async execute(toolCallId, input, signal, onUpdate, ctx) {
+      const checkpoint = () => {
+        const issue = loadIssues(ctx).get(input.issue)
+        if (issue === undefined)
+          throw new DeliveryRejected(`Open the managed issue before pstack_deliver: ${input.issue}`)
+        return { issue, next: deliveryNext(issue, ctx) }
+      }
+      const progress = (text: string) =>
+        onUpdate?.({ content: [{ text, type: 'text' }], details: undefined })
+      const result = await runDeliveryEngine(
+        input,
+        {
+          checkpoint,
+          async deliver(action) {
+            progress(`${input.issue}: ${action.action}`)
+            const outcome = await ctx.executeTool('pstack_delivery', {
+              ...action,
+              issue: input.issue,
+            })
+            if (!outcome.isError) return undefined
+            return outcome.result.content
+              .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+              .join('\n')
+          },
+          async dispatch(task) {
+            const nodes = 'tasks' in task ? task.tasks : [task]
+            progress(
+              `${input.issue}: ${nodes.map((node) => node.role ?? node.description).join(' + ')}`,
+            )
+            try {
+              for (const node of nodes) await preflight(node, ctx)
+            } catch (error) {
+              return {
+                agents: [],
+                error: error instanceof Error ? error.message : String(error),
+                text: '',
+              }
+            }
+            const response = await requestTask(pi, toolCallId, task, signal)
+            if ('error' in response) return { agents: [], error: response.error, text: '' }
+            bindTaskResult(pi, ctx, toolCallId, task, response.result.details)
+            return {
+              agents: engineAgents(response.result.details),
+              error: undefined,
+              text: response.result.content
+                .flatMap((part) => (part.text === undefined ? [] : [part.text]))
+                .join('\n'),
+            }
+          },
+          now: Date.now,
+          signal,
+        },
+        (issue) => summarizeDelivery(issue),
+      )
+      const { issue, next } = checkpoint()
+      const view = deliveryView(issue, { action: 'read', issue: issue.issue }, next)
+      if (!view.ok) throw view.error
+      return {
+        content: [{ type: 'text', text: renderEngineResult(result, view.value.text) }],
+        details: result,
+      }
+    },
+  })
+}
+
 export function registerDeliveryProtocol(pi: ExtensionAPI): void {
+  registerDeliveryEngine(pi)
   pi.registerTool({
     name: 'pstack_delivery',
     label: 'Delivery',
@@ -1882,50 +2041,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
   })
   pi.on('tool_result', (event, ctx) => {
     if (event.toolName !== 'Task') return
-    const bindings = loadBindings(ctx)
-    const failed: FailedManagedAttempt[] = []
-    const bind = (task: Static<typeof TaskViewSchema>, agentId: string) => {
-      const issue = task.delivery?.kind === 'managed' ? task.delivery.issue : undefined
-      if (issue === undefined) return
-      const previous = bindings.get(agentId)
-      if (previous === issue) return
-      if (previous !== undefined)
-        throw new DeliveryRejected('Managed dispatch cannot rebind an existing agent.')
-      pi.appendEntry(bindingEntryType, {
-        agentId,
-        issue,
-        ownerSessionId: ctx.sessionManager.getSessionId(),
-        toolCallId: event.toolCallId,
-      })
-      bindings.set(agentId, issue)
-    }
-    if (
-      Value.Check(BatchViewSchema, event.input) &&
-      Value.Check(BatchResultSchema, event.details)
-    ) {
-      for (const result of event.details.items) {
-        const task = event.input.tasks.find((entry) => entry.id === result.taskId)
-        if (task === undefined || result.agentId === undefined || result.attemptStarted === false)
-          continue
-        bind(task, result.agentId)
-        if (
-          task.delivery?.kind === 'managed' &&
-          (result.status === 'failed' || result.status === 'aborted')
-        )
-          failed.push({ agentId: result.agentId, issue: task.delivery.issue })
-      }
-    } else if (
-      Value.Check(TaskViewSchema, event.input) &&
-      Value.Check(TaskResultSchema, event.details) &&
-      event.details.attemptStarted !== false
-    ) {
-      bind(event.input, event.details.agentId)
-      if (
-        event.input.delivery?.kind === 'managed' &&
-        Value.Check(FailedTaskResultSchema, event.details)
-      )
-        failed.push({ agentId: event.details.agentId, issue: event.input.delivery.issue })
-    }
+    const failed = bindTaskResult(pi, ctx, event.toolCallId, event.input, event.details)
     const notices: string[] = []
     if (failed.length > 0) notices.push(failedAttemptNotice(failed))
     if (

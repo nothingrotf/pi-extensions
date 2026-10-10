@@ -14,7 +14,11 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
-import { captureWorkspaceSnapshot, validateOutputSchema } from '@nothingrotf/subagent'
+import {
+  captureWorkspaceSnapshot,
+  SUBAGENT_EXECUTE_TASK_EVENT,
+  validateOutputSchema,
+} from '@nothingrotf/subagent'
 import { Type } from 'typebox'
 import { describe, expect, it } from 'vite-plus/test'
 
@@ -610,6 +614,7 @@ async function sessionWithDeliveryTool(options = {}) {
       ...(options.codemode === true ? [createCodemodeExtension({ models: false })] : []),
       (pi) => {
         registerDeliveryProtocol(pi)
+        options.extension?.(pi, () => sessionManager)
         pi.registerTool({
           description: 'Validate the actual Task input after extension preflight.',
           execute(_toolCallId, input) {
@@ -665,6 +670,7 @@ async function sessionWithDeliveryTool(options = {}) {
       'Task',
       'TaskControl',
       ...(options.codemode === true ? ['codemode'] : []),
+      ...(options.tools ?? []),
     ],
   })
   return {
@@ -675,6 +681,77 @@ async function sessionWithDeliveryTool(options = {}) {
     observed,
     session: created.session,
     sessionManager,
+  }
+}
+
+async function engineSession(extension) {
+  const worktrees = await mkdtemp(join(tmpdir(), 'pstack-engine-worktrees-'))
+  const previousRoot = process.env.PSTACK_WORKTREE_ROOT
+  process.env.PSTACK_WORKTREE_ROOT = worktrees
+  const harness = await sessionWithDeliveryTool({
+    async setup(cwd) {
+      await writeFile(join(cwd, '.gitignore'), 'agent/\nsessions/\n')
+      await writeFile(join(cwd, 'README.md'), 'source\n')
+      await execFile('git', ['init', '-q'], { cwd })
+      await execFile('git', ['add', '.'], { cwd })
+      await execFile(
+        'git',
+        ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-q', '-m', 'init'],
+        { cwd },
+      )
+    },
+    extension,
+    messages: [
+      plannedReply(
+        [
+          {
+            arguments: {
+              action: 'open',
+              criteria: [{ description: 'The command returns a receipt.', id: 'receipt' }],
+              issue: 'engine-issue',
+              runtimeRequired: false,
+            },
+            id: 'open',
+            name: 'pstack_delivery',
+            type: 'toolCall',
+          },
+        ],
+        'toolUse',
+      ),
+      plannedReply(
+        [
+          {
+            arguments: {
+              issue: 'engine-issue',
+              maxDispatches: 2,
+              owner: { brief: 'Implement the receipt.', role: 'bug-fix' },
+              review: {},
+            },
+            id: 'deliver',
+            name: 'pstack_deliver',
+            type: 'toolCall',
+          },
+        ],
+        'toolUse',
+      ),
+    ],
+    tools: ['pstack_deliver'],
+  })
+  return {
+    async close() {
+      await harness.close()
+      if (previousRoot === undefined) delete process.env.PSTACK_WORKTREE_ROOT
+      else process.env.PSTACK_WORKTREE_ROOT = previousRoot
+      await rm(worktrees, { force: true, recursive: true })
+    },
+    async deliver() {
+      await harness.session.prompt('Deliver the issue.', { expandPromptTemplates: false })
+      return harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'deliver',
+      )
+    },
+    harness,
+    worktrees,
   }
 }
 
@@ -2845,6 +2922,92 @@ describe('pstack delivery tool interception', () => {
       if (previousRoot === undefined) delete process.env.PSTACK_WORKTREE_ROOT
       else process.env.PSTACK_WORKTREE_ROOT = previousRoot
       await rm(worktrees, { force: true, recursive: true })
+    }
+  })
+
+  it('runs the delivery loop in code through the subagent execution event', async () => {
+    const requests = []
+    const records = []
+    const engine = await engineSession((pi, sessionManager) => {
+      pi.events.on(SUBAGENT_EXECUTE_TASK_EVENT, (request) => {
+        request.accept(() => {})
+        requests.push({ input: structuredClone(request.input), toolCallId: request.toolCallId })
+        const agentId = `owner-${requests.length}`
+        const owner = sessionManager().getSessionId()
+        records.push(runRecord(owner, agentId))
+        sessionManager().appendCustomEntry('pi-subagent-state', runtimeState(owner, records))
+        request.respond({
+          result: {
+            content: [{ text: `Agent ID: ${agentId}\n\nThe owner stopped early.`, type: 'text' }],
+            details: { agentId, attemptStarted: true, status: 'error' },
+          },
+        })
+      })
+    })
+    try {
+      const result = await engine.deliver()
+      expect(result?.isError).toBe(false)
+      expect(result.details).toMatchObject({
+        dispatches: 2,
+        next: { step: 'diagnose' },
+        stop: 'dispatch-limit',
+      })
+      expect(result.details.steps.map((step) => step.step)).toEqual([
+        'workspace',
+        'implement',
+        'record',
+        'correct',
+        'record',
+      ])
+      expect(result.content[0].text).toContain('Engine stop: dispatch-limit')
+      expect(engine.harness.observed).toHaveLength(0)
+      expect(requests.map((request) => request.toolCallId)).toEqual(['deliver', 'deliver'])
+      const worktree = `${await realpath(engine.worktrees)}/`
+      for (const { input } of requests) {
+        expect(input).toMatchObject({
+          capability_profile: 'pstack-leaf',
+          delivery: { issue: 'engine-issue', kind: 'managed' },
+          isolation: { mode: 'in-place' },
+          role: 'bug-fix',
+          run_in_background: false,
+          schemaMode: 'strict',
+          subagent_type: 'generalPurpose',
+        })
+        expect(input.cwd.startsWith(worktree)).toBe(true)
+        expect(input.outputSchema).toEqual(DeliveryOutputSchema)
+        expect(input.prompt.startsWith('issue: engine-issue\nImplement the receipt.')).toBe(true)
+      }
+      expect(requests[1].input.prompt).toContain('A previous owner did not reach acceptance.')
+      const bindings = engine.harness.sessionManager
+        .getBranch()
+        .filter((entry) => entry.customType === '@nothingrotf/pstack/delivery-binding-v1')
+        .map((entry) => [entry.data.agentId, entry.data.issue, entry.data.toolCallId])
+      expect(bindings).toEqual([
+        ['owner-1', 'engine-issue', 'deliver'],
+        ['owner-2', 'engine-issue', 'deliver'],
+      ])
+      const retained = retainedIssue(engine.harness.sessionManager, 'engine-issue')
+      expect(retained.submissions.map((entry) => [entry.agentId, entry.execution])).toEqual([
+        ['owner-1', 'failed'],
+        ['owner-2', 'failed'],
+      ])
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('stops the delivery engine when no subagent accepts its Task', async () => {
+    const engine = await engineSession(() => {})
+    try {
+      const result = await engine.deliver()
+      expect(result.details).toMatchObject({
+        dispatches: 1,
+        next: { step: 'implement' },
+        stop: 'dispatch-rejected',
+      })
+      expect(result.details.detail).toContain('did not accept the engine Task')
+    } finally {
+      await engine.close()
     }
   })
 
