@@ -27,7 +27,8 @@
     "commitlint": "commitlint",
     "pi:install": "bun tools/pi-local.ts install",
     "pi:remove": "bun tools/pi-local.ts remove",
-    "pi:profile": "bun tools/pi-local.ts profile"
+    "pi:profile": "bun tools/pi-local.ts profile",
+    "bench:delivery": "bun tools/delivery-bench/run.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
