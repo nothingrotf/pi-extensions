@@ -18,6 +18,7 @@ import {
   getCurrentTools,
 } from '@earendil-works/pi-ai'
 import {
+  type AgentToolResult,
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionAPI,
@@ -33,6 +34,7 @@ import {
   acquireSubagentController,
   readSubagentState,
   registerSubagent,
+  SUBAGENT_EXECUTE_TASK_EVENT,
   type SubagentController,
   type TaskControlInput,
 } from '../src/index.ts'
@@ -58,6 +60,7 @@ export interface ProviderState {
   parentNotices: string[]
   parentRequests: number
   payloads: unknown[]
+  probes: TaskToolInput[]
   requests: Array<Promise<void>>
   sideContextPrompts: string[][]
   sideQuestions: string[]
@@ -238,6 +241,22 @@ export function parentMessage(
             request_id: requestId,
             message: 'No. Preserve the assigned scope.',
           },
+        },
+      ],
+      'toolUse',
+    )
+  }
+
+  const probe = state.probes.shift()
+  if (probe !== undefined) {
+    return assistant(
+      model,
+      [
+        {
+          arguments: { input: { ...probe } },
+          id: `probe-${Date.now()}`,
+          name: 'execute_task_probe',
+          type: 'toolCall',
         },
       ],
       'toolUse',
@@ -1084,6 +1103,7 @@ export async function createHarness(
     parentNotices: [],
     parentRequests: 0,
     payloads: [],
+    probes: [],
     requests: [],
     sideContextPrompts: [],
     sideQuestions: [],
@@ -1109,6 +1129,27 @@ export async function createHarness(
     subagentRuntime = registerSubagent(pi, runTimeoutMs)
     pi.on('tool_call', (_event, ctx) => {
       extensionContext = ctx
+    })
+    pi.registerTool({
+      description: 'Run a Task input through the subagent execution event.',
+      execute: (toolCallId, params) =>
+        new Promise<AgentToolResult<undefined>>((resolve) => {
+          pi.events.emit(SUBAGENT_EXECUTE_TASK_EVENT, {
+            accept() {},
+            input: params.input,
+            respond<Response>(response: Response) {
+              resolve({
+                content: [{ text: JSON.stringify(response), type: 'text' }],
+                details: undefined,
+              })
+            },
+            toolCallId,
+            version: 1,
+          })
+        }),
+      label: 'Probe',
+      name: 'execute_task_probe',
+      parameters: Type.Object({ input: Type.Unknown() }),
     })
   }
   const resourceLoader = new DefaultResourceLoader({
@@ -1216,6 +1257,15 @@ export async function runTask(harness: Harness, input: TaskToolInput): Promise<s
   await harness.session.prompt('Invoke the queued Task input.', { expandPromptTemplates: false })
   const result = taskResultTexts(harness, start).at(-1)
   if (result === undefined) throw new Error('The parent produced no Task result.')
+  return result
+}
+
+export async function runProbe(harness: Harness, input: TaskToolInput): Promise<string> {
+  const start = harness.session.messages.length
+  harness.state.probes.push(input)
+  await harness.session.prompt('Invoke the queued probe input.', { expandPromptTemplates: false })
+  const result = toolResultTexts(harness, start, 'execute_task_probe').at(-1)
+  if (result === undefined) throw new Error('The parent produced no probe result.')
   return result
 }
 
