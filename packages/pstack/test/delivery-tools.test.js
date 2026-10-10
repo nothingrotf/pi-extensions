@@ -684,7 +684,11 @@ async function sessionWithDeliveryTool(options = {}) {
   }
 }
 
-async function engineSession(extension) {
+function deliverCallId(issue, issues) {
+  return issues.length === 1 ? 'deliver' : `deliver-${issue}`
+}
+
+async function engineSession(extension, issues = ['engine-issue']) {
   const worktrees = await mkdtemp(join(tmpdir(), 'pstack-engine-worktrees-'))
   const previousRoot = process.env.PSTACK_WORKTREE_ROOT
   process.env.PSTACK_WORKTREE_ROOT = worktrees
@@ -703,40 +707,45 @@ async function engineSession(extension) {
     extension,
     messages: [
       plannedReply(
-        [
-          {
-            arguments: {
-              action: 'open',
-              criteria: [{ description: 'The command returns a receipt.', id: 'receipt' }],
-              issue: 'engine-issue',
-              runtimeRequired: false,
-            },
-            id: 'open',
-            name: 'pstack_delivery',
-            type: 'toolCall',
+        issues.map((issue) => ({
+          arguments: {
+            action: 'open',
+            criteria: [{ description: 'The command returns a receipt.', id: 'receipt' }],
+            issue,
+            runtimeRequired: false,
           },
-        ],
+          id: `open-${issue}`,
+          name: 'pstack_delivery',
+          type: 'toolCall',
+        })),
         'toolUse',
       ),
       plannedReply(
-        [
-          {
-            arguments: {
-              issue: 'engine-issue',
-              maxDispatches: 2,
-              owner: { brief: 'Implement the receipt.', role: 'bug-fix' },
-              review: {},
-            },
-            id: 'deliver',
-            name: 'pstack_deliver',
-            type: 'toolCall',
+        issues.map((issue) => ({
+          arguments: {
+            issue,
+            maxDispatches: issues.length === 1 ? 2 : 1,
+            owner: { brief: 'Implement the receipt.', role: 'bug-fix' },
+            review: {},
           },
-        ],
+          id: deliverCallId(issue, issues),
+          name: 'pstack_deliver',
+          type: 'toolCall',
+        })),
         'toolUse',
       ),
     ],
     tools: ['pstack_deliver'],
   })
+  const results = async () => {
+    await harness.session.prompt('Deliver the issues.', { expandPromptTemplates: false })
+    return issues.map((issue) =>
+      harness.session.messages.findLast(
+        (message) =>
+          message.role === 'toolResult' && message.toolCallId === deliverCallId(issue, issues),
+      ),
+    )
+  }
   return {
     async close() {
       await harness.close()
@@ -745,11 +754,9 @@ async function engineSession(extension) {
       await rm(worktrees, { force: true, recursive: true })
     },
     async deliver() {
-      await harness.session.prompt('Deliver the issue.', { expandPromptTemplates: false })
-      return harness.session.messages.findLast(
-        (message) => message.role === 'toolResult' && message.toolCallId === 'deliver',
-      )
+      return (await results())[0]
     },
+    deliverAll: results,
     harness,
     worktrees,
   }
@@ -3093,6 +3100,71 @@ describe('pstack delivery tool interception', () => {
         ['owner-1', 'failed'],
         ['owner-2', 'failed'],
       ])
+    } finally {
+      await engine.close()
+    }
+  })
+
+  it('runs the delivery engines of two issues in parallel without crossing their ledgers', async () => {
+    const requests = []
+    const records = []
+    const pending = []
+    let overlap = 0
+    const engine = await engineSession(
+      (pi, sessionManager) => {
+        const settle = () => {
+          for (const { agentId, request } of pending.splice(0)) {
+            const owner = sessionManager().getSessionId()
+            records.push(runRecord(owner, agentId))
+            sessionManager().appendCustomEntry('pi-subagent-state', runtimeState(owner, records))
+            request.respond({
+              result: {
+                content: [{ text: `Agent ID: ${agentId}`, type: 'text' }],
+                details: { agentId, attemptStarted: true, status: 'error' },
+              },
+            })
+          }
+        }
+        pi.events.on(SUBAGENT_EXECUTE_TASK_EVENT, (request) => {
+          request.accept(() => {})
+          const issue = request.input.delivery.issue
+          requests.push({ cwd: request.input.cwd, issue })
+          pending.push({ agentId: `owner-${issue}`, request })
+          overlap = Math.max(overlap, pending.length)
+          if (pending.length === 2) settle()
+          else setTimeout(settle, 2000)
+        })
+      },
+      ['issue-a', 'issue-b'],
+    )
+    try {
+      const results = await engine.deliverAll()
+      expect(overlap).toBe(2)
+      for (const [index, issue] of ['issue-a', 'issue-b'].entries()) {
+        expect(results[index]?.isError).toBe(false)
+        expect(results[index].details).toMatchObject({
+          dispatches: 1,
+          issue,
+          stop: 'dispatch-limit',
+        })
+        const retained = retainedIssue(engine.harness.sessionManager, issue)
+        expect(retained.submissions.map((entry) => entry.agentId)).toEqual([`owner-${issue}`])
+      }
+      const [first, second] = requests
+      expect(new Set(requests.map((request) => request.issue))).toEqual(
+        new Set(['issue-a', 'issue-b']),
+      )
+      expect(first?.cwd).not.toBe(second?.cwd)
+      const bindings = engine.harness.sessionManager
+        .getBranch()
+        .filter((entry) => entry.customType === '@nothingrotf/pstack/delivery-binding-v1')
+        .map((entry) => [entry.data.agentId, entry.data.issue])
+      expect(bindings).toEqual(
+        expect.arrayContaining([
+          ['owner-issue-a', 'issue-a'],
+          ['owner-issue-b', 'issue-b'],
+        ]),
+      )
     } finally {
       await engine.close()
     }
