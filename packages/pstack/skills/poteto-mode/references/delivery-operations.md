@@ -34,6 +34,19 @@ Each checkpoint carries `next`, the deterministic next step of the delivery pipe
 
 Follow `next` without deliberation unless an operator gate, a user directive, or a design decision applies.
 Spend coordinator judgment on those decisions and on the content of each brief, not on the order of steps.
+
+### Delivery engine
+
+`pstack_deliver` follows `next` in code for one open issue, so the steps cost no coordinator turns.
+Call it once after `open` with the owner role, the complete owner brief, and one reviewer model per review role.
+Put the acceptance surface and the focused commands in `review.brief`.
+The engine prepares the workspace, dispatches the owner, records each attempt, reviews in one batch, resumes the owner with each rejection, and diagnoses when the ledger requires it.
+It returns at `publish`, or at the step that needs the coordinator, with a stop reason and the checkpoint.
+Continue from the returned `next` by hand, then publish as usual.
+
+Call `pstack_deliver` for independent issues in the same turn to run their lanes in parallel.
+Drive `next` by hand when an issue needs background owners, an operator gate between rounds, a design phase, or custom reviewer prompts.
+Engine Tasks run in the foreground, so a child that needs a decision returns a blocker instead of `request_parent`.
 Read `view: "submissions"` or `view: "criteria"` with `offset` and `limit` for retained records.
 Follow `nextOffset`, because the byte budget can shorten a page.
 For an oversized submission, open its `detail` locator with `view: "submission"`, `agentId`, and `attempt`.
