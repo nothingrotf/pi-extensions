@@ -8,7 +8,15 @@ import { parseArgs } from 'node:util'
 
 import { acceptanceTest, acceptanceTestName, fixtureFiles } from './fixture.ts'
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
-import { type Arm, arms, benchmarkPrompt, replayPrompt } from './prompts.ts'
+import {
+  type Arm,
+  arms,
+  benchmarkPrompt,
+  pricingArms,
+  replayArms,
+  replayEnginePrompt,
+  replayPrompt,
+} from './prompts.ts'
 import { ownerPolicy, replayTask, replayTasks, type ReplayTask } from './replays.ts'
 import { mirrorAgentDirectory } from './revisions.ts'
 
@@ -19,7 +27,7 @@ Each run creates a fresh repository and costs real model usage.
 
 Options:
   --task <id>             pricing, the synthetic fixture (default), or a replay task: ${replayTasks.map((task) => task.id).join(', ')}
-  --arms <list>           Pricing arms: baseline, workspace (default: both). Replay tasks use the workspace flow
+  --arms <list>           Pricing arms: baseline, workspace (default: both). Replay arms: workspace, engine (default: workspace)
   --owner <name=selector> Implementation owner variant, repeatable. Each variant rewrites the owner roles in a copy of the model policy
   --revision <name=rev>   pi-extensions revision variant, repeatable. Each variant runs pi with the packages of a worktree at rev
   --runs <n>              Runs per arm, interleaved by arm (default: 1)
@@ -83,6 +91,19 @@ function parseArm(value: string): Arm {
   return arm
 }
 
+function parseArms(value: string | undefined, task: ReplayTask | undefined): Arm[] {
+  const allowed = task === undefined ? pricingArms : replayArms
+  if (value === undefined) return task === undefined ? [...pricingArms] : ['workspace']
+  return value.split(',').map((entry) => {
+    const arm = parseArm(entry.trim())
+    if (!allowed.includes(arm))
+      throw new Error(
+        `The ${task === undefined ? 'pricing' : 'replay'} task supports arms ${allowed.join(', ')}.`,
+      )
+    return arm
+  })
+}
+
 function parseOwner(value: string): Owner {
   const separator = value.indexOf('=')
   const selector = (separator < 0 ? value : value.slice(separator + 1)).trim()
@@ -136,8 +157,9 @@ function options(): Options | undefined {
     return undefined
   }
   const stamp = new Date().toISOString().replaceAll(/[:.]/g, '-')
+  const task = parseTask(values.task)
   return {
-    arms: (values.arms ?? arms.join(',')).split(',').map((entry) => parseArm(entry.trim())),
+    arms: parseArms(values.arms, task),
     codeReview: values['code-review'] ?? 'anthropic/claude-opus-5:xhigh',
     coordinator: values.coordinator ?? 'openai-codex/gpt-6.1-sol:medium',
     out: resolve(values.out ?? join(tmpdir(), `delivery-bench-${stamp}`)),
@@ -152,7 +174,7 @@ function options(): Options | undefined {
     runs: Math.max(1, Math.floor(positive(values.runs, 1, '--runs'))),
     runtime: values.runtime ?? 'openai-codex/gpt-6.1-sol:medium',
     setupSeconds: nonNegative(values['setup-seconds'], 20, '--setup-seconds'),
-    task: parseTask(values.task),
+    task,
     timeoutMs: Math.round(positive(values['timeout-minutes'], 30, '--timeout-minutes') * 60_000),
   }
 }
@@ -375,7 +397,8 @@ async function runOnce(
   run: number,
 ): Promise<RunResult> {
   const task = config.task
-  const label = `${task?.id ?? arm}@${variantLabel(config, revision, owner)}`
+  const subject = task === undefined ? arm : arm === 'workspace' ? task.id : `${task.id}:${arm}`
+  const label = `${subject}@${variantLabel(config, revision, owner)}`
   const root = join(config.out, `${label}-${run}`)
   const repo = join(root, 'repo')
   const sessions = join(root, 'sessions')
@@ -384,7 +407,12 @@ async function runOnce(
   const models = { code: config.codeReview, runtime: config.runtime }
   if (task === undefined) await createRepository(repo)
   else await createReplayRepository(repo, task)
-  const prompt = task === undefined ? benchmarkPrompt(arm, models) : replayPrompt(task, models)
+  const prompt =
+    task === undefined
+      ? benchmarkPrompt(arm, models)
+      : arm === 'engine'
+        ? replayEnginePrompt(task, models)
+        : replayPrompt(task, models)
   const policy = await policyFor(config, owner)
   await writeFile(join(root, 'prompt.md'), prompt)
   write(`${label} run ${run}: ${root}\n`)
@@ -432,7 +460,7 @@ async function main(): Promise<void> {
   await mkdir(config.out, { recursive: true })
   write(`Writing results to ${config.out}\n`)
   const results: RunResult[] = []
-  const variants: Arm[] = config.task === undefined ? config.arms : ['workspace']
+  const variants = config.arms
   const revisions: Revision[] = []
   try {
     for (const revision of config.revisions) revisions.push(await prepareRevision(config, revision))
