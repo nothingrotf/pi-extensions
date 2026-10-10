@@ -6,6 +6,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { loadPstackBootstrap } from './bootstrap.ts'
+import { createGateTools } from './delivery-gates.ts'
 import { setupGuardExtension } from './delivery-setup-guard.ts'
 import { registerDeliveryProtocol, validateDeliveryTerminal } from './delivery-tools.ts'
 import {
@@ -102,6 +103,13 @@ export default async function pstack(
           tools: createSessionTodoTools(),
           version: '3',
         },
+        {
+          createTools: createGateTools,
+          extensions: [],
+          id: 'pstack-gates',
+          tools: createGateTools(),
+          version: '1',
+        },
       ],
       sourceId,
     })
@@ -116,14 +124,14 @@ export default async function pstack(
           defaultTools: ['codemode'],
           id: 'pstack-leaf',
           optionalRegistrations: ['filetools', 'tgrep'],
-          registrations: ['pstack-planning'],
+          registrations: ['pstack-planning', 'pstack-gates'],
         },
         {
           defaultTools: ['codemode'],
           id: 'pstack-nested',
           nested: { maxDepth: 3 },
           optionalRegistrations: ['filetools', 'tgrep'],
-          registrations: ['pstack-planning'],
+          registrations: ['pstack-planning', 'pstack-gates'],
         },
       ],
       sourceId,

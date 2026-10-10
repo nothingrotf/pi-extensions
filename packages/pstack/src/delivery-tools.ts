@@ -24,6 +24,7 @@ import {
 import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { GATE_TOOL } from './delivery-gates.ts'
 import {
   deliveryJournalEntryType,
   makeDeliveryJournalEvent,
@@ -81,6 +82,7 @@ type JsonValue = Exclude<AgentToolResult['structuredContent'], undefined>
 const entryType = '@nothingrotf/pstack/delivery-v1'
 const deliveryPacketPrefix = 'PSTACK_DELIVERY_PACKET:'
 const maxCommandReceipts = 256
+const commandTools = new Set(['bash', 'powershell', GATE_TOOL])
 const id = Type.String({ minLength: 1, maxLength: 256 })
 const bindingEntryType = '@nothingrotf/pstack/delivery-binding-v1'
 const BindingSchema = Type.Object(
@@ -557,8 +559,8 @@ async function evidenceFromRun(
       })
     }
   }
-  const commandReceipts = (record.toolExecutionReceipts ?? []).filter(
-    (receipt) => receipt.tool === 'bash' || receipt.tool === 'powershell',
+  const commandReceipts = (record.toolExecutionReceipts ?? []).filter((receipt) =>
+    commandTools.has(receipt.tool),
   )
   const retained = new Map<number, (typeof commandReceipts)[number]>()
   for (const [index, receipt] of commandReceipts.entries()) {
@@ -1215,7 +1217,7 @@ function packetText(issue: DeliveryIssue, history: PacketHistory): string {
         ]
       : []),
     'A failed command receipt never proves a passing criterion. Re-run the command after the fix and cite the successful alias, or report the criterion as not passing.',
-    'Run focused checks first and each full suite once. Give a long command a bash timeout well above its expected duration. After a timeout, raise the timeout or narrow the command instead of repeating it.',
+    `Run focused checks with bash. Run each full suite, type check, lint, build, and repository gate through ${GATE_TOOL}, which owns the timeout and runs one gate at a time. An unchanged tree returns its recorded pass without running the command, and that receipt is current command evidence.`,
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,
   ].join('\n')
@@ -1292,7 +1294,7 @@ function terminalEvidence(
   }
   const counters = new Map<string, number>()
   for (const receipt of input.toolExecutionReceipts) {
-    if (!['bash', 'powershell', 'read'].includes(receipt.tool)) continue
+    if (!commandTools.has(receipt.tool) && receipt.tool !== 'read') continue
     if (receipt.tool === 'read' && !includesReadReceipts(report, input.role, input.readonly)) {
       continue
     }

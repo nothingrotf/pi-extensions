@@ -1280,6 +1280,55 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
+  it('counts a gate receipt as command evidence in a delivery report', () => {
+    const issue = emptyDeliveryIssue('owner', 'gate-evidence')
+    issue.criteria = [{ description: 'The suite passes.', id: 'suite' }]
+    const report = {
+      issue: issue.issue,
+      kind: 'implementation',
+      state: 'wip',
+      criteria: [{ id: 'suite', result: 'pass', evidence: ['command:1'] }],
+      findings: [],
+      reason: 'The suite passed. Integration remains.',
+      failureClass: 'none',
+    }
+    const receipt = (tool) => ({
+      callId: 'gate',
+      command: 'bun run test',
+      completedAt: 2,
+      isError: false,
+      output: {
+        byteLength: 1,
+        mediaType: 'text/plain',
+        sha256: 'c'.repeat(64),
+        uri: 'artifact://gate',
+      },
+      startedAt: 1,
+      status: 'success',
+      tool,
+    })
+    const input = (tool) => ({
+      agentId: 'owner-agent',
+      attempt: 1,
+      output: JSON.stringify(report),
+      previousOutputs: [],
+      prompt: `work\n\n${deliveryReviewerPacket(issue)}`,
+      readonly: false,
+      role: 'bug-fix',
+      structuredOutput: {
+        data: report,
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [receipt(tool)],
+    })
+    const gateResult = validateDeliveryTerminal(input('pstack_gate'))
+    expect(gateResult.status === 'rejected' ? gateResult.error : 'accepted').toBe('accepted')
+    const unknown = validateDeliveryTerminal(input('unknown_tool'))
+    expect(unknown.status).toBe('rejected')
+  })
+
   it('derives the report kind from an implementation role', () => {
     const issue = emptyDeliveryIssue('owner', 'role-kind')
     const report = {

@@ -205,7 +205,10 @@ Do not keep the only harness copy in incidental verifier files, and never join t
 Reuse the harness across corrections instead of rebuilding equivalent verification environments.
 Keep dependency writes private to the verifier workspace.
 
-In an issue workspace, the runtime verifier reads the owner's gate logs for the same candidate tree instead of rerunning unchanged repository gates.
+Run full suites, type checks, lint, builds, and repository gates through `pstack_gate`, and use `bash` for focused checks and commands that edit files.
+`pstack_gate` records a pass for the exact tree and command, owns the timeout, and shares one run between concurrent callers.
+In an issue workspace, the runtime verifier calls `pstack_gate` with the owner's gate commands instead of rerunning them through `bash`.
+An unchanged candidate tree returns the recorded pass without running the command, and that receipt is current command evidence.
 It spends its time on the acceptance checks, the actual surface, and adversarial probes that the owner did not run.
 Reuse a passing receipt only while its artifact, harness, configuration, and runtime inputs remain unchanged.
 A changed patch invalidates its code verdict.
@@ -216,7 +219,7 @@ Reproduce each blocking failure on the corrected artifact before issuing a new v
 Review the correction delta and adjacent risks rather than restarting unrelated discovery.
 Classify new findings as regressions, missed requirements, environment failures, or non-blocking follow-ups.
 A changed code verdict still needs renewal even when unaffected runtime receipts remain reusable.
-Run every repository-required gate before commit and every user-required acceptance check.
+Run every repository-required gate through `pstack_gate` before commit, and run every user-required acceptance check.
 Do not repeat an unchanged passing check without a new failure, changed input, or explicit freshness requirement.
 Read or filter the retained log when only its presentation needs to change.
 Use the current workspace identity, never a previous attempt's absolute directory.

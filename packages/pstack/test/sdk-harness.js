@@ -476,6 +476,7 @@ export async function runWorkflowCase(scenario) {
     expect(completed.tools).toEqual(expect.arrayContaining(['todo_read', 'todo_write']))
     expect(completed.tools.includes('Task')).toBe(scenario.profile === 'pstack-nested')
     expect(completed.tools.includes('bash')).toBe(scenario.kind !== 'static')
+    expect(completed.tools.includes('pstack_gate')).toBe(scenario.kind !== 'static')
     expect(completed.tools).not.toContain('session_history')
     expect(completed.tools).not.toContain('mcp')
     if (scenario.kind === 'publication') {
