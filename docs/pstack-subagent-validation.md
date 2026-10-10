@@ -21,7 +21,7 @@ No product PR, merge, deployment, tracker mutation, or external-service write oc
 Run the individual integration and guidance suites:
 
 ```sh
-bun run test packages/pstack/test/child-bootstrap.test.js packages/pstack/test/workflow-guidance.test.ts --reporter=verbose
+bun run test packages/pstack/test/child-bootstrap.test.js packages/pstack/test/workflow-*.test.js packages/pstack/test/workflow-guidance.test.ts --reporter=verbose
 ```
 
 Run all repository checks:
