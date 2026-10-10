@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants, createWriteStream } from 'node:fs'
-import { copyFile, mkdir, realpath, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { appendFile, copyFile, mkdir, open, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
@@ -15,6 +15,8 @@ export const deliveryWorkspaceEntryType = '@nothingrotf/pstack/delivery-workspac
 const SETUP_SCRIPT = join('.pstack', 'worktree-setup.sh')
 const INCLUDE_FILE = '.worktreeinclude'
 const SETUP_TIMEOUT_MS = 15 * 60_000
+const BASE_CONFIG_KEY = 'pstackbase'
+const COMMIT_PATTERN = /^[a-f0-9]{40,64}$/
 
 const id = Type.String({ minLength: 1, maxLength: 256 })
 const path = Type.String({ minLength: 1, maxLength: 4096 })
@@ -38,6 +40,7 @@ export const DeliveryWorkspaceSchema = Type.Object(
             exitCode: Type.Optional(Type.Integer()),
             log: Type.Optional(path),
             status: Type.Enum(['absent', 'passed', 'failed']),
+            timedOut: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         ),
@@ -170,6 +173,20 @@ async function copyIncludedFiles(sourceRoot: string, worktree: string): Promise<
   return copied
 }
 
+export function setupTimeoutMs(): number {
+  const configured = Number(process.env['PSTACK_SETUP_TIMEOUT_SECONDS'])
+  return Number.isFinite(configured) && configured > 0
+    ? Math.round(configured * 1000)
+    : SETUP_TIMEOUT_MS
+}
+
+function killProcessGroup(pid: number | undefined): void {
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {}
+}
+
 async function runSetup(
   worktree: string,
   sourceRoot: string,
@@ -179,32 +196,83 @@ async function runSetup(
   if (!(await exists(script))) return { status: 'absent' }
   const gitDir = (await git(worktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).trim()
   const log = join(gitDir, 'pstack-setup.log')
-  const output = createWriteStream(log)
-  const code = await new Promise<number>((resolveCode, reject) => {
-    const child = spawn('bash', [script], {
-      cwd: worktree,
-      env: {
-        ...process.env,
-        PSTACK_ISSUE: issue,
-        PSTACK_SOURCE_ROOT: sourceRoot,
-        PSTACK_WORKTREE: worktree,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+  const timeoutMs = setupTimeoutMs()
+  const output = await open(log, 'w')
+  let timedOut = false
+  let code: number
+  try {
+    code = await new Promise<number>((resolveCode, reject) => {
+      const child = spawn('bash', [script], {
+        cwd: worktree,
+        detached: true,
+        env: {
+          ...process.env,
+          PSTACK_ISSUE: issue,
+          PSTACK_SOURCE_ROOT: sourceRoot,
+          PSTACK_WORKTREE: worktree,
+        },
+        stdio: ['ignore', output.fd, output.fd],
+      })
+      const timer = setTimeout(() => {
+        timedOut = true
+        killProcessGroup(child.pid)
+      }, timeoutMs)
+      child.on('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.on('exit', (exitCode) => {
+        clearTimeout(timer)
+        resolveCode(exitCode ?? 1)
+      })
     })
-    const timer = setTimeout(() => child.kill('SIGKILL'), SETUP_TIMEOUT_MS)
-    child.stdout.pipe(output, { end: false })
-    child.stderr.pipe(output, { end: false })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.on('close', (exitCode) => {
-      clearTimeout(timer)
-      resolveCode(exitCode ?? 1)
-    })
-  })
-  await new Promise<void>((done) => output.end(done))
+  } finally {
+    await output.close()
+  }
+  if (timedOut) {
+    await appendFile(log, `\nSetup timed out after ${timeoutMs / 1000} seconds.\n`)
+    return { exitCode: code, log, status: 'failed', timedOut: true }
+  }
   return { exitCode: code, log, status: code === 0 ? 'passed' : 'failed' }
+}
+
+async function commitOf(cwd: string, revision: string): Promise<string> {
+  return (await git(cwd, ['rev-parse', '--verify', `${revision}^{commit}`])).trim()
+}
+
+async function recordedBase(
+  sourceRoot: string,
+  branch: string,
+  tip: string,
+): Promise<string | undefined> {
+  const result = await run(sourceRoot, 'git', [
+    'config',
+    '--get',
+    `branch.${branch}.${BASE_CONFIG_KEY}`,
+  ])
+  const value = result.stdout.trim()
+  if (result.code !== 0 || !COMMIT_PATTERN.test(value)) return undefined
+  const ancestor = await run(sourceRoot, 'git', ['merge-base', '--is-ancestor', value, tip])
+  return ancestor.code === 0 ? value : undefined
+}
+
+async function existingBase(
+  sourceRoot: string,
+  branch: string,
+  tip: string,
+  requested: string,
+  explicit: boolean,
+): Promise<string> {
+  const recorded = explicit ? undefined : await recordedBase(sourceRoot, branch, tip)
+  if (recorded !== undefined) return recorded
+  const fork = await run(sourceRoot, 'git', ['merge-base', tip, requested])
+  const value = fork.stdout.trim()
+  if (fork.code !== 0 || !COMMIT_PATTERN.test(value)) {
+    throw new Error(
+      `Branch ${branch} shares no history with ${requested}. Pass a base that the branch descends from.`,
+    )
+  }
+  return value
 }
 
 export interface IssueWorkspaceRequest {
@@ -232,20 +300,26 @@ export async function prepareIssueWorkspace(
     `${basename(sourceRoot)}-${digest(commonDir).slice(0, 8)}`,
     slug,
   )
-  const base = (
-    await git(sourceRoot, ['rev-parse', '--verify', `${request.base ?? 'HEAD'}^{commit}`])
-  ).trim()
+  const requested = await commitOf(sourceRoot, request.base ?? 'HEAD')
+  const explicit = request.base !== undefined
+  let base = requested
   if (await exists(worktree)) {
     if (!(await registeredWorktrees(sourceRoot)).has(await realpath(worktree))) {
       throw new Error(
         `${worktree} exists but is not a worktree of ${sourceRoot}. Move it aside, then retry.`,
       )
     }
+    const tip = await commitOf(worktree, 'HEAD')
+    base = await existingBase(sourceRoot, branch, tip, requested, explicit)
   } else {
     await mkdir(dirname(worktree), { recursive: true })
     const branchExists =
       (await run(sourceRoot, 'git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]))
         .code === 0
+    if (branchExists) {
+      const tip = await commitOf(sourceRoot, `refs/heads/${branch}`)
+      base = await existingBase(sourceRoot, branch, tip, requested, explicit)
+    }
     await git(
       sourceRoot,
       branchExists
@@ -253,6 +327,7 @@ export async function prepareIssueWorkspace(
         : ['worktree', 'add', '-b', branch, worktree, base],
     )
   }
+  await git(sourceRoot, ['config', `branch.${branch}.${BASE_CONFIG_KEY}`, base])
   const physical = await realpath(worktree)
   const included = await copyIncludedFiles(sourceRoot, physical)
   const dependencies = await materializeDependencyDirectories(sourceRoot, physical)
@@ -281,7 +356,7 @@ export function workspaceBrief(workspace: DeliveryWorkspace): string {
     )
   } else if (setup.status === 'failed') {
     lines.push(
-      `Environment setup failed with exit code ${setup.exitCode ?? 'unknown'}. Its log is ${setup.log ?? 'unavailable'}. Repair the environment before you rely on checks.`,
+      `Environment setup ${setup.timedOut === true ? 'timed out' : `failed with exit code ${setup.exitCode ?? 'unknown'}`}. Its log is ${setup.log ?? 'unavailable'}. Repair the environment before you rely on checks.`,
     )
   } else {
     lines.push(
