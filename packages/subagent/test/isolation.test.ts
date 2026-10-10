@@ -1035,6 +1035,7 @@ describe('writer isolation', () => {
     const directory = await repository()
     try {
       const isolation = await writer(directory, 'writer-crash')
+      await isolation.dependencies
       await writeFile(join(isolation.rootWorktree, 'tracked.txt'), 'crash work\n', 'utf8')
       const deadOwner = {
         attemptId: isolation.attemptId,
@@ -1109,6 +1110,7 @@ describe('writer isolation', () => {
       try {
         const workspace = await writer(directory, 'writer-capture-conflict')
         isolation = workspace
+        await workspace.dependencies
         await writeFile(
           join(workspace.baseDir, 'manifest.json'),
           JSON.stringify({
