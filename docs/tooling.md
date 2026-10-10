@@ -70,8 +70,18 @@ The coordinator and both reviewers keep the same models in every variant.
 bun run bench:delivery --task diagnosis-owner --runs 2 --owner sol="openai-codex/gpt-6.1-sol:high [fast]" --owner opus=anthropic/claude-opus-5-5:medium
 ```
 
+`--revision name=rev` adds a variant that runs pi with the packages of another pi-extensions revision, and the option can repeat.
+Each variant checks out `rev` in a worktree under the output directory and runs `bun install` there.
+The variant then points `PI_CODING_AGENT_DIR` at a copy of your agent directory whose packages resolve into that worktree.
+The copy links your other agent files, including logins, and the benchmark removes the copies and worktrees at the end.
+
+```sh
+bun run bench:delivery --task workspace-setup --runs 3 --revision base=main --revision candidate=HEAD
+```
+
 The output directory keeps each run's repository, sessions, prompt, `pi.log`, and `metrics.json`.
 `report.md` lists every run and the median of each arm, with execution time split by owner, static review, and runtime verification.
+It also counts `pstack_gate` calls, reused gate passes, and `bash` or gate commands that ran for 45 seconds or more.
 Run at least three runs per arm before you draw a conclusion, because model latency varies between runs.
 
 ## Editor support
