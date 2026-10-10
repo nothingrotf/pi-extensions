@@ -1215,6 +1215,7 @@ function packetText(issue: DeliveryIssue, history: PacketHistory): string {
         ]
       : []),
     'A failed command receipt never proves a passing criterion. Re-run the command after the fix and cite the successful alias, or report the criterion as not passing.',
+    'Run focused checks first and each full suite once. Give a long command a bash timeout well above its expected duration. After a timeout, raise the timeout or narrow the command instead of repeating it.',
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,
   ].join('\n')
