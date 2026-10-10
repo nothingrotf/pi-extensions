@@ -157,6 +157,43 @@ export function pruneFailedPassEvidence(
   return pruned.length === 0 ? { pruned: [], report } : { pruned, report: { ...report, criteria } }
 }
 
+function mergeEvidence(first: readonly string[], second: readonly string[]): string[] {
+  return [...new Set([...first, ...second])]
+}
+
+export function mergeDuplicateReportEntries(report: DeliveryReport): DeliveryReport {
+  const criteria: DeliveryReport['criteria'] = []
+  for (const criterion of report.criteria) {
+    const index = criteria.findIndex((entry) => entry.id === criterion.id)
+    const existing = criteria[index]
+    if (existing === undefined || existing.result !== criterion.result) criteria.push(criterion)
+    else
+      criteria[index] = {
+        ...existing,
+        evidence: mergeEvidence(existing.evidence, criterion.evidence),
+      }
+  }
+  const findings: DeliveryReport['findings'] = []
+  for (const finding of report.findings) {
+    const index = findings.findIndex((entry) => entry.id === finding.id)
+    const existing = findings[index]
+    if (
+      existing === undefined ||
+      existing.blocking !== finding.blocking ||
+      existing.disposition !== finding.disposition
+    )
+      findings.push(finding)
+    else
+      findings[index] = {
+        ...existing,
+        evidence: mergeEvidence(existing.evidence, finding.evidence),
+      }
+  }
+  return criteria.length === report.criteria.length && findings.length === report.findings.length
+    ? report
+    : { ...report, criteria, findings }
+}
+
 export function normalizeDeliveryReportProse(report: DeliveryReport): DeliveryReport {
   if (report.reason.length <= DELIVERY_REASON_LIMIT) return report
   const marker = ' [reason truncated]'
@@ -273,6 +310,25 @@ export interface DeliveryRepairIdentity {
   artifactSha256: string
   evidenceSha256: string
   reportSha256: string
+}
+
+export function recoverableDeliveryReview(
+  issue: DeliveryIssue,
+  role: 'code review' | 'runtime verification',
+): DeliverySubmission | undefined {
+  const artifact = summarizeDelivery(issue).artifact
+  if (artifact === undefined) return undefined
+  const kind = role === 'code review' ? 'technical-review' : 'runtime-verification'
+  const latest = issue.submissions.findLast(
+    (submission) =>
+      submission.role === role &&
+      currentDeliveryReport(submission).kind === kind &&
+      submission.artifact !== undefined &&
+      sameDeliveryArtifact(submission.artifact, artifact),
+  )
+  return latest?.failureKind === 'report-contract' && (latest.reportCorrections?.length ?? 0) === 0
+    ? latest
+    : undefined
 }
 
 export function deliveryRepairIdentity(submission: DeliverySubmission): DeliveryRepairIdentity {

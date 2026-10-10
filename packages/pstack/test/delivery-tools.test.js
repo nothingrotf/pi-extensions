@@ -2390,6 +2390,108 @@ describe('pstack delivery tool interception', () => {
     })
   })
 
+  it('merges duplicate criterion and finding entries with the same verdict without a correction', () => {
+    const issue = emptyDeliveryIssue('owner', 'duplicate-entries')
+    const prompt = deliveryReviewerPacket(issue)
+    const snapshot = {
+      repositories: [
+        {
+          base: 'a'.repeat(40),
+          patch: { byteLength: 1, sha256: 'b'.repeat(64), uri: 'artifact://patch' },
+          relativePath: '',
+          root: '/repo',
+          tree: 'c'.repeat(40),
+        },
+      ],
+    }
+    const draft = {
+      issue: issue.issue,
+      kind: 'implementation',
+      state: 'candidate',
+      criteria: [
+        { id: 'receipt', result: 'pass', evidence: ['patch:.'] },
+        { id: 'receipt', result: 'pass', evidence: ['command:1', 'patch:.'] },
+      ],
+      findings: [
+        { id: 'F1', blocking: false, disposition: 'corrected', evidence: ['command:1'] },
+        { id: 'F1', blocking: false, disposition: 'corrected', evidence: ['patch:.'] },
+      ],
+      reason: 'Every registered criterion passed with executed proof.',
+      failureClass: 'none',
+    }
+    const input = (structured, previousOutputs) => ({
+      agentId: 'worker',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'worker',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      isolation: isolationReceipt(snapshot, 'not-requested'),
+      output: '{}',
+      previousOutputs,
+      prompt,
+      readonly: false,
+      role: 'feature',
+      structuredOutput: { data: structured, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [
+        {
+          callId: 'command',
+          completedAt: 2,
+          command: 'bun run test',
+          isError: false,
+          output: {
+            byteLength: 1,
+            mediaType: 'text/plain',
+            sha256: 'e'.repeat(64),
+            uri: 'artifact://command',
+          },
+          startedAt: 1,
+          status: 'success',
+          tool: 'bash',
+        },
+      ],
+      workspaceIdentity: { baselineTree: 'a'.repeat(40), snapshot },
+    })
+    const result = validateDeliveryTerminal(input(draft, []))
+    if (result.status !== 'accepted') throw new Error(`REJECTED: ${result.error}`)
+    if (result.normalizedOutput === undefined) throw new Error('Missing normalized output.')
+    const merged = JSON.parse(result.normalizedOutput)
+    expect(merged.criteria).toEqual([
+      { id: 'receipt', result: 'pass', evidence: ['patch:.', 'command:1'] },
+    ])
+    expect(merged.findings).toEqual([
+      { id: 'F1', blocking: false, disposition: 'corrected', evidence: ['command:1', 'patch:.'] },
+    ])
+
+    const deduplicated = { ...draft, criteria: [merged.criteria[0]], findings: merged.findings }
+    const correction = validateDeliveryTerminal(
+      input(deduplicated, [
+        { structuredOutput: { data: draft, mode: 'strict', source: 'caller', status: 'valid' } },
+      ]),
+    )
+    expect(correction.status).toBe('accepted')
+
+    const conflicting = {
+      ...draft,
+      criteria: [
+        { id: 'receipt', result: 'pass', evidence: ['command:1'] },
+        { id: 'receipt', result: 'pending', evidence: ['patch:.'] },
+      ],
+      findings: [],
+      state: 'wip',
+    }
+    const rejected = validateDeliveryTerminal(input(conflicting, []))
+    expect(rejected.status).toBe('rejected')
+    expect(rejected.error).toContain('must be unique')
+  })
+
   it('keeps an incomplete draft rejected when it omits its failure class', () => {
     const issue = emptyDeliveryIssue('owner', 'missing-failure-class')
     const prompt = `work\n\n${deliveryReviewerPacket(issue)}`
