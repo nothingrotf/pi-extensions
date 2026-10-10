@@ -47,7 +47,7 @@ export function createSessionTodoTools() {
       description: todoWriteDescription,
       promptSnippet: "Manage only this session's task list, never a parent or sibling plan",
       promptGuidelines: [
-        'Use todo_write to track your assigned scope. Session-local planning is permitted in read-only Tasks and does not authorize repository changes.',
+        'Use todo_write when your assigned scope has three or more distinct steps, and skip it for a shorter scope. Update it when a step finishes, not on every turn. Session-local planning is permitted in read-only Tasks and does not authorize repository changes.',
         'Use todo_write to mark external dependencies blocked, and request_parent for real coordinator decisions. Never mark unverified or unfinished work completed.',
       ],
       parameters: TodoWriteSchema,

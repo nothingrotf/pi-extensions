@@ -1217,7 +1217,7 @@ function packetText(issue: DeliveryIssue, history: PacketHistory): string {
         ]
       : []),
     'A failed command receipt never proves a passing criterion. Re-run the command after the fix and cite the successful alias, or report the criterion as not passing.',
-    `Run focused checks with bash. Run each full suite, type check, lint, build, and repository gate through ${GATE_TOOL}, which owns the timeout and runs one gate at a time. An unchanged tree returns its recorded pass without running the command, and that receipt is current command evidence.`,
+    `Run focused checks with bash. Run each full suite, type check, lint, build, and repository gate through ${GATE_TOOL}, which owns the timeout. Apply formatters first, and run fast gates before slow suites. An unchanged tree returns its recorded pass without running the command, and that receipt is current command evidence.`,
     'An incomplete report needs an explicit reason. An edit mismatch is recoverable and does not erase actionable obligations.',
     `${deliveryPacketPrefix}${JSON.stringify(terminalDeliveryPacket(issue))}`,
   ].join('\n')

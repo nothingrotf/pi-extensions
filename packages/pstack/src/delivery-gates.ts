@@ -435,6 +435,7 @@ export function createGateTools() {
       promptGuidelines: [
         'Use pstack_gate, not bash, for full test suites, type checks, lint, builds, and repository gates. The tool owns the timeout, so run each gate once and wait for its result.',
         'Use bash for focused tests, reproductions, and commands that edit files. A command that changes the tree is not a gate.',
+        'Apply formatters and fixes first, then run fast gates such as format, lint, and type checks before slow suites. Any edit after a pass changes the tree and requires a new run.',
         'A pstack_gate receipt is command evidence. A reused pass proves that this exact tree passed this command.',
       ],
       parameters: GateParametersSchema,
