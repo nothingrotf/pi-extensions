@@ -40,11 +40,17 @@ function write(text: string): void {
   process.stdout.write(text)
 }
 
-function positive(value: string | undefined, fallback: number, name: string): number {
+function nonNegative(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < 0)
     throw new Error(`${name} must be a number of 0 or more.`)
+  return parsed
+}
+
+function positive(value: string | undefined, fallback: number, name: string): number {
+  const parsed = nonNegative(value, fallback, name)
+  if (parsed <= 0) throw new Error(`${name} must be greater than 0.`)
   return parsed
 }
 
@@ -80,14 +86,23 @@ function options(): Options | undefined {
     out: resolve(values.out ?? join(tmpdir(), `delivery-bench-${stamp}`)),
     runs: Math.max(1, Math.floor(positive(values.runs, 1, '--runs'))),
     runtime: values.runtime ?? 'openai-codex/gpt-6.1-sol:medium',
-    setupSeconds: positive(values['setup-seconds'], 20, '--setup-seconds'),
-    timeoutMs: positive(values['timeout-minutes'], 30, '--timeout-minutes') * 60_000,
+    setupSeconds: nonNegative(values['setup-seconds'], 20, '--setup-seconds'),
+    timeoutMs: Math.round(positive(values['timeout-minutes'], 30, '--timeout-minutes') * 60_000),
   }
 }
 
 interface Execution {
   code: number
   output: string
+}
+
+const TERMINATION_GRACE_MS = 10_000
+
+function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, signal)
+  } catch {}
 }
 
 function execute(
@@ -99,7 +114,12 @@ function execute(
   logPath?: string,
 ): Promise<Execution> {
   return new Promise((done, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(command, args, {
+      cwd,
+      detached: true,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
     const log = logPath === undefined ? undefined : createWriteStream(logPath)
     const chunks: Buffer[] = []
     const collect = (chunk: Buffer) => {
@@ -108,13 +128,32 @@ function execute(
     }
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
-    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs)
+    const timers: NodeJS.Timeout[] = []
+    const clearTimers = () => {
+      for (const timer of timers) clearTimeout(timer)
+    }
+    timers.push(
+      setTimeout(() => {
+        signalGroup(child.pid, 'SIGTERM')
+        timers.push(
+          setTimeout(() => {
+            signalGroup(child.pid, 'SIGKILL')
+            timers.push(
+              setTimeout(() => {
+                child.stdout.destroy()
+                child.stderr.destroy()
+              }, TERMINATION_GRACE_MS),
+            )
+          }, TERMINATION_GRACE_MS),
+        )
+      }, timeoutMs),
+    )
     child.on('error', (error) => {
-      clearTimeout(timer)
+      clearTimers()
       reject(error)
     })
     child.on('close', (code) => {
-      clearTimeout(timer)
+      clearTimers()
       log?.end()
       done({ code: code ?? 1, output: Buffer.concat(chunks).toString('utf8') })
     })
