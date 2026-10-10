@@ -56,8 +56,22 @@ bun run bench:delivery --runs 3
 bun run bench:delivery --arms workspace --setup-seconds 60 --out /tmp/bench
 ```
 
+`--task <id>` replays a real fix from this repository instead of the fixture.
+Each replay clones the repository at the parent of the fix commit and gives the coordinator the issue text and criteria.
+The coordinator follows the `next` field of each checkpoint without forced rounds, and stops after four implementation submissions.
+After the run, the fix commit's test files replace the candidate's versions, and the replay's acceptance command must pass.
+`tools/delivery-bench/replays.ts` defines the replay tasks.
+
+`--owner name=selector` adds an implementation owner variant, and the option can repeat.
+Each variant copies your model policy, sets the owner roles to the selector, and points `PSTACK_MODEL_POLICY` at the copy.
+The coordinator and both reviewers keep the same models in every variant.
+
+```sh
+bun run bench:delivery --task diagnosis-owner --runs 2 --owner sol="openai-codex/gpt-6.1-sol:high [fast]" --owner opus=anthropic/claude-opus-5-5:medium
+```
+
 The output directory keeps each run's repository, sessions, prompt, `pi.log`, and `metrics.json`.
-`report.md` lists every run and the median of each arm.
+`report.md` lists every run and the median of each arm, with execution time split by owner, static review, and runtime verification.
 Run at least three runs per arm before you draw a conclusion, because model latency varies between runs.
 
 ## Editor support

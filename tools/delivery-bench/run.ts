@@ -1,13 +1,15 @@
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 import { acceptanceTest, acceptanceTestName, fixtureFiles } from './fixture.ts'
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
-import { type Arm, arms, benchmarkPrompt } from './prompts.ts'
+import { type Arm, arms, benchmarkPrompt, replayPrompt } from './prompts.ts'
+import { ownerPolicy, replayTask, replayTasks, type ReplayTask } from './replays.ts'
 
 const usage = `Usage: bun tools/delivery-bench/run.ts [options]
 
@@ -15,7 +17,9 @@ Runs the managed delivery benchmark with the real pi CLI and the configured mode
 Each run creates a fresh repository and costs real model usage.
 
 Options:
-  --arms <list>           Comma-separated arms: baseline, workspace (default: both)
+  --task <id>             pricing, the synthetic fixture (default), or a replay task: ${replayTasks.map((task) => task.id).join(', ')}
+  --arms <list>           Pricing arms: baseline, workspace (default: both). Replay tasks use the workspace flow
+  --owner <name=selector> Implementation owner variant, repeatable. Each variant rewrites the owner roles in a copy of the model policy
   --runs <n>              Runs per arm, interleaved by arm (default: 1)
   --out <dir>             Output directory (default: a new directory under the system temp)
   --coordinator <model>   Coordinator model (default: openai-codex/gpt-6.1-sol:medium)
@@ -25,16 +29,25 @@ Options:
   --timeout-minutes <n>   Timeout for one run (default: 30)
 `
 
+interface Owner {
+  label: string
+  selector: string | undefined
+}
+
 interface Options {
   arms: Arm[]
   codeReview: string
   coordinator: string
   out: string
+  owners: Owner[]
   runs: number
   runtime: string
   setupSeconds: number
+  task: ReplayTask | undefined
   timeoutMs: number
 }
+
+const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 function write(text: string): void {
   process.stdout.write(text)
@@ -60,10 +73,32 @@ function parseArm(value: string): Arm {
   return arm
 }
 
+function parseOwner(value: string): Owner {
+  const separator = value.indexOf('=')
+  const selector = (separator < 0 ? value : value.slice(separator + 1)).trim()
+  const label =
+    separator < 0 ? selector.replaceAll(/[^A-Za-z0-9.-]+/g, '-') : value.slice(0, separator)
+  if (selector.length === 0 || label.trim().length === 0)
+    throw new Error(`--owner needs name=selector or a selector: ${value}`)
+  return { label: label.trim(), selector }
+}
+
+function parseTask(value: string | undefined): ReplayTask | undefined {
+  if (value === undefined || value === 'pricing') return undefined
+  const task = replayTask(value)
+  if (task === undefined)
+    throw new Error(
+      `Unknown task: ${value}. Use pricing or ${replayTasks.map((entry) => entry.id).join(', ')}.`,
+    )
+  return task
+}
+
 function options(): Options | undefined {
   const { values } = parseArgs({
     options: {
       arms: { type: 'string' },
+      owner: { type: 'string', multiple: true },
+      task: { type: 'string' },
       'code-review': { type: 'string' },
       coordinator: { type: 'string' },
       help: { type: 'boolean' },
@@ -84,9 +119,14 @@ function options(): Options | undefined {
     codeReview: values['code-review'] ?? 'anthropic/claude-opus-5:xhigh',
     coordinator: values.coordinator ?? 'openai-codex/gpt-6.1-sol:medium',
     out: resolve(values.out ?? join(tmpdir(), `delivery-bench-${stamp}`)),
+    owners:
+      values.owner === undefined || values.owner.length === 0
+        ? [{ label: 'policy', selector: undefined }]
+        : values.owner.map(parseOwner),
     runs: Math.max(1, Math.floor(positive(values.runs, 1, '--runs'))),
     runtime: values.runtime ?? 'openai-codex/gpt-6.1-sol:medium',
     setupSeconds: nonNegative(values['setup-seconds'], 20, '--setup-seconds'),
+    task: parseTask(values.task),
     timeoutMs: Math.round(positive(values['timeout-minutes'], 30, '--timeout-minutes') * 60_000),
   }
 }
@@ -189,6 +229,43 @@ async function createRepository(repo: string): Promise<void> {
   await required('bun', ['run', 'setup'], repo, { ...process.env, BENCH_SETUP_SECONDS: '0' })
 }
 
+async function createReplayRepository(repo: string, task: ReplayTask): Promise<void> {
+  await required('git', ['clone', '-q', sourceRoot, repo], dirname(repo))
+  await required('git', ['checkout', '-q', '-B', 'main', `${task.fix}^`], repo)
+  await required('git', ['remote', 'remove', 'origin'], repo)
+  await required('bun', ['install', '--frozen-lockfile'], repo)
+}
+
+async function replayAcceptance(
+  repo: string,
+  tree: string | undefined,
+  task: ReplayTask,
+): Promise<RunResult['acceptance']> {
+  if (tree === undefined) return 'missing'
+  for (const path of task.hiddenTests) {
+    const content = await execute('git', ['show', `${task.fix}:${path}`], repo, process.env, 60_000)
+    if (content.code !== 0) throw new Error(`Cannot read hidden test ${path}:\n${content.output}`)
+    await writeFile(join(tree, path), content.output)
+  }
+  const [command, ...args] = task.acceptance
+  if (command === undefined) throw new Error(`Replay task ${task.id} has no acceptance command.`)
+  const result = await execute(command, args, tree, process.env, 600_000)
+  await writeFile(join(dirname(repo), 'acceptance.log'), result.output)
+  return result.code === 0 ? 'pass' : 'fail'
+}
+
+async function policyFor(config: Options, owner: Owner): Promise<string | undefined> {
+  if (owner.selector === undefined) return undefined
+  const configured = process.env['PSTACK_MODEL_POLICY']
+  const source =
+    configured !== undefined && configured.length > 0
+      ? configured
+      : join(homedir(), '.agents', 'rules', 'pstack-models.md')
+  const path = join(config.out, `policy-${owner.label}.md`)
+  await writeFile(path, ownerPolicy(await readFile(source, 'utf8'), owner.selector))
+  return path
+}
+
 async function acceptance(tree: string | undefined): Promise<RunResult['acceptance']> {
   if (tree === undefined) return 'missing'
   const path = join(tree, acceptanceTestName)
@@ -226,27 +303,34 @@ async function sessionFiles(directory: string) {
   )
 }
 
-async function runOnce(config: Options, arm: Arm, run: number): Promise<RunResult> {
-  const root = join(config.out, `${arm}-${run}`)
+async function runOnce(config: Options, arm: Arm, owner: Owner, run: number): Promise<RunResult> {
+  const task = config.task
+  const label = `${task?.id ?? arm}@${owner.label}`
+  const root = join(config.out, `${label}-${run}`)
   const repo = join(root, 'repo')
   const sessions = join(root, 'sessions')
   const setupLog = join(root, 'setup-runs.log')
   await mkdir(sessions, { recursive: true })
-  await createRepository(repo)
-  const prompt = benchmarkPrompt(arm, { code: config.codeReview, runtime: config.runtime })
+  const models = { code: config.codeReview, runtime: config.runtime }
+  if (task === undefined) await createRepository(repo)
+  else await createReplayRepository(repo, task)
+  const prompt = task === undefined ? benchmarkPrompt(arm, models) : replayPrompt(task, models)
+  const policy = await policyFor(config, owner)
   await writeFile(join(root, 'prompt.md'), prompt)
-  write(`${arm} run ${run}: ${root}\n`)
+  write(`${label} run ${run}: ${root}\n`)
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BENCH_LOG: setupLog,
+    BENCH_SETUP_SECONDS: String(config.setupSeconds),
+    PSTACK_WORKTREE_ROOT: join(root, 'worktrees'),
+  }
+  if (policy !== undefined) env['PSTACK_MODEL_POLICY'] = policy
   const started = Date.now()
   const execution = await execute(
     'pi',
     ['-p', '--model', config.coordinator, '--session-dir', sessions, prompt],
     repo,
-    {
-      ...process.env,
-      BENCH_LOG: setupLog,
-      BENCH_SETUP_SECONDS: String(config.setupSeconds),
-      PSTACK_WORKTREE_ROOT: join(root, 'worktrees'),
-    },
+    env,
     config.timeoutMs,
     join(root, 'pi.log'),
   )
@@ -254,8 +338,11 @@ async function runOnce(config: Options, arm: Arm, run: number): Promise<RunResul
   const metrics = sessionRunMetrics(await sessionFiles(sessions))
   const result: RunResult = {
     ...metrics,
-    acceptance: await acceptance(arm === 'workspace' ? metrics.worktree : repo),
-    arm,
+    acceptance:
+      task === undefined
+        ? await acceptance(arm === 'workspace' ? metrics.worktree : repo)
+        : await replayAcceptance(repo, metrics.worktree, task),
+    arm: label,
     exitCode: execution.code,
     run,
     setupRuns: await lineCount(setupLog),
@@ -263,7 +350,7 @@ async function runOnce(config: Options, arm: Arm, run: number): Promise<RunResul
   }
   await writeFile(join(root, 'metrics.json'), `${JSON.stringify(result, null, 2)}\n`)
   write(
-    `${arm} run ${run}: ${result.finalState ?? 'no checkpoint'}, acceptance ${result.acceptance}, ${(wallMs / 1000).toFixed(1)} s\n`,
+    `${label} run ${run}: ${result.finalState ?? 'no checkpoint'}, acceptance ${result.acceptance}, ${(wallMs / 1000).toFixed(1)} s\n`,
   )
   return result
 }
@@ -274,8 +361,11 @@ async function main(): Promise<void> {
   await mkdir(config.out, { recursive: true })
   write(`Writing results to ${config.out}\n`)
   const results: RunResult[] = []
+  const variants: Arm[] = config.task === undefined ? config.arms : ['workspace']
   for (let run = 1; run <= config.runs; run += 1) {
-    for (const arm of config.arms) results.push(await runOnce(config, arm, run))
+    for (const arm of variants) {
+      for (const owner of config.owners) results.push(await runOnce(config, arm, owner, run))
+    }
   }
   const report = formatReport(results)
   await writeFile(join(config.out, 'results.json'), `${JSON.stringify(results, null, 2)}\n`)
