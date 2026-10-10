@@ -74,13 +74,14 @@ import {
   deliveryRepairIdentity,
   deliveryReportDiagnostics,
   deliveryReportDraft,
+  mergeDuplicateReportEntries,
   normalizeDeliveryReportProse,
   pruneFailedPassEvidence,
   parseDeliveryIssue,
+  recoverableDeliveryReview,
   recordDelivery,
   refreshDeliveryIntegration,
   repairDeliveryReport,
-  sameDeliveryArtifact,
   sameDeliveryTechnicalVerdict,
   summarizeDelivery,
 } from './delivery.ts'
@@ -645,7 +646,7 @@ async function evidenceFromRun(
 function structuredDeliveryReport(record: RunRecord): DeliveryReport | undefined {
   const output = record.structuredOutput
   return output?.status === 'valid' && Value.Check(DeliveryReportSchema, output.data)
-    ? output.data
+    ? mergeDuplicateReportEntries(output.data)
     : undefined
 }
 
@@ -935,14 +936,6 @@ function hasStoredDeliveryContract(record: RunRecord | undefined): boolean {
     contract.version !== 1 &&
     contract.outputSchema !== undefined &&
     jsonEquals(contract.outputSchema, DeliveryOutputSchema)
-  )
-}
-
-function isTechnicalSubmission(submission: DeliverySubmission): boolean {
-  const report = currentDeliveryReport(submission)
-  return (
-    (report.kind === 'technical-review' && submission.role === 'code review') ||
-    (report.kind === 'runtime-verification' && submission.role === 'runtime verification')
   )
 }
 
@@ -1332,7 +1325,7 @@ function reportDraft(
   if (output?.status !== 'valid') return undefined
   const draft = deliveryReportDraft(output.data)
   if (draft === undefined) return undefined
-  const report = normalizeDeliveryReportProse(draft.report)
+  const report = mergeDuplicateReportEntries(normalizeDeliveryReportProse(draft.report))
   if (role === undefined || !isImplementationRole(role)) return { ...draft, report }
   return { ...draft, report: { ...report, kind: 'implementation' } }
 }
@@ -1586,31 +1579,11 @@ async function preflight(
   const workspace = loadWorkspaces(ctx).get(issueId)
   if (workspace !== undefined) await applyIssueWorkspace(task, role, readonly, workspace, ctx)
   const summary = summarizeDelivery(issue)
-  const currentArtifact = summary.artifact
-  const currentArtifactReviews =
-    currentArtifact === undefined
-      ? []
-      : issue.submissions.filter(
-          (submission) =>
-            isTechnicalSubmission(submission) &&
-            submission.artifact !== undefined &&
-            sameDeliveryArtifact(submission.artifact, currentArtifact),
-        )
-  const latestArtifactReview = currentArtifactReviews.findLast(
-    (submission) =>
-      currentDeliveryReport(submission).kind ===
-      (role === 'code review' ? 'technical-review' : 'runtime-verification'),
-  )
   const recoverable =
-    latestArtifactReview?.failureKind === 'report-contract' &&
-    (latestArtifactReview.reportCorrections?.length ?? 0) === 0
-      ? latestArtifactReview
+    role === 'code review' || role === 'runtime verification'
+      ? recoverableDeliveryReview(issue, role)
       : undefined
-  if (
-    recoverable !== undefined &&
-    task.resume === undefined &&
-    (role === 'code review' || role === 'runtime verification')
-  ) {
+  if (recoverable !== undefined && task.resume === undefined) {
     const identity = deliveryRepairIdentity(recoverable)
     throw new DeliveryRejected(
       `Repair the retained report before allocating a replacement review: ${JSON.stringify({

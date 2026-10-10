@@ -227,6 +227,7 @@ Every checkpoint carries `next`, a deterministic next step derived from the ledg
 The order is: record settled attempts, wait for running ones, prepare the workspace, implement, review in parallel, correct, diagnose after two incomplete returns, refresh, and publish.
 A `correct` step names the owner to resume when the issue has a workspace and the owner completed its attempt. It names `null` when a fresh owner must take the correction.
 A `review` step names only the review roles that the current candidate still lacks.
+A `repair` step names a review of the current candidate that failed only its report contract. Repair that report before a replacement review.
 
 ### Delivery engine
 
@@ -236,7 +237,7 @@ A `review` step names only the review roles that the current candidate still lac
 - The engine prepares the workspace, dispatches the owner, records every attempt, and dispatches static review and runtime verification in one batch.
 - It resumes the owner with the unresolved criteria, the open findings, and the reviewer reports. After a diagnosis, it gives the brief and the diagnosis to a fresh owner.
 - Every engine Task passes the same managed preflight and dispatch binding as a model-issued `Task`. Records and workspace calls run through `pstack_delivery`.
-- The engine stops at acceptance, at a running background Task, at a rejected dispatch or protocol step, after a repeated protocol step, or after `maxDispatches` Tasks. The default is 8.
+- The engine stops at acceptance, at a running background Task, at a report repair, at a rejected dispatch or protocol step, after a repeated protocol step, or after `maxDispatches` Tasks. The default is 8.
 - The result lists every step with its agents and duration, and it ends with the compact checkpoint.
 - Abort the tool call to cancel the running Task. Call `pstack_deliver` for several issues in one turn to run them in parallel.
 

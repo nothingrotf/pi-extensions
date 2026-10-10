@@ -115,6 +115,7 @@ export type EngineStop =
   | 'dispatch-limit'
   | 'dispatch-rejected'
   | 'protocol-rejected'
+  | 'repair-required'
   | 'running'
   | 'stalled'
 
@@ -309,6 +310,8 @@ export async function runDeliveryEngine(
     if (host.signal?.aborted === true) return finish('aborted', next)
     if (next.step === 'publish') return finish('accepted', next)
     if (next.step === 'wait') return finish('running', next, next.agentIds.join(', '))
+    if (next.step === 'repair')
+      return finish('repair-required', next, `${next.agentId} attempt ${next.attempt}`)
     const stepStarted = host.now()
     if (next.step === 'record' || next.step === 'workspace' || next.step === 'refresh') {
       idle += 1

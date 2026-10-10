@@ -232,6 +232,15 @@ describe('delivery engine', () => {
       stop: 'dispatch-rejected',
     })
 
+    const repair = scripted({
+      steps: [{ step: 'repair', agentId: 'static', attempt: 2, instruction }],
+    })
+    expect(await runDeliveryEngine(input, repair.host, repair.summarize)).toMatchObject({
+      detail: 'static attempt 2',
+      dispatches: 0,
+      stop: 'repair-required',
+    })
+
     const protocol = scripted({
       steps: [{ step: 'workspace', instruction }],
       rejectDeliver: 'Not a Git repository.',

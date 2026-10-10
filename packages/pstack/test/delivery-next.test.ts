@@ -178,6 +178,28 @@ describe('next delivery step', () => {
     expect(nextDeliveryStep(accepted, idle)).toMatchObject({ step: 'publish' })
   })
 
+  it('asks for a report repair before a replacement review', () => {
+    const first = save(opened, candidate('b'.repeat(40)))
+    const failedContract: DeliverySubmission = {
+      ...review('code review', 'b'.repeat(40), 'accepted'),
+      agentId: 'static',
+      execution: 'failed',
+      failureKind: 'report-contract',
+    }
+    const recoverable = save(first, failedContract)
+    expect(nextDeliveryStep(recoverable, idle)).toMatchObject({
+      step: 'repair',
+      agentId: 'static',
+      attempt: 1,
+    })
+    const blocked = save(
+      first,
+      failedContract,
+      review('runtime verification', 'b'.repeat(40), 'blocked'),
+    )
+    expect(nextDeliveryStep(blocked, idle)).toMatchObject({ step: 'correct' })
+  })
+
   it('requires a diagnosis after three rejected review rounds', () => {
     const rounds = ['b', 'e', 'f'].map((letter, index) => [
       candidate(letter.repeat(40), index + 1),

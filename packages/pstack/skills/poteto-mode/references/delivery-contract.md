@@ -124,6 +124,7 @@ Use recorded receipt IDs in evidence arrays, not prose, severities, or file path
 Put explanations and file-line references in `reason`.
 Keep `reason` at or below 4096 characters and always set `failureClass`.
 The runtime truncates oversized `reason` prose and infers `failureClass: none` for an all-passing candidate or accepted report.
+It merges repeated criterion or finding entries that carry the same verdict, and rejects repeated entries that disagree.
 It rejects oversized evidence arrays, missing criteria, and any other contract defect, so a long report still costs a correction turn.
 An implementation candidate requires at least one successful `command:n` receipt from its own attempt.
 A failed receipt never proves a passing criterion.

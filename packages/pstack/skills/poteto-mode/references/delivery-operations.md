@@ -27,6 +27,7 @@ Each checkpoint carries `next`, the deterministic next step of the delivery pipe
 | `workspace` | Prepare the issue workspace. |
 | `implement` | Dispatch the implementation owner. |
 | `review` | Dispatch the named review roles, in one batch when there are two. |
+| `repair` | Repair the named review report, which failed only its contract. |
 | `correct` | Resume `next.resume` with the verdict, or dispatch a fresh owner when it is `null`. |
 | `diagnose` | Dispatch one `hardest tasks` diagnosis. |
 | `refresh` | Join the owner, then refresh its integration. |

@@ -3,6 +3,7 @@ import {
   currentDeliveryReport,
   type DeliveryIssue,
   type DeliverySubmission,
+  recoverableDeliveryReview,
   reviewEndorsesCandidate,
   sameDeliveryArtifact,
   summarizeDelivery,
@@ -18,6 +19,7 @@ export type DeliveryNextStep =
   | { step: 'implement'; instruction: string }
   | { step: 'correct'; resume: string | null; instruction: string }
   | { step: 'review'; roles: ReviewRole[]; instruction: string }
+  | { step: 'repair'; agentId: string; attempt: number; instruction: string }
   | { step: 'refresh'; agentId: string; instruction: string }
   | { step: 'publish'; instruction: string }
 
@@ -129,6 +131,18 @@ export function nextDeliveryStep(
     if (!reviews.has('code review')) roles.push('code review')
     if (issue.runtimeRequired && !reviews.has('runtime verification'))
       roles.push('runtime verification')
+    const recoverable = roles
+      .map((role) => recoverableDeliveryReview(issue, role))
+      .find((submission) => submission !== undefined)
+    if (!rejected && recoverable !== undefined) {
+      return {
+        step: 'repair',
+        agentId: recoverable.agentId,
+        attempt: recoverable.attempt,
+        instruction:
+          'A review failed only its report contract. Read its submission, then call pstack_delivery repair with the repair locator from recentAttempts and a corrected report that keeps the verdict. Dispatch a replacement review only after the repair fails.',
+      }
+    }
     if (!rejected && roles.length > 0) {
       return {
         step: 'review',
