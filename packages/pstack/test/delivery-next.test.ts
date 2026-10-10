@@ -193,9 +193,41 @@ describe('next delivery step', () => {
         },
       }
     }
-    expect(nextDeliveryStep(save(opened, wip(1), wip(2)), idle)).toMatchObject({
+    const stalled = save(opened, wip(1), wip(2))
+    expect(nextDeliveryStep(stalled, idle)).toMatchObject({
       step: 'diagnose',
       role: 'hardest tasks',
+    })
+    const diagnosed = save(stalled, {
+      agentId: 'diagnostician',
+      attempt: 1,
+      role: 'hardest tasks',
+      execution: 'completed',
+      integration: 'captured',
+      evidence: [
+        {
+          id: 'failure',
+          kind: 'failure',
+          passed: true,
+          reference: 'file:///diagnosis',
+          sha256: 'e'.repeat(64),
+        },
+      ],
+      recordedAt: 3,
+      report: {
+        issue: 'ISSUE-1',
+        kind: 'diagnosis',
+        state: 'wip',
+        criteria: [],
+        findings: [],
+        reason: 'The boundary check reads the wrong field.',
+        failureClass: 'regression',
+      },
+    })
+    expect(nextDeliveryStep(diagnosed, idle)).toMatchObject({ step: 'correct', resume: null })
+    expect(nextDeliveryStep(save(diagnosed, wip(3)), idle)).toMatchObject({
+      step: 'correct',
+      resume: 'owner',
     })
   })
 })
