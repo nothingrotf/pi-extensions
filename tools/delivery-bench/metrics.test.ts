@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
-import { benchmarkPrompt, REPLAY_ROUND_LIMIT, replayPrompt } from './prompts.ts'
+import {
+  benchmarkPrompt,
+  ENGINE_DISPATCH_LIMIT,
+  REPLAY_ROUND_LIMIT,
+  replayEnginePrompt,
+  replayPrompt,
+} from './prompts.ts'
 import { ownerPolicy, replayTasks } from './replays.ts'
 
 function jsonl(...entries: readonly object[]): string {
@@ -227,6 +233,53 @@ describe('delivery benchmark metrics', () => {
       expect(prompt).toContain('model "review/model:high"')
       expect(prompt).toContain(`after ${REPLAY_ROUND_LIMIT} implementation submissions`)
       expect(task.acceptance.join(' ')).toContain(task.hiddenTests[0] ?? 'missing')
+    }
+  })
+
+  it('counts engine dispatches and reads the engine checkpoint', () => {
+    const engine = jsonl(
+      { type: 'session', timestamp: '2026-01-01T00:00:00.000Z', cwd: '/repo' },
+      {
+        type: 'message',
+        timestamp: '2026-01-01T00:05:00.000Z',
+        message: {
+          role: 'toolResult',
+          toolName: 'pstack_deliver',
+          content: [
+            {
+              type: 'text',
+              text: `Engine stop: accepted\nSteps:\n\nCheckpoint: ${JSON.stringify({ summary: { state: 'accepted' } })}`,
+            },
+          ],
+          details: {
+            steps: [
+              { step: 'workspace', agents: [] },
+              { step: 'implement', agents: [{ agentId: 'owner' }] },
+              { step: 'record', agents: [{ agentId: 'owner' }] },
+              { step: 'review', agents: [{ agentId: 's' }, { agentId: 'r' }] },
+            ],
+          },
+        },
+      },
+    )
+    const metrics = sessionRunMetrics([{ content: engine, path: '/sessions/root.jsonl' }])
+    expect(metrics).toMatchObject({
+      acceptedAfterMs: 300_000,
+      finalState: 'accepted',
+      taskDispatches: 3,
+    })
+  })
+
+  it('gives the engine arm the same criteria, owner, and review models', () => {
+    const models = { code: 'review/model:high', runtime: 'verify/model:low' }
+    for (const task of replayTasks) {
+      const prompt = replayEnginePrompt(task, models)
+      for (const criterion of task.criteria) expect(prompt).toContain(`id "${criterion.id}"`)
+      expect(prompt).toContain('Call pstack_deliver once')
+      expect(prompt).toContain('"role":"bug-fix"')
+      expect(prompt).toContain('"codeModel":"review/model:high"')
+      expect(prompt).toContain('"runtimeModel":"verify/model:low"')
+      expect(prompt).toContain(`"maxDispatches":${ENGINE_DISPATCH_LIMIT}`)
     }
   })
 

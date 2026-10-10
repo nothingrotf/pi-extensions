@@ -1,9 +1,13 @@
 import { criteria } from './fixture.ts'
 import type { ReplayTask } from './replays.ts'
 
-export type Arm = 'baseline' | 'workspace'
+export type Arm = 'baseline' | 'workspace' | 'engine'
 
-export const arms: readonly Arm[] = ['baseline', 'workspace']
+export const arms: readonly Arm[] = ['baseline', 'workspace', 'engine']
+
+export const pricingArms: readonly Arm[] = ['baseline', 'workspace']
+
+export const replayArms: readonly Arm[] = ['workspace', 'engine']
 
 export interface ReviewModels {
   code: string
@@ -97,6 +101,31 @@ export function replayPrompt(task: ReplayTask, models: ReviewModels): string {
     '   - record: call pstack_delivery with action "record" for each named agent.',
     '   - wait: call TaskControl with action "wait" for the named agents.',
     `3. When next.step is "publish", or after ${REPLAY_ROUND_LIMIT} implementation submissions without acceptance, call pstack_delivery with action "read" and issue "${task.issue}". Print summary.state and stop.`,
+    'If any step fails, retry it once after reading the error. If it fails again, print the error and stop.',
+  ].join('\n')
+}
+
+export const ENGINE_DISPATCH_LIMIT = 2 * REPLAY_ROUND_LIMIT + 1
+
+export function replayEnginePrompt(task: ReplayTask, models: ReviewModels): string {
+  const work = `${task.brief} Meet every acceptance criterion. Run the focused tests of the package you change and bunx vp check before you report. Do not commit.`
+  const deliver = {
+    issue: task.issue,
+    maxDispatches: ENGINE_DISPATCH_LIMIT,
+    owner: { brief: work, role: 'bug-fix' },
+    review: {
+      brief: 'Run the focused tests of the package that changed.',
+      codeModel: models.code,
+      runtimeModel: models.runtime,
+    },
+  }
+  return [
+    'You are running a delivery benchmark on a real repository. Never edit files yourself, and never publish.',
+    '',
+    `1. Call pstack_delivery with action "open", issue "${task.issue}", runtimeRequired true, and these criteria:`,
+    ...task.criteria.map((criterion) => `   - id "${criterion.id}": "${criterion.description}"`),
+    `2. Call pstack_deliver once with exactly these arguments: ${JSON.stringify(deliver)}`,
+    `3. Call pstack_delivery with action "read" and issue "${task.issue}". Print summary.state and stop.`,
     'If any step fails, retry it once after reading the error. If it fails again, print the error and stop.',
   ].join('\n')
 }

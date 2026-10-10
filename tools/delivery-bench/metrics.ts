@@ -34,6 +34,7 @@ const MessageEntrySchema = Type.Object(
         toolName: Type.Optional(Type.String()),
         toolCallId: Type.Optional(Type.String()),
         isError: Type.Optional(Type.Boolean()),
+        details: Type.Optional(Type.Unknown()),
       },
       { additionalProperties: true },
     ),
@@ -45,6 +46,20 @@ const TaskBatchSchema = Type.Object(
   { arguments: Type.Object({ tasks: Type.Array(Type.Unknown()) }, { additionalProperties: true }) },
   { additionalProperties: true },
 )
+
+const EngineDetailsSchema = Type.Object(
+  {
+    steps: Type.Array(
+      Type.Object(
+        { step: Type.String(), agents: Type.Array(Type.Unknown()) },
+        { additionalProperties: true },
+      ),
+    ),
+  },
+  { additionalProperties: true },
+)
+
+const engineDispatchSteps = new Set(['implement', 'correct', 'review', 'diagnose'])
 
 const CustomEntrySchema = Type.Object(
   { type: Type.Literal('custom'), customType: Type.String(), data: Type.Unknown() },
@@ -233,11 +248,19 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
         }
       } else if (
         message.role === 'toolResult' &&
-        message.toolName === 'pstack_delivery' &&
+        (message.toolName === 'pstack_delivery' || message.toolName === 'pstack_deliver') &&
         message.isError !== true
       ) {
         const text = (message.content ?? []).map((part) => part.text ?? '').join('')
-        const checkpoint = parseJson(text)
+        const engine = message.toolName === 'pstack_deliver'
+        if (engine && Value.Check(EngineDetailsSchema, message.details)) {
+          for (const step of message.details.steps)
+            if (engineDispatchSteps.has(step.step)) metrics.taskDispatches += step.agents.length
+        }
+        const marker = '\nCheckpoint: '
+        const checkpoint = parseJson(
+          engine ? text.slice(text.lastIndexOf(marker) + marker.length) : text,
+        )
         if (!Value.Check(CheckpointSchema, checkpoint)) continue
         metrics.finalState = checkpoint.summary.state
         if (
