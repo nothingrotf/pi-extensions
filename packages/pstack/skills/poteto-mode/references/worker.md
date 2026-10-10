@@ -39,6 +39,8 @@ Run each full suite, type check, lint, build, and repository gate through `pstac
 `pstack_gate` keeps the full log, returns its tail, and owns the timeout, so call it once and wait.
 A later call for an unchanged tree returns the recorded pass without running the command.
 Use `bash` for focused checks and for commands that edit files.
+Apply formatters and fixes first, then run fast gates such as format, lint, and type checks before slow suites.
+Any edit after a pass changes the tree, so a late formatting fix repeats every slow gate.
 
 Without `pstack_gate`, write the gate output to a log and print only the tail in the same command:
 
