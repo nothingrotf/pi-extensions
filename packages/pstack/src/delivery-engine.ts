@@ -182,7 +182,7 @@ function reviewTask(input: DeliveryEngineInput, role: ReviewRole): EngineTaskFie
     runtime
       ? 'Verify the current candidate in this directory against every criterion with focused executable checks. Do not change any tracked file.'
       : 'Review the current candidate in this directory statically against every criterion. Do not change any file.',
-    'Report each defect as a blocking finding with evidence, and give a complete verdict.',
+    'Give one complete verdict. Report each defect as a finding with evidence, and apply the blocking rule of the delivery packet.',
     ...(input.review.brief === undefined ? [] : ['', input.review.brief]),
   ].join('\n')
   const node: EngineTaskFields = {
