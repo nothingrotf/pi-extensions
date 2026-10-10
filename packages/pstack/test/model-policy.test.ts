@@ -229,6 +229,16 @@ describe('pstack model policy parser', () => {
       expect(await loadPstackModelPolicy({ modelPolicyPath: path })).toEqual(
         parsePstackModelPolicy(`how explorer: ${scalar}`),
       )
+      const previous = process.env['PSTACK_MODEL_POLICY']
+      process.env['PSTACK_MODEL_POLICY'] = path
+      try {
+        expect(await loadPstackModelPolicy()).toEqual(
+          parsePstackModelPolicy(`how explorer: ${scalar}`),
+        )
+      } finally {
+        if (previous === undefined) delete process.env['PSTACK_MODEL_POLICY']
+        else process.env['PSTACK_MODEL_POLICY'] = previous
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
