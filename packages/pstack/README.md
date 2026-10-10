@@ -295,6 +295,7 @@ After the workspace exists, managed preflight changes fresh Tasks for that issue
 - An omitted `cwd` becomes the worktree. A `cwd` outside the worktree fails before dispatch.
 - Implementation owners, runtime verifiers, and publication receive `isolation: { mode: "in-place" }` when they omit isolation. They write in the worktree under an exclusive writer lease.
 - Read-only reviewers read the worktree directly, so static review and runtime verification can start together on the same tree.
+- Each fresh Task prompt gains a workspace brief with the branch, the base, and the setup result. A passed setup tells the agent to reuse the environment instead of running setup again.
 
 An in-place attempt captures its base and result trees as the artifact and counts as integrated, so `refresh` and patch joins are unnecessary.
 A runtime verifier must finish with the candidate tree unchanged. A changed tree rejects its verdict.

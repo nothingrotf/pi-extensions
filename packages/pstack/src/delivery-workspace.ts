@@ -270,6 +270,32 @@ export async function prepareIssueWorkspace(
   }
 }
 
+export function workspaceBrief(workspace: DeliveryWorkspace): string {
+  const { dependencies, included, setup } = workspace.preparation
+  const lines = [
+    `Issue workspace: ${workspace.worktree} on branch ${workspace.branch}, base ${workspace.base}.`,
+  ]
+  if (setup.status === 'passed') {
+    lines.push(
+      `Environment setup already ran once for this workspace: ${SETUP_SCRIPT} passed. Reuse that environment. Do not rerun setup or install steps from repository instructions unless a check fails because the environment is missing.`,
+    )
+  } else if (setup.status === 'failed') {
+    lines.push(
+      `Environment setup failed with exit code ${setup.exitCode ?? 'unknown'}. Its log is ${setup.log ?? 'unavailable'}. Repair the environment before you rely on checks.`,
+    )
+  } else {
+    lines.push(
+      `The repository has no ${SETUP_SCRIPT}. Prepare only the environment that your checks need, and keep it inside ignored paths.`,
+    )
+  }
+  if (included > 0 || dependencies.length > 0) {
+    lines.push(
+      `Preparation also copied ${included} file${included === 1 ? '' : 's'} from ${INCLUDE_FILE} and ${dependencies.length > 0 ? `these dependency directories: ${dependencies.join(', ')}` : 'no dependency directories'}.`,
+    )
+  }
+  return lines.join('\n')
+}
+
 export async function workspaceIsLive(workspace: DeliveryWorkspace): Promise<boolean> {
   try {
     return (await registeredWorktrees(workspace.sourceRoot)).has(await realpath(workspace.worktree))

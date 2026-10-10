@@ -43,6 +43,7 @@ import {
   isWithin,
   prepareIssueWorkspace,
   readDeliveryWorkspaces,
+  workspaceBrief,
   workspaceIsLive,
 } from './delivery-workspace.ts'
 import {
@@ -247,6 +248,7 @@ async function applyIssueWorkspace(
     readonly !== true &&
     (role === 'runtime verification' || role === 'publication' || isImplementationRole(role))
   if (writer && task.isolation === undefined) task.isolation = { mode: 'in-place' }
+  task.prompt = `${task.prompt}\n\n${workspaceBrief(workspace)}`
 }
 
 function loadIssues(ctx: Pick<ExtensionContext, 'sessionManager'>): Map<string, DeliveryIssue> {
