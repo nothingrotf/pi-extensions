@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
@@ -17,6 +18,15 @@ const execFile = promisify(execFileCallback)
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout.trim()
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 describe('issue workspaces', () => {
@@ -107,6 +117,93 @@ describe('issue workspaces', () => {
     if (log === undefined) throw new Error('The setup log is missing.')
     expect(await readFile(log, 'utf8')).toBe('broken\n')
     expect(await workspaceIsLive(workspace)).toBe(true)
+  })
+
+  it('returns when setup leaves a background service holding its output', async () => {
+    await writeFile(
+      join(source, '.pstack', 'worktree-setup.sh'),
+      'sleep 30 &\necho $! > "$PSTACK_SOURCE_ROOT/service.pid"\necho started\n',
+    )
+    await git(source, 'commit', '-q', '-am', 'background setup')
+    const started = Date.now()
+    const workspace = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'service',
+      ownerSessionId: 'owner',
+    })
+    const service = Number(await readFile(join(source, 'service.pid'), 'utf8'))
+    try {
+      expect(Date.now() - started).toBeLessThan(15_000)
+      expect(workspace.preparation.setup).toMatchObject({ exitCode: 0, status: 'passed' })
+      expect(alive(service)).toBe(true)
+    } finally {
+      if (alive(service)) process.kill(service, 'SIGKILL')
+    }
+  }, 30_000)
+
+  it('kills the whole setup process group when setup times out', async () => {
+    await writeFile(
+      join(source, '.pstack', 'worktree-setup.sh'),
+      'sleep 30 &\necho $! > "$PSTACK_SOURCE_ROOT/service.pid"\nsleep 30\n',
+    )
+    await git(source, 'commit', '-q', '-am', 'slow setup')
+    process.env['PSTACK_SETUP_TIMEOUT_SECONDS'] = '1'
+    try {
+      const workspace = await prepareIssueWorkspace({
+        cwd: source,
+        issue: 'slow',
+        ownerSessionId: 'owner',
+      })
+      expect(workspace.preparation.setup).toMatchObject({ status: 'failed', timedOut: true })
+      expect(workspaceBrief(workspace)).toContain('Environment setup timed out.')
+      const log = workspace.preparation.setup.log
+      if (log === undefined) throw new Error('The setup log is missing.')
+      expect(await readFile(log, 'utf8')).toContain('Setup timed out after 1 seconds.')
+      const service = Number(await readFile(join(source, 'service.pid'), 'utf8'))
+      await delay(200)
+      expect(alive(service)).toBe(false)
+    } finally {
+      delete process.env['PSTACK_SETUP_TIMEOUT_SECONDS']
+    }
+  }, 30_000)
+
+  it('keeps the original base when the source advances or the worktree is recreated', async () => {
+    const original = await git(source, 'rev-parse', 'HEAD')
+    const first = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'base',
+      ownerSessionId: 'owner',
+    })
+    expect(first.base).toBe(original)
+    await writeFile(join(first.worktree, 'README.md'), 'issue work\n')
+    await git(first.worktree, 'commit', '-q', '-am', 'issue work')
+    await writeFile(join(source, 'README.md'), 'main moved\n')
+    await git(source, 'commit', '-q', '-am', 'main moved')
+
+    const reused = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'base',
+      ownerSessionId: 'other session',
+    })
+    expect(reused.base).toBe(original)
+
+    await git(source, 'worktree', 'remove', '--force', first.worktree)
+    const recreated = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'base',
+      ownerSessionId: 'owner',
+    })
+    expect(recreated.base).toBe(original)
+    expect(await readFile(join(recreated.worktree, 'README.md'), 'utf8')).toBe('issue work\n')
+
+    await git(source, 'config', '--unset', 'branch.pstack/base.pstackbase')
+    const fallback = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'base',
+      ownerSessionId: 'owner',
+    })
+    expect(fallback.base).toBe(original)
+    expect(await git(source, 'config', '--get', 'branch.pstack/base.pstackbase')).toBe(original)
   })
 
   it('refuses to adopt a directory that is not a worktree of the source', async () => {

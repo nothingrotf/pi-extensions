@@ -285,8 +285,11 @@ A static reviewer runs read-only and identifies the candidate tree. When the iss
 
 - The worktree lives under `~/.pi/worktrees/<repository>-<id>/<issue>` on branch `pstack/<issue>`. Set `PSTACK_WORKTREE_ROOT` to move it.
 - The branch starts at `base`, or at the session `HEAD` when `base` is absent. An existing branch is reused.
+- The branch records its base in the Git config key `branch.<branch>.pstackbase`. A reused worktree or branch reports that base, or the merge base with the requested commit when the record is absent or stale.
 - Preparation copies ignored files listed in `.worktreeinclude`, copies `node_modules` directories with copy-on-write clones when the file system supports them, and runs `.pstack/worktree-setup.sh` once. The script receives `PSTACK_ISSUE`, `PSTACK_SOURCE_ROOT`, and `PSTACK_WORKTREE`.
-- A failed setup script returns its exit code and log path, and the worktree remains for correction.
+- The setup script writes to the log file directly, so a background service that it starts cannot block the call.
+- Setup times out after 15 minutes. Set `PSTACK_SETUP_TIMEOUT_SECONDS` to change the limit. A timeout kills the whole setup process group.
+- A failed setup script returns its exit code, its timeout state, and its log path, and the worktree remains for correction.
 - Later calls return the recorded workspace. When the worktree is gone, the call prepares it again.
 - The result carries `next`, like every checkpoint.
 
