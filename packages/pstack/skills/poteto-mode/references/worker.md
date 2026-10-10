@@ -30,7 +30,17 @@ When `read` accepts `json`, select the fields you need from a large JSON documen
 When `patch` is available, change several files in one call instead of one edit call per file.
 A `patch` result reports unbalanced delimiters and invalid JSON, so read that line before running a gate.
 
-Run each repository gate once. Write its output to a log and print only the tail in the same command:
+Run each full suite, type check, lint, build, and repository gate through `pstack_gate` when it is available:
+
+```json
+{ "command": "bun run check" }
+```
+
+`pstack_gate` keeps the full log, returns its tail, and owns the timeout, so call it once and wait.
+A later call for an unchanged tree returns the recorded pass without running the command.
+Use `bash` for focused checks and for commands that edit files.
+
+Without `pstack_gate`, write the gate output to a log and print only the tail in the same command:
 
 ```sh
 bun run check > /tmp/<issue>-check.log 2>&1; echo "EXIT=$?"; tail -40 /tmp/<issue>-check.log
@@ -45,7 +55,8 @@ Match the gate to the phase:
 - At the end of implementation, run every repository-required gate once.
 - During a correction, run the focused test that proves each finding, then one final repository-required gate.
 
-Start independent gates together in one command and collect their exit codes:
+Start independent gates as parallel `pstack_gate` calls in one turn.
+Without `pstack_gate`, start them together in one command and collect their exit codes:
 
 ```sh
 bun run check > /tmp/<issue>-check.log 2>&1 & check=$!
