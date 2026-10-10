@@ -144,7 +144,12 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
 export async function loadPstackModelPolicy(
   options: PstackModelPolicyOptions = {},
 ): Promise<CapabilityModelPolicy> {
-  const path = options.modelPolicyPath ?? join(homedir(), '.agents', 'rules', 'pstack-models.md')
+  const configured = process.env['PSTACK_MODEL_POLICY']
+  const path =
+    options.modelPolicyPath ??
+    (configured !== undefined && configured.length > 0
+      ? configured
+      : join(homedir(), '.agents', 'rules', 'pstack-models.md'))
   try {
     return parsePstackModelPolicy(await readFile(path, 'utf8'))
   } catch (error) {

@@ -143,7 +143,7 @@ Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, 
 The runner preserves this label beside the model without inferring it from the model name.
 With a pstack capability profile, the role enforces the configured model choices. It never grants capabilities.
 
-The extension reads `~/.agents/rules/pstack-models.md` at startup, before each root prompt, and before root `Task` calls. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. Policy edits do not require reload. Pi does not interpret `alwaysApply`; the extension applies this policy directly without asking the model to read the file.
+The extension reads `~/.agents/rules/pstack-models.md` at startup, before each root prompt, and before root `Task` calls. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. Policy edits do not require reload. Pi does not interpret `alwaysApply`; the extension applies this policy directly without asking the model to read the file. Set `PSTACK_MODEL_POLICY` to a file path to read another policy, for example in a benchmark arm.
 
 Configured selectors are mandatory, including effort and fast mode. An explicit `Task.model` outside the configured choices fails before execution.
 Selectors for the `openai` and `openai-codex` providers match each other for the same model, effort, and fast mode. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
