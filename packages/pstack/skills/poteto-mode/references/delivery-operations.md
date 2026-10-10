@@ -88,6 +88,7 @@ After a schema error, correct arguments from the actual descriptor before retryi
 Keep partial work as WIP, not as an accepted artifact or verification candidate.
 Record completed criteria, failing criteria, evidence changes, and the exact reason for each early return.
 Two consecutive incomplete returns without meaningful acceptance progress require diagnosis before another equivalent dispatch.
+Three reviewed candidates rejected since the last diagnosis also require diagnosis. The checkpoint reports `rejectedReviewRounds` and `diagnosisCause`.
 A recurring contract defect or a structural regression also requires diagnosis before the next correction.
 
 Classify the cause as implementation, environment, execution contract, context, or external decision.

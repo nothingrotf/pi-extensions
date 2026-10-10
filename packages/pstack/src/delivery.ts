@@ -428,7 +428,22 @@ export interface DeliverySummary {
   unresolvedCriteria: readonly string[]
   unresolvedFindings: readonly string[]
   incompleteReturns: number
+  rejectedReviewRounds: number
   diagnosisRequired: boolean
+  diagnosisCause: 'incomplete returns' | 'rejected review rounds' | undefined
+}
+
+export const REJECTED_REVIEW_ROUND_LIMIT = 3
+
+function rejectsCandidate(submission: DeliverySubmission): boolean {
+  const report = currentDeliveryReport(submission)
+  return (
+    technical(submission) &&
+    submission.execution === 'completed' &&
+    submission.artifact !== undefined &&
+    (report.criteria.some((criterion) => criterion.result === 'fail') ||
+      report.findings.some((finding) => finding.blocking && finding.disposition === 'open'))
+  )
 }
 
 export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
@@ -494,12 +509,23 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
     .map((criterion) => criterion.id)
   let incompleteReturns = 0
   let previousArtifact: DeliveryArtifact | undefined
+  let rejectedArtifacts: DeliveryArtifact[] = []
   const passed = new Set<string>()
   for (const submission of issue.submissions) {
     const report = currentDeliveryReport(submission)
     if (report.kind === 'diagnosis') {
       incompleteReturns = 0
+      rejectedArtifacts = []
       continue
+    }
+    const rejectedArtifact = submission.artifact
+    if (
+      rejectedArtifact !== undefined &&
+      rejectsCandidate(submission) &&
+      !authors.has(submission.agentId) &&
+      !rejectedArtifacts.some((artifact) => sameDeliveryArtifact(artifact, rejectedArtifact))
+    ) {
+      rejectedArtifacts.push(rejectedArtifact)
     }
     if (report.kind !== 'implementation' || !isImplementationRole(submission.role)) continue
     const current = report.criteria
@@ -550,6 +576,13 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
         runtimeProof(entry),
     )
   const accepted = candidateReady && reviewReady && runtimeReady && unresolvedFindings.length === 0
+  const rejectedReviewRounds = rejectedArtifacts.length
+  const diagnosisCause =
+    incompleteReturns >= 2
+      ? 'incomplete returns'
+      : !accepted && rejectedReviewRounds >= REJECTED_REVIEW_ROUND_LIMIT
+        ? 'rejected review rounds'
+        : undefined
   return {
     state: accepted
       ? 'accepted'
@@ -565,7 +598,9 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
     unresolvedCriteria,
     unresolvedFindings,
     incompleteReturns,
-    diagnosisRequired: incompleteReturns >= 2,
+    rejectedReviewRounds,
+    diagnosisRequired: diagnosisCause !== undefined,
+    diagnosisCause,
   }
 }
 

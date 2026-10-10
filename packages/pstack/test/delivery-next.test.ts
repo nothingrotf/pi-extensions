@@ -178,6 +178,35 @@ describe('next delivery step', () => {
     expect(nextDeliveryStep(accepted, idle)).toMatchObject({ step: 'publish' })
   })
 
+  it('requires a diagnosis after three rejected review rounds', () => {
+    const rounds = ['b', 'e', 'f'].map((letter, index) => [
+      candidate(letter.repeat(40), index + 1),
+      { ...review('runtime verification', letter.repeat(40), 'blocked'), attempt: index + 1 },
+    ])
+    const twice = save(opened, ...rounds.slice(0, 2).flat())
+    expect(nextDeliveryStep(twice, idle)).toMatchObject({ step: 'correct', resume: 'owner' })
+    const thrice = save(twice, ...(rounds[2] ?? []))
+    const step = nextDeliveryStep(thrice, idle)
+    expect(step).toMatchObject({ step: 'diagnose', role: 'hardest tasks' })
+    expect(step.instruction).toContain('rejected 3 candidates')
+    const unrelated = save(
+      twice,
+      candidate('f'.repeat(40), 3),
+      { ...review('code review', 'f'.repeat(40), 'accepted'), attempt: 3 },
+      {
+        ...review('runtime verification', 'f'.repeat(40), 'accepted'),
+        attempt: 3,
+        report: {
+          ...review('runtime verification', 'f'.repeat(40), 'accepted').report,
+          findings: [
+            { id: 'bug', blocking: true, disposition: 'corrected', evidence: ['command:1'] },
+          ],
+        },
+      },
+    )
+    expect(nextDeliveryStep(unrelated, idle)).toMatchObject({ step: 'publish' })
+  })
+
   it('requires a diagnosis after two incomplete returns', () => {
     const wip = (attempt: number): DeliverySubmission => {
       const { artifact: _artifact, ...base } = candidate('b'.repeat(40), attempt)

@@ -115,6 +115,11 @@ Return only the required JSON object, without Markdown or surrounding text.
 Copy the registered criterion IDs exactly, including previously passing criteria.
 Keep review findings in `findings`, not `criteria`.
 Preserve complete finding IDs across corrections and reviews.
+A finding blocks only for a failed or unproven criterion, wrong behavior on a reachable path, a security or data-loss risk, a broken required gate, or a violated explicit requirement.
+Report style, naming, documentation prose, and speculative cases outside the criteria as non-blocking follow-ups.
+The reviewer packet lists every prior finding with its severity and disposition.
+Reopen a corrected or rejected finding only with new evidence from the current candidate, and keep its original ID.
+After three rejected candidates since the last diagnosis, the ledger requires a diagnosis before the next correction.
 Use recorded receipt IDs in evidence arrays, not prose, severities, or file paths.
 Put explanations and file-line references in `reason`.
 Keep `reason` at or below 4096 characters and always set `failureClass`.

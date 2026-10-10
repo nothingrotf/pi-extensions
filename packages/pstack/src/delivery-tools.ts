@@ -1173,6 +1173,7 @@ function packetText(issue: DeliveryIssue, history: PacketHistory): string {
     `Registered finding IDs: ${[...findingIds].join(', ') || 'none'}.`,
     `Prior findings with severity and disposition: ${JSON.stringify(history.findings)}`,
     'Reuse complete finding IDs. Do not abbreviate or renumber them. Put dispositions in findings and explanations in reason.',
+    'A finding blocks only for a failed or unproven criterion, wrong behavior on a reachable path, a security or data-loss risk, a broken required gate, or a violated explicit requirement. Report style, naming, documentation prose, and speculative cases outside the criteria as non-blocking. Reopen a corrected or rejected prior finding only with new evidence from this candidate, under its original ID.',
     `Open blocking findings: ${summary.unresolvedFindings.join(', ') || 'none'}.`,
     `Implementation owner: ${owner?.agentId ?? 'none'}. Last reporter: ${latest?.agentId ?? 'none'}. Last reason: ${latest === undefined ? 'none' : currentDeliveryReport(latest).reason || 'none'}.`,
     `Exact candidate identity: ${JSON.stringify(summary.artifact ?? null)}`,
@@ -1662,7 +1663,9 @@ async function preflight(
   }
   if (summary.diagnosisRequired && isImplementationRole(role)) {
     throw new DeliveryRejected(
-      'Two incomplete returns without proven progress require a recorded diagnosis before equivalent redispatch.',
+      summary.diagnosisCause === 'rejected review rounds'
+        ? `${summary.rejectedReviewRounds} reviewed candidates were rejected since the last diagnosis. Record a diagnosis before another correction.`
+        : 'Two incomplete returns without proven progress require a recorded diagnosis before equivalent redispatch.',
     )
   }
   if (task.outputSchema !== undefined && !isDeliveryOutputSchema(task.outputSchema)) {

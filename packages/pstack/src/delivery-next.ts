@@ -88,7 +88,9 @@ export function nextDeliveryStep(
       step: 'diagnose',
       role: 'hardest tasks',
       instruction:
-        'Dispatch one read-only hardest tasks diagnosis with the artifact, open findings, failed correction, and reproduction. Give its cause to the next owner.',
+        summary.diagnosisCause === 'rejected review rounds'
+          ? `Reviewers rejected ${summary.rejectedReviewRounds} candidates since the last diagnosis. Dispatch one read-only hardest tasks diagnosis with the artifact, every rejection, the open findings, and the reproduction. Ask why corrections keep failing review, and give its cause to the next owner.`
+          : 'Dispatch one read-only hardest tasks diagnosis with the artifact, open findings, failed correction, and reproduction. Give its cause to the next owner.',
     }
   }
   const candidate = issue.submissions.findLast(isImplementation)
