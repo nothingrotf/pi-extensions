@@ -132,8 +132,10 @@ function execute(
     const clearTimers = () => {
       for (const timer of timers) clearTimeout(timer)
     }
+    let terminating = false
     timers.push(
       setTimeout(() => {
+        terminating = true
         signalGroup(child.pid, 'SIGTERM')
         timers.push(
           setTimeout(() => {
@@ -154,6 +156,7 @@ function execute(
     })
     child.on('close', (code) => {
       clearTimers()
+      if (terminating) signalGroup(child.pid, 'SIGKILL')
       log?.end()
       done({ code: code ?? 1, output: Buffer.concat(chunks).toString('utf8') })
     })
