@@ -138,13 +138,19 @@ export function nextDeliveryStep(
       }
     }
   }
-  const resume = context.workspace && candidate.execution === 'completed' ? candidate.agentId : null
+  const diagnosed = issue.submissions
+    .slice(issue.submissions.indexOf(candidate) + 1)
+    .some((submission) => currentDeliveryReport(submission).kind === 'diagnosis')
+  const resume =
+    context.workspace && candidate.execution === 'completed' && !diagnosed
+      ? candidate.agentId
+      : null
   return {
     step: 'correct',
     resume,
     instruction:
       resume === null
-        ? 'Dispatch a fresh implementation owner with the consolidated scope, the open findings, and the unresolved criteria.'
+        ? `Dispatch a fresh implementation owner with the consolidated scope, the open findings, and the unresolved criteria${diagnosed ? ', and the recorded diagnosis' : ''}.`
         : 'Resume the recorded owner with the verdict, the open findings, the unresolved criteria, and every new directive.',
   }
 }
