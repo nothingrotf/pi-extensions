@@ -6,7 +6,12 @@ import { promisify } from 'node:util'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 
-import { issueSlug, prepareIssueWorkspace, workspaceIsLive } from '../src/delivery-workspace.ts'
+import {
+  issueSlug,
+  prepareIssueWorkspace,
+  workspaceBrief,
+  workspaceIsLive,
+} from '../src/delivery-workspace.ts'
 
 const execFile = promisify(execFileCallback)
 
@@ -70,6 +75,12 @@ describe('issue workspaces', () => {
       'export {}\n',
     )
     expect(await workspaceIsLive(first)).toBe(true)
+    const brief = workspaceBrief(first)
+    expect(brief).toContain('Environment setup already ran once for this workspace')
+    expect(brief).toContain('Do not rerun setup or install steps')
+    expect(brief).toContain(
+      'copied 1 file from .worktreeinclude and these dependency directories: node_modules',
+    )
 
     await writeFile(join(first.worktree, 'README.md'), 'changed\n')
     const second = await prepareIssueWorkspace({
@@ -91,6 +102,7 @@ describe('issue workspaces', () => {
       ownerSessionId: 'owner',
     })
     expect(workspace.preparation.setup).toMatchObject({ exitCode: 3, status: 'failed' })
+    expect(workspaceBrief(workspace)).toContain('Environment setup failed with exit code 3.')
     const log = workspace.preparation.setup.log
     if (log === undefined) throw new Error('The setup log is missing.')
     expect(await readFile(log, 'utf8')).toBe('broken\n')

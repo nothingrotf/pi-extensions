@@ -2718,6 +2718,12 @@ describe('pstack delivery tool interception', () => {
         cwd: workspace.worktree,
         isolation: { mode: 'in-place' },
       })
+      expect(harness.observed[0].prompt).toContain(
+        `Issue workspace: ${workspace.worktree} on branch pstack/issue-one`,
+      )
+      expect(harness.observed[0].prompt).toContain(
+        'The repository has no .pstack/worktree-setup.sh.',
+      )
       expect(result('outside-workspace').isError).toBe(true)
       expect(result('outside-workspace').content[0].text).toContain(
         `runs in its workspace ${workspace.worktree}`,
