@@ -8,7 +8,7 @@ import {
   replayEnginePrompt,
   replayPrompt,
 } from './prompts.ts'
-import { ownerPolicy, replayTasks } from './replays.ts'
+import { ownerPolicy, replayTasks, reviewerPolicy } from './replays.ts'
 
 function jsonl(...entries: readonly object[]): string {
   return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`
@@ -301,5 +301,10 @@ describe('delivery benchmark metrics', () => {
         `${role}: anthropic/c:medium`,
       ])
     }
+    const reviewed = reviewerPolicy(swapped, 'anthropic/c:high')
+    expect(reviewed.split('\n').filter((line) => line.startsWith('code review:'))).toEqual([
+      'code review: anthropic/c:high',
+    ])
+    expect(reviewed).toContain('bug-fix: anthropic/c:medium')
   })
 })

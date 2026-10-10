@@ -90,10 +90,18 @@ const ownerRoles: readonly string[] = [
   'hillclimb',
 ]
 
-export function ownerPolicy(policy: string, selector: string): string {
+function rolesPolicy(policy: string, roles: readonly string[], selector: string): string {
   const lines = policy
     .split('\n')
-    .filter((line) => !ownerRoles.includes(line.split(':')[0]?.trim() ?? ''))
+    .filter((line) => !roles.includes(line.split(':')[0]?.trim() ?? ''))
   while (lines.at(-1)?.trim() === '') lines.pop()
-  return `${[...lines, ...ownerRoles.map((role) => `${role}: ${selector}`)].join('\n')}\n`
+  return `${[...lines, ...roles.map((role) => `${role}: ${selector}`)].join('\n')}\n`
+}
+
+export function ownerPolicy(policy: string, selector: string): string {
+  return rolesPolicy(policy, ownerRoles, selector)
+}
+
+export function reviewerPolicy(policy: string, selector: string): string {
+  return rolesPolicy(policy, ['code review'], selector)
 }

@@ -65,6 +65,7 @@ After the run, the fix commit's test files replace the candidate's versions, and
 `--owner name=selector` adds an implementation owner variant, and the option can repeat.
 Each variant copies your model policy, sets the owner roles to the selector, and points `PSTACK_MODEL_POLICY` at the copy.
 The coordinator and both reviewers keep the same models in every variant.
+`--reviewer name=selector` adds a code review variant the same way. Each variant sets the `code review` role and the static reviewer model to the selector.
 
 ```sh
 bun run bench:delivery --task diagnosis-owner --runs 2 --owner sol="openai-codex/gpt-6.1-sol:high [fast]" --owner opus=anthropic/claude-opus-5-5:medium
@@ -78,6 +79,10 @@ The copy links your other agent files, including logins, and the benchmark remov
 ```sh
 bun run bench:delivery --task workspace-setup --runs 3 --revision base=main --revision candidate=HEAD
 ```
+
+Replay tasks accept `--arms workspace,engine`. The `workspace` arm has the coordinator follow each `next` field by hand.
+The `engine` arm has the coordinator call `pstack_deliver` once with the same brief, criteria, and review models.
+The engine stops after nine dispatches, which covers four owner rounds, their reviews, and one diagnosis.
 
 The output directory keeps each run's repository, sessions, prompt, `pi.log`, and `metrics.json`.
 `report.md` lists every run and the median of each arm, with execution time split by owner, static review, and runtime verification.
