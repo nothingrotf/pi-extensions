@@ -1,7 +1,17 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { appendFile, copyFile, mkdir, open, realpath, stat } from 'node:fs/promises'
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
@@ -9,6 +19,8 @@ import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import { materializeDependencyDirectories } from '@nothingrotf/subagent'
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
+
+import { SETUP_MARKER, type SetupMarker, setupCommands } from './delivery-setup-guard.ts'
 
 export const deliveryWorkspaceEntryType = '@nothingrotf/pstack/delivery-workspace-v1'
 
@@ -196,6 +208,23 @@ async function runSetup(
   if (!(await exists(script))) return { status: 'absent' }
   const gitDir = (await git(worktree, ['rev-parse', '--path-format=absolute', '--git-dir'])).trim()
   const log = join(gitDir, 'pstack-setup.log')
+  const marker = join(gitDir, SETUP_MARKER)
+  await rm(marker, { force: true })
+  const commands = setupCommands(await readFile(script, 'utf8'))
+  const finish = async (
+    result: DeliveryWorkspace['preparation']['setup'],
+  ): Promise<DeliveryWorkspace['preparation']['setup']> => {
+    const record: SetupMarker = {
+      version: 1,
+      status: result.status === 'passed' ? 'passed' : 'failed',
+      script: SETUP_SCRIPT,
+      commands,
+      log,
+      finishedAt: Date.now(),
+    }
+    await writeFile(marker, `${JSON.stringify(record)}\n`)
+    return result
+  }
   const timeoutMs = setupTimeoutMs()
   const output = await open(log, 'w')
   let timedOut = false
@@ -231,9 +260,9 @@ async function runSetup(
   }
   if (timedOut) {
     await appendFile(log, `\nSetup timed out after ${timeoutMs / 1000} seconds.\n`)
-    return { exitCode: code, log, status: 'failed', timedOut: true }
+    return finish({ exitCode: code, log, status: 'failed', timedOut: true })
   }
-  return { exitCode: code, log, status: code === 0 ? 'passed' : 'failed' }
+  return finish({ exitCode: code, log, status: code === 0 ? 'passed' : 'failed' })
 }
 
 async function commitOf(cwd: string, revision: string): Promise<string> {

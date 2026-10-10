@@ -290,6 +290,7 @@ A static reviewer runs read-only and identifies the candidate tree. When the iss
 - The setup script writes to the log file directly, so a background service that it starts cannot block the call.
 - Setup times out after 15 minutes. Set `PSTACK_SETUP_TIMEOUT_SECONDS` to change the limit. A timeout kills the whole setup process group.
 - A failed setup script returns its exit code, its timeout state, and its log path, and the worktree remains for correction.
+- After setup passes, writer Tasks in the workspace cannot rerun the setup script or one of its command lines. The block names the log. Prefix `PSTACK_SETUP_RERUN=1` when a changed dependency or a missing environment requires a rerun.
 - Later calls return the recorded workspace. When the worktree is gone, the call prepares it again.
 - The result carries `next`, like every checkpoint.
 

@@ -8,6 +8,12 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test'
 
 import {
+  type SetupMarker,
+  setupCommands,
+  setupGuardVerdict,
+  setupRerun,
+} from '../src/delivery-setup-guard.ts'
+import {
   issueSlug,
   prepareIssueWorkspace,
   workspaceBrief,
@@ -101,6 +107,63 @@ describe('issue workspaces', () => {
     expect(second.worktree).toBe(first.worktree)
     expect(await readFile(join(second.worktree, 'README.md'), 'utf8')).toBe('changed\n')
     expect(await readFile(join(source, 'setup-runs'), 'utf8')).toBe('SPT-12\nSPT-12\n')
+  })
+
+  it('blocks a repeated setup command inside a prepared workspace', async () => {
+    await writeFile(
+      join(source, '.pstack', 'worktree-setup.sh'),
+      '#!/usr/bin/env bash\nset -euo pipefail\ncd "$PSTACK_WORKTREE"\nbun run setup\ndocker compose up -d db\n',
+    )
+    await git(source, 'commit', '-q', '-am', 'real setup')
+    const workspace = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'guarded',
+      ownerSessionId: 'owner',
+    })
+    expect(workspace.preparation.setup.status).toBe('failed')
+    expect(await setupGuardVerdict(workspace.worktree, 'bun run setup && bun test')).toBeUndefined()
+
+    await writeFile(join(source, '.pstack', 'worktree-setup.sh'), 'echo ready\nbun --version\n')
+    await git(source, 'commit', '-q', '-am', 'passing setup')
+    const passing = await prepareIssueWorkspace({
+      cwd: source,
+      issue: 'guarded-pass',
+      ownerSessionId: 'owner',
+    })
+    expect(passing.preparation.setup.status).toBe('passed')
+    const nested = join(passing.worktree, 'src')
+    await mkdir(nested, { recursive: true })
+    const blocked = await setupGuardVerdict(nested, 'cd .. && bun --version && bun test')
+    expect(blocked?.reason).toContain('`bun --version` repeats that setup')
+    expect(blocked?.reason).toContain('PSTACK_SETUP_RERUN=1')
+    expect(
+      await setupGuardVerdict(passing.worktree, 'bash .pstack/worktree-setup.sh'),
+    ).toMatchObject({ block: true })
+    expect(
+      await setupGuardVerdict(passing.worktree, 'PSTACK_SETUP_RERUN=1 bun --version'),
+    ).toBeUndefined()
+    expect(await setupGuardVerdict(passing.worktree, 'bun test')).toBeUndefined()
+    expect(await setupGuardVerdict(source, 'bun --version')).toBeUndefined()
+  })
+
+  it('matches setup commands only at command boundaries', () => {
+    const commands = setupCommands(
+      '#!/usr/bin/env bash\nset -e\nexport DB=1\nif [ -n "$X" ]; then\n  bun i\nfi\nbun run db:migrate \\\n  --seed\n',
+    )
+    expect(commands).toEqual(['bun i', 'bun run db:migrate --seed'])
+    const marker: SetupMarker = {
+      version: 1,
+      status: 'passed',
+      script: '.pstack/worktree-setup.sh',
+      commands,
+      log: '/tmp/log',
+      finishedAt: 0,
+    }
+    expect(setupRerun('bun install', marker)).toBeUndefined()
+    expect(setupRerun('bun i && bun test', marker)).toBe('bun i')
+    expect(setupRerun('FOO=1 bun run db:migrate --seed', marker)).toBe('bun run db:migrate --seed')
+    expect(setupRerun('bun test --seed', marker)).toBeUndefined()
+    expect(setupRerun('./.pstack/worktree-setup.sh', marker)).toBe('.pstack/worktree-setup.sh')
   })
 
   it('reports a failed setup script without discarding the worktree', async () => {

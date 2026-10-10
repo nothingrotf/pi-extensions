@@ -6,6 +6,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { loadPstackBootstrap } from './bootstrap.ts'
+import { setupGuardExtension } from './delivery-setup-guard.ts'
 import { registerDeliveryProtocol, validateDeliveryTerminal } from './delivery-tools.ts'
 import {
   loadPstackModelPolicy,
@@ -89,7 +90,7 @@ export default async function pstack(
       registrations: [
         {
           createTools: createSessionTodoTools,
-          extensions: [],
+          extensions: [setupGuardExtension],
           id: 'pstack-planning',
           modelPolicy,
           readonlyTools: ['todo_write', 'todo_read'],
@@ -99,7 +100,7 @@ export default async function pstack(
           systemPrompt: `${bootstrap.systemPrompt}\n\n${policyPrompt}`,
           terminalValidation: { maxCorrections: 2, validate: validateDeliveryTerminal },
           tools: createSessionTodoTools(),
-          version: '2',
+          version: '3',
         },
       ],
       sourceId,
