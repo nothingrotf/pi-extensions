@@ -352,6 +352,19 @@ This report reads a session file path directly and stays outside the project sco
 reviews compare sessions across repositories. Use `session_history` instead for model-facing,
 project-scoped retrieval with stable references, redaction, and pagination.
 
+### Gates
+
+Mutable pstack Tasks receive `pstack_gate` through the `pstack-gates` registration. The [gate ADR](../../docs/adr/0002-tree-keyed-gates.md) records the design.
+
+- The tool runs a deterministic check, such as a full suite, type check, lint, or build, with `bash -c` in the session directory.
+- It keys each result by the tree of every repository in the workspace, the repository root, the working directory, and the exact command.
+- A pass for an unchanged key returns at once without running the command. `fresh: true` forces a run. Failures and timeouts are never reused.
+- A run that changes the tree is reported but not reused.
+- Concurrent calls for one key share one run. Set `PSTACK_GATE_CONCURRENCY` to change the number of gates that run at once. The default is a quarter of the CPU count, with a minimum of one.
+- A gate stops after 30 minutes. Set `PSTACK_GATE_TIMEOUT_SECONDS` to change the limit. A timeout or an abort kills the whole process group.
+- Records and logs live in `<git common dir>/pstack/gates`. The tool keeps the newest 256 records and 512 logs.
+- Each call is a tool receipt, and the delivery ledger counts it as command evidence.
+
 ### Tool definition cost
 
 Every registered tool definition is serialized into each model request, so a verbose description is
