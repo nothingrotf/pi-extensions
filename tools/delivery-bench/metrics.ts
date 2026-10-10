@@ -1,6 +1,7 @@
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { isImplementationRole } from '../../packages/pstack/src/delivery-roles.ts'
 import { sessionMetrics } from '../../packages/pstack/src/session-metrics.ts'
 
 const HeaderSchema = Type.Object(
@@ -50,6 +51,7 @@ const SubagentStateSchema = Type.Object(
       Type.Object(
         {
           agentId: Type.String(),
+          role: Type.Optional(Type.String()),
           runGeneration: Type.Optional(Type.Number()),
           timing: Type.Optional(
             Type.Object(
@@ -93,8 +95,12 @@ export interface SessionRunMetrics {
   finalState: string | undefined
   inputTokens: number
   outputTokens: number
+  ownerAttempts: number
+  ownerExecutionMs: number
   preparationMs: number
+  reviewExecutionMs: number
   rootSession: string | undefined
+  runtimeExecutionMs: number
   taskDispatches: number
   workspaceSetupMs: number
   worktree: string | undefined
@@ -104,6 +110,7 @@ interface AttemptTiming {
   executionEndedAt: number | undefined
   executionStartedAt: number
   requestedAt: number
+  role: string | undefined
   workspaceSetupMs: number
 }
 
@@ -144,8 +151,12 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
     finalState: undefined,
     inputTokens: 0,
     outputTokens: 0,
+    ownerAttempts: 0,
+    ownerExecutionMs: 0,
     preparationMs: 0,
+    reviewExecutionMs: 0,
     rootSession: root?.path,
+    runtimeExecutionMs: 0,
     taskDispatches: 0,
     workspaceSetupMs: 0,
     worktree: undefined,
@@ -210,6 +221,7 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
                   executionEndedAt: timing.executionEndedAt,
                   executionStartedAt: timing.executionStartedAt,
                   requestedAt: timing.requestedAt,
+                  role: record.role,
                   workspaceSetupMs: timing.workspaceSetupMs,
                 },
           )
@@ -222,8 +234,14 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
     if (timing === undefined) continue
     metrics.preparationMs += timing.executionStartedAt - timing.requestedAt
     metrics.workspaceSetupMs += timing.workspaceSetupMs
-    if (timing.executionEndedAt !== undefined)
-      metrics.agentExecutionMs += timing.executionEndedAt - timing.executionStartedAt
+    const owner = timing.role !== undefined && isImplementationRole(timing.role)
+    if (owner) metrics.ownerAttempts += 1
+    if (timing.executionEndedAt === undefined) continue
+    const executionMs = timing.executionEndedAt - timing.executionStartedAt
+    metrics.agentExecutionMs += executionMs
+    if (owner) metrics.ownerExecutionMs += executionMs
+    else if (timing.role === 'code review') metrics.reviewExecutionMs += executionMs
+    else if (timing.role === 'runtime verification') metrics.runtimeExecutionMs += executionMs
   }
   return metrics
 }
@@ -275,6 +293,10 @@ const columns: readonly Column[] = [
   { label: 'Setup runs', value: (result) => result.setupRuns, format: count },
   { label: 'Attempts', value: (result) => result.attempts, format: count },
   { label: 'Agent exec s', value: (result) => result.agentExecutionMs, format: seconds },
+  { label: 'Owner attempts', value: (result) => result.ownerAttempts, format: count },
+  { label: 'Owner s', value: (result) => result.ownerExecutionMs, format: seconds },
+  { label: 'Review s', value: (result) => result.reviewExecutionMs, format: seconds },
+  { label: 'Runtime s', value: (result) => result.runtimeExecutionMs, format: seconds },
   { label: 'Prep s', value: (result) => result.preparationMs, format: seconds },
   { label: 'Coordinator turns', value: (result) => result.coordinatorTurns, format: count },
   {

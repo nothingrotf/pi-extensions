@@ -1,4 +1,5 @@
 import { criteria } from './fixture.ts'
+import type { ReplayTask } from './replays.ts'
 
 export type Arm = 'baseline' | 'workspace'
 
@@ -70,6 +71,32 @@ function workspacePrompt(models: ReviewModels): string {
     reviewNodes(models, ''),
     '   - record: call pstack_delivery with action "record" for each named agent.',
     `3. When next.step is "publish", call pstack_delivery with action "read" and issue "${issue}". Print summary.state.`,
+    'If any step fails, retry it once after reading the error. If it fails again, print the error and stop.',
+  ].join('\n')
+}
+
+export const REPLAY_ROUND_LIMIT = 4
+
+export function replayPrompt(task: ReplayTask, models: ReviewModels): string {
+  const managedReplay = `delivery {"kind":"managed","issue":"${task.issue}"}`
+  const replayOwner = `subagent_type "generalPurpose", role "bug-fix", capability_profile "pstack-leaf", ${managedReplay}, run_in_background false, description "Fix ${task.id}"`
+  const work = `${task.brief} Meet every acceptance criterion. Run the focused tests of the package you change and bunx vp check before you report. Do not commit.`
+  return [
+    'You are running a delivery benchmark on a real repository. Never edit files yourself, and never publish.',
+    '',
+    `1. Call pstack_delivery with action "open", issue "${task.issue}", runtimeRequired true, and these criteria:`,
+    ...task.criteria.map((criterion) => `   - id "${criterion.id}": "${criterion.description}"`),
+    '2. Follow the next field of each checkpoint until next.step is "publish". Use these settings:',
+    `   - workspace: call pstack_delivery with action "workspace" and issue "${task.issue}".`,
+    `   - implement: dispatch one Task with ${replayOwner}, and prompt "${work}" Omit cwd and isolation.`,
+    `   - correct: when next.resume is an agent ID, resume it with subagent_type "generalPurpose", run_in_background false, description "Fix ${task.id}", and a prompt that lists the open findings and unresolved criteria from the checkpoint. When next.resume is null, dispatch a fresh Task with the implement settings, and add the open findings, the unresolved criteria, and any recorded diagnosis to its prompt.`,
+    `   - diagnose: dispatch one Task with subagent_type "generalPurpose", role "hardest tasks", capability_profile "pstack-leaf", readonly true, ${managedReplay}, run_in_background false, description "Diagnose ${task.id}", and a prompt that asks why the corrections keep failing.`,
+    '   - review: dispatch one Task call with a tasks array of the named roles, without run_in_background. Omit cwd and isolation:',
+    `     - id "static", description "Static review", role "code review", subagent_type "generalPurpose", capability_profile "pstack-leaf", readonly true, model "${models.code}", ${managedReplay}, prompt "Review the change in the current directory statically against the criteria."`,
+    `     - id "runtime", description "Runtime verification", role "runtime verification", subagent_type "generalPurpose", capability_profile "pstack-leaf", readonly false, model "${models.runtime}", ${managedReplay}, prompt "Verify the change in the current directory against the criteria with focused tests. Do not change any tracked file."`,
+    '   - record: call pstack_delivery with action "record" for each named agent.',
+    '   - wait: call TaskControl with action "wait" for the named agents.',
+    `3. When next.step is "publish", or after ${REPLAY_ROUND_LIMIT} implementation submissions without acceptance, call pstack_delivery with action "read" and issue "${task.issue}". Print summary.state and stop.`,
     'If any step fails, retry it once after reading the error. If it fails again, print the error and stop.',
   ].join('\n')
 }

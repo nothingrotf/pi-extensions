@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vite-plus/test'
 
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
-import { benchmarkPrompt } from './prompts.ts'
+import { benchmarkPrompt, REPLAY_ROUND_LIMIT, replayPrompt } from './prompts.ts'
+import { ownerPolicy, replayTasks } from './replays.ts'
 
 function jsonl(...entries: readonly object[]): string {
   return `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`
@@ -78,6 +79,7 @@ const root = jsonl(
       records: [
         {
           agentId: 'owner',
+          role: 'bug-fix',
           runGeneration: 1,
           timing: {
             requestedAt: 1000,
@@ -86,7 +88,18 @@ const root = jsonl(
             workspaceSetupMs: 400,
           },
         },
-        { agentId: 'static', runGeneration: 2 },
+        { agentId: 'static', role: 'code review', runGeneration: 2 },
+        {
+          agentId: 'runtime',
+          role: 'runtime verification',
+          runGeneration: 1,
+          timing: {
+            requestedAt: 12_000,
+            executionStartedAt: 12_000,
+            executionEndedAt: 20_000,
+            workspaceSetupMs: 0,
+          },
+        },
       ],
     },
   },
@@ -122,8 +135,12 @@ describe('delivery benchmark metrics', () => {
       ]),
     ).toMatchObject({
       acceptedAfterMs: 90_000,
-      agentExecutionMs: 10_000,
-      attempts: 2,
+      agentExecutionMs: 18_000,
+      attempts: 3,
+      ownerAttempts: 1,
+      ownerExecutionMs: 10_000,
+      reviewExecutionMs: 0,
+      runtimeExecutionMs: 8000,
       childSessions: 1,
       coordinatorTurns: 2,
       finalState: 'accepted',
@@ -161,5 +178,38 @@ describe('delivery benchmark metrics', () => {
     expect(baseline).toContain('Dispatch a new Task, not a resume')
     expect(workspace).toContain('resume next.resume')
     expect(workspace).not.toContain('"integration":"manual"')
+  })
+
+  it('replays each real task with every criterion and the same review models', () => {
+    const models = { code: 'review/model:high', runtime: 'verify/model:low' }
+    for (const task of replayTasks) {
+      const prompt = replayPrompt(task, models)
+      for (const criterion of task.criteria) expect(prompt).toContain(`id "${criterion.id}"`)
+      expect(prompt).toContain(`issue "${task.issue}"`)
+      expect(prompt).toContain('role "bug-fix"')
+      expect(prompt).toContain('model "review/model:high"')
+      expect(prompt).toContain(`after ${REPLAY_ROUND_LIMIT} implementation submissions`)
+      expect(task.acceptance.join(' ')).toContain(task.hiddenTests[0] ?? 'missing')
+    }
+  })
+
+  it('swaps only the implementation owner roles in a policy copy', () => {
+    const policy = [
+      '---',
+      'description: models',
+      '---',
+      'feature: openai/a:medium [fast]',
+      'bug-fix: openai/a:high [fast]',
+      'code review: openai/b:xhigh, anthropic/c:xhigh',
+      '',
+    ].join('\n')
+    const swapped = ownerPolicy(policy, 'anthropic/c:medium')
+    expect(swapped).toContain('code review: openai/b:xhigh, anthropic/c:xhigh')
+    expect(swapped).toContain('description: models')
+    for (const role of ['feature', 'refactoring', 'bug-fix', 'perf-issue', 'hillclimb']) {
+      expect(swapped.split('\n').filter((line) => line.startsWith(`${role}:`))).toEqual([
+        `${role}: anthropic/c:medium`,
+      ])
+    }
   })
 })
