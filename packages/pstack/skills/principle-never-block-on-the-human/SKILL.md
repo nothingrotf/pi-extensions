@@ -17,6 +17,6 @@ The human supervises asynchronously. Agents must stay unblocked. Make reasonable
 - **Supervision is async.** Design workflows for review-after-the-fact.
 
 **Boundaries:**
-- **Irreversible actions** (force-push, delete production data, send external messages) still require confirmation.
+- **Irreversible actions** (force-push, delete production data, send external messages) still require confirmation. Ask asynchronously when the tool allows it, block only the work that depends on the answer, and continue the rest.
 - **Reversible actions** (write code, edit notes, split tasks) should proceed without blocking.
 - **Product direction** comes from the human. *Execution* should not block.
