@@ -152,6 +152,43 @@ describe('delivery benchmark metrics', () => {
     })
   })
 
+  it('counts gate calls, reused passes, and long commands in every session', () => {
+    const call = (timestamp: string, id: string, name: string) => ({
+      type: 'message',
+      timestamp,
+      message: { role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: {} }] },
+    })
+    const done = (timestamp: string, id: string, name: string, text: string) => ({
+      type: 'message',
+      timestamp,
+      message: {
+        role: 'toolResult',
+        toolCallId: id,
+        toolName: name,
+        content: [{ type: 'text', text }],
+      },
+    })
+    const worker = jsonl(
+      { type: 'session', timestamp: '2026-01-01T00:00:00.000Z', parentSession: 'root.jsonl' },
+      call('2026-01-01T00:00:01.000Z', 'suite', 'pstack_gate'),
+      done('2026-01-01T00:01:31.000Z', 'suite', 'pstack_gate', 'Gate passed: test'),
+      call('2026-01-01T00:01:32.000Z', 'again', 'pstack_gate'),
+      done('2026-01-01T00:01:33.000Z', 'again', 'pstack_gate', 'Gate passed. No command ran.'),
+      call('2026-01-01T00:01:34.000Z', 'focused', 'bash'),
+      done('2026-01-01T00:01:40.000Z', 'focused', 'bash', 'ok'),
+      call('2026-01-01T00:01:41.000Z', 'slow', 'bash'),
+      done('2026-01-01T00:02:41.000Z', 'slow', 'bash', 'ok'),
+      call('2026-01-01T00:02:42.000Z', 'read', 'read'),
+      done('2026-01-01T00:03:42.000Z', 'read', 'read', 'text'),
+    )
+    expect(
+      sessionRunMetrics([
+        { content: worker, path: 'worker.jsonl' },
+        { content: root, path: 'root.jsonl' },
+      ]),
+    ).toMatchObject({ gateCalls: 2, gateReuses: 1, longCommandMs: 150_000, longCommands: 2 })
+  })
+
   it('reports each run and the median of each arm', () => {
     const report = formatReport([
       result('baseline', 1, 200_000),

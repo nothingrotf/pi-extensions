@@ -10,6 +10,7 @@ import { acceptanceTest, acceptanceTestName, fixtureFiles } from './fixture.ts'
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
 import { type Arm, arms, benchmarkPrompt, replayPrompt } from './prompts.ts'
 import { ownerPolicy, replayTask, replayTasks, type ReplayTask } from './replays.ts'
+import { mirrorAgentDirectory } from './revisions.ts'
 
 const usage = `Usage: bun tools/delivery-bench/run.ts [options]
 
@@ -20,6 +21,7 @@ Options:
   --task <id>             pricing, the synthetic fixture (default), or a replay task: ${replayTasks.map((task) => task.id).join(', ')}
   --arms <list>           Pricing arms: baseline, workspace (default: both). Replay tasks use the workspace flow
   --owner <name=selector> Implementation owner variant, repeatable. Each variant rewrites the owner roles in a copy of the model policy
+  --revision <name=rev>   pi-extensions revision variant, repeatable. Each variant runs pi with the packages of a worktree at rev
   --runs <n>              Runs per arm, interleaved by arm (default: 1)
   --out <dir>             Output directory (default: a new directory under the system temp)
   --coordinator <model>   Coordinator model (default: openai-codex/gpt-6.1-sol:medium)
@@ -34,12 +36,20 @@ interface Owner {
   selector: string | undefined
 }
 
+interface Revision {
+  agentDir: string | undefined
+  label: string
+  revision: string | undefined
+  worktree: string | undefined
+}
+
 interface Options {
   arms: Arm[]
   codeReview: string
   coordinator: string
   out: string
   owners: Owner[]
+  revisions: Revision[]
   runs: number
   runtime: string
   setupSeconds: number
@@ -83,6 +93,17 @@ function parseOwner(value: string): Owner {
   return { label: label.trim(), selector }
 }
 
+function parseRevision(value: string): Revision {
+  const separator = value.indexOf('=')
+  const label = separator < 0 ? value : value.slice(0, separator).trim()
+  const revision = separator < 0 ? value : value.slice(separator + 1).trim()
+  if (label.length === 0 || revision.length === 0 || !/^[A-Za-z0-9._-]+$/.test(label))
+    throw new Error(
+      `--revision needs name=rev with a name of letters, digits, dots, or dashes: ${value}`,
+    )
+  return { agentDir: undefined, label, revision, worktree: undefined }
+}
+
 function parseTask(value: string | undefined): ReplayTask | undefined {
   if (value === undefined || value === 'pricing') return undefined
   const task = replayTask(value)
@@ -98,6 +119,7 @@ function options(): Options | undefined {
     options: {
       arms: { type: 'string' },
       owner: { type: 'string', multiple: true },
+      revision: { type: 'string', multiple: true },
       task: { type: 'string' },
       'code-review': { type: 'string' },
       coordinator: { type: 'string' },
@@ -123,6 +145,10 @@ function options(): Options | undefined {
       values.owner === undefined || values.owner.length === 0
         ? [{ label: 'policy', selector: undefined }]
         : values.owner.map(parseOwner),
+    revisions:
+      values.revision === undefined || values.revision.length === 0
+        ? [{ agentDir: undefined, label: 'current', revision: undefined, worktree: undefined }]
+        : values.revision.map(parseRevision),
     runs: Math.max(1, Math.floor(positive(values.runs, 1, '--runs'))),
     runtime: values.runtime ?? 'openai-codex/gpt-6.1-sol:medium',
     setupSeconds: nonNegative(values['setup-seconds'], 20, '--setup-seconds'),
@@ -208,8 +234,9 @@ async function required(
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = 120_000,
 ): Promise<void> {
-  const result = await execute(command, args, cwd, env, 120_000)
+  const result = await execute(command, args, cwd, env, timeoutMs)
   if (result.code !== 0) throw new Error(`${command} ${args.join(' ')} failed:\n${result.output}`)
 }
 
@@ -252,6 +279,38 @@ async function replayAcceptance(
   const result = await execute(command, args, tree, process.env, 600_000)
   await writeFile(join(dirname(repo), 'acceptance.log'), result.output)
   return result.code === 0 ? 'pass' : 'fail'
+}
+
+async function prepareRevision(config: Options, revision: Revision): Promise<Revision> {
+  if (revision.revision === undefined) return revision
+  const worktree = join(config.out, 'revisions', revision.label)
+  await required(
+    'git',
+    ['worktree', 'add', '--detach', '-q', worktree, revision.revision],
+    sourceRoot,
+  )
+  await required('bun', ['install', '--frozen-lockfile'], worktree, process.env, 600_000)
+  const agentDir = await mirrorAgentDirectory({
+    revisionRoot: worktree,
+    sourceRoot,
+    target: join(config.out, 'agents', revision.label),
+  })
+  write(`Revision ${revision.label}: ${revision.revision} in ${worktree}\n`)
+  return { ...revision, agentDir, worktree }
+}
+
+async function releaseRevisions(config: Options, revisions: readonly Revision[]): Promise<void> {
+  for (const revision of revisions) {
+    if (revision.worktree === undefined) continue
+    await execute(
+      'git',
+      ['worktree', 'remove', '--force', revision.worktree],
+      sourceRoot,
+      process.env,
+      120_000,
+    )
+  }
+  await rm(join(config.out, 'agents'), { force: true, recursive: true })
 }
 
 async function policyFor(config: Options, owner: Owner): Promise<string | undefined> {
@@ -303,9 +362,20 @@ async function sessionFiles(directory: string) {
   )
 }
 
-async function runOnce(config: Options, arm: Arm, owner: Owner, run: number): Promise<RunResult> {
+function variantLabel(config: Options, revision: Revision, owner: Owner): string {
+  if (revision.revision === undefined) return owner.label
+  return owner.selector === undefined ? revision.label : `${revision.label}+${owner.label}`
+}
+
+async function runOnce(
+  config: Options,
+  arm: Arm,
+  revision: Revision,
+  owner: Owner,
+  run: number,
+): Promise<RunResult> {
   const task = config.task
-  const label = `${task?.id ?? arm}@${owner.label}`
+  const label = `${task?.id ?? arm}@${variantLabel(config, revision, owner)}`
   const root = join(config.out, `${label}-${run}`)
   const repo = join(root, 'repo')
   const sessions = join(root, 'sessions')
@@ -325,6 +395,7 @@ async function runOnce(config: Options, arm: Arm, owner: Owner, run: number): Pr
     PSTACK_WORKTREE_ROOT: join(root, 'worktrees'),
   }
   if (policy !== undefined) env['PSTACK_MODEL_POLICY'] = policy
+  if (revision.agentDir !== undefined) env['PI_CODING_AGENT_DIR'] = revision.agentDir
   const started = Date.now()
   const execution = await execute(
     'pi',
@@ -362,10 +433,19 @@ async function main(): Promise<void> {
   write(`Writing results to ${config.out}\n`)
   const results: RunResult[] = []
   const variants: Arm[] = config.task === undefined ? config.arms : ['workspace']
-  for (let run = 1; run <= config.runs; run += 1) {
-    for (const arm of variants) {
-      for (const owner of config.owners) results.push(await runOnce(config, arm, owner, run))
+  const revisions: Revision[] = []
+  try {
+    for (const revision of config.revisions) revisions.push(await prepareRevision(config, revision))
+    for (let run = 1; run <= config.runs; run += 1) {
+      for (const arm of variants) {
+        for (const revision of revisions) {
+          for (const owner of config.owners)
+            results.push(await runOnce(config, arm, revision, owner, run))
+        }
+      }
     }
+  } finally {
+    await releaseRevisions(config, revisions)
   }
   const report = formatReport(results)
   await writeFile(join(config.out, 'results.json'), `${JSON.stringify(results, null, 2)}\n`)

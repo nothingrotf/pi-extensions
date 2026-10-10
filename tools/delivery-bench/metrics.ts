@@ -14,7 +14,12 @@ const HeaderSchema = Type.Object(
 )
 
 const PartSchema = Type.Object(
-  { type: Type.String(), name: Type.Optional(Type.String()), text: Type.Optional(Type.String()) },
+  {
+    type: Type.String(),
+    id: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+    text: Type.Optional(Type.String()),
+  },
   { additionalProperties: true },
 )
 
@@ -27,6 +32,7 @@ const MessageEntrySchema = Type.Object(
         role: Type.String(),
         content: Type.Optional(Type.Array(PartSchema)),
         toolName: Type.Optional(Type.String()),
+        toolCallId: Type.Optional(Type.String()),
         isError: Type.Optional(Type.Boolean()),
       },
       { additionalProperties: true },
@@ -93,7 +99,11 @@ export interface SessionRunMetrics {
   coordinatorTurns: number
   costUsd: number
   finalState: string | undefined
+  gateCalls: number
+  gateReuses: number
   inputTokens: number
+  longCommandMs: number
+  longCommands: number
   outputTokens: number
   ownerAttempts: number
   ownerExecutionMs: number
@@ -138,6 +148,38 @@ function isRoot(file: SessionFile): boolean {
   return Value.Check(HeaderSchema, header) && header.parentSession === undefined
 }
 
+export const LONG_COMMAND_MS = 45_000
+const commandTools = new Set(['bash', 'pstack_gate'])
+
+function commandMetrics(file: SessionFile, metrics: SessionRunMetrics): void {
+  const pending = new Map<string, { name: string; startedAt: number }>()
+  for (const entry of entries(file.content)) {
+    if (!Value.Check(MessageEntrySchema, entry)) continue
+    const message = entry.message
+    const at = Date.parse(entry.timestamp)
+    if (message.role === 'assistant') {
+      for (const part of message.content ?? []) {
+        if (part.type !== 'toolCall' || part.id === undefined || part.name === undefined) continue
+        if (commandTools.has(part.name)) pending.set(part.id, { name: part.name, startedAt: at })
+      }
+      continue
+    }
+    if (message.role !== 'toolResult' || message.toolCallId === undefined) continue
+    const call = pending.get(message.toolCallId)
+    if (call === undefined) continue
+    pending.delete(message.toolCallId)
+    if (call.name === 'pstack_gate') {
+      metrics.gateCalls += 1
+      const text = (message.content ?? []).map((part) => part.text ?? '').join('')
+      if (text.includes('No command ran.')) metrics.gateReuses += 1
+    }
+    const durationMs = at - call.startedAt
+    if (durationMs < LONG_COMMAND_MS) continue
+    metrics.longCommands += 1
+    metrics.longCommandMs += durationMs
+  }
+}
+
 export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetrics {
   const root = files.find(isRoot)
   const metrics: SessionRunMetrics = {
@@ -149,7 +191,11 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
     coordinatorTurns: 0,
     costUsd: 0,
     finalState: undefined,
+    gateCalls: 0,
+    gateReuses: 0,
     inputTokens: 0,
+    longCommandMs: 0,
+    longCommands: 0,
     outputTokens: 0,
     ownerAttempts: 0,
     ownerExecutionMs: 0,
@@ -167,6 +213,7 @@ export function sessionRunMetrics(files: readonly SessionFile[]): SessionRunMetr
     metrics.costUsd += usage.costUsd
     metrics.inputTokens += usage.inputTokens
     metrics.outputTokens += usage.outputTokens
+    commandMetrics(file, metrics)
   }
   if (root === undefined) return metrics
   const attempts = new Map<string, AttemptTiming | undefined>()
@@ -299,6 +346,10 @@ const columns: readonly Column[] = [
   { label: 'Runtime s', value: (result) => result.runtimeExecutionMs, format: seconds },
   { label: 'Prep s', value: (result) => result.preparationMs, format: seconds },
   { label: 'Coordinator turns', value: (result) => result.coordinatorTurns, format: count },
+  { label: 'Gate calls', value: (result) => result.gateCalls, format: count },
+  { label: 'Gate reuses', value: (result) => result.gateReuses, format: count },
+  { label: 'Long commands', value: (result) => result.longCommands, format: count },
+  { label: 'Long command s', value: (result) => result.longCommandMs, format: seconds },
   {
     label: 'Tokens in+out',
     value: (result) => result.inputTokens + result.outputTokens,
