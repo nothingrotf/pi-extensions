@@ -1252,6 +1252,65 @@ describe('pstack delivery tool interception', () => {
     )
   })
 
+  it('tells the coordinator to record a failed managed attempt', async () => {
+    const harness = await sessionWithDeliveryTool({
+      onTask() {
+        return {
+          content: [{ text: 'Task failed: boom\n\nAgent ID: owner-agent', type: 'text' }],
+          details: { agentId: 'owner-agent', attemptStarted: true, error: 'boom', status: 'error' },
+        }
+      },
+    })
+    try {
+      await harness.session.prompt('Dispatch the owner.')
+      const result = harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'task',
+      )
+      const text = result?.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+      expect(text).toContain('Task failed: boom')
+      expect(text).toContain('Record each failed managed attempt before the next dispatch.')
+      expect(text).toContain(
+        'pstack_delivery { "action": "record", "issue": "delivery-tools", "agentId": "owner-agent" }',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('derives the report kind from an implementation role', () => {
+    const issue = emptyDeliveryIssue('owner', 'role-kind')
+    const report = {
+      issue: issue.issue,
+      kind: 'diagnosis',
+      state: 'wip',
+      criteria: [],
+      findings: [],
+      reason: 'The database container did not start.',
+      failureClass: 'environment',
+    }
+    const input = {
+      agentId: 'owner-agent',
+      attempt: 1,
+      output: JSON.stringify(report),
+      previousOutputs: [],
+      prompt: `work\n\n${deliveryReviewerPacket(issue)}`,
+      readonly: false,
+      structuredOutput: { data: report, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [],
+    }
+    expect(validateDeliveryTerminal({ ...input, role: 'bug-fix' })).toEqual({
+      normalizedOutput: JSON.stringify({ ...report, kind: 'implementation' }),
+      status: 'accepted',
+    })
+    const diagnostic = validateDeliveryTerminal({ ...input, role: 'hardest tasks' })
+    expect(diagnostic.status).toBe('rejected')
+    if (diagnostic.status !== 'rejected') throw new Error('A diagnosis without proof passed.')
+    expect(diagnostic.error).toContain('Diagnosis requires a cause')
+  })
+
   it('uses report kind, role, and readonly together for read receipt aliases', () => {
     const issue = emptyDeliveryIssue('owner', 'alias-parity')
     const prompt = `work\n\n${deliveryReviewerPacket(issue)}`

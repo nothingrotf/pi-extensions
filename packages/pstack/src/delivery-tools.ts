@@ -95,12 +95,31 @@ const CompletedTaskResultSchema = Type.Object(
   { agentId: id, status: Type.Optional(Type.Literal('completed')) },
   { additionalProperties: true },
 )
+const FailedTaskResultSchema = Type.Object(
+  { agentId: id, attemptStarted: Type.Optional(Type.Boolean()), status: Type.Literal('error') },
+  { additionalProperties: true },
+)
 const releaseScript = fileURLToPath(
   new URL('../skills/poteto-mode/scripts/release-worktree.sh', import.meta.url),
 )
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+interface FailedManagedAttempt {
+  agentId: string
+  issue: string
+}
+
+function failedAttemptNotice(attempts: readonly FailedManagedAttempt[]): string {
+  return [
+    'Record each failed managed attempt before the next dispatch. The checkpoint then names the correction.',
+    ...attempts.map(
+      (attempt) =>
+        `- pstack_delivery { "action": "record", "issue": ${JSON.stringify(attempt.issue)}, "agentId": ${JSON.stringify(attempt.agentId)} }`,
+    ),
+  ].join('\n')
 }
 
 function publicationReleaseNotice(issue: string, destination: string): string {
@@ -118,6 +137,7 @@ const BatchResultSchema = Type.Object(
         {
           agentId: Type.Optional(id),
           attemptStarted: Type.Optional(Type.Boolean()),
+          status: Type.Optional(Type.String()),
           taskId: id,
         },
         { additionalProperties: true },
@@ -1294,12 +1314,16 @@ function terminalEvidence(
   return evidence
 }
 
-function reportDraft(output: StructuredOutput | undefined): DeliveryReportDraft | undefined {
+function reportDraft(
+  output: StructuredOutput | undefined,
+  role: string | undefined,
+): DeliveryReportDraft | undefined {
   if (output?.status !== 'valid') return undefined
   const draft = deliveryReportDraft(output.data)
-  return draft === undefined
-    ? undefined
-    : { ...draft, report: normalizeDeliveryReportProse(draft.report) }
+  if (draft === undefined) return undefined
+  const report = normalizeDeliveryReportProse(draft.report)
+  if (role === undefined || !isImplementationRole(role)) return { ...draft, report }
+  return { ...draft, report: { ...report, kind: 'implementation' } }
 }
 
 function semanticReport(input: TerminalValidationInput): DeliveryReportDraft | undefined {
@@ -1307,6 +1331,7 @@ function semanticReport(input: TerminalValidationInput): DeliveryReportDraft | u
     input.previousOutputs.length === 0
       ? input.structuredOutput
       : input.previousOutputs[0]?.structuredOutput,
+    input.role,
   )
 }
 
@@ -1315,7 +1340,7 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
   if (packet === undefined) return { status: 'accepted' }
   const diagnostics: string[] = []
   const structured = input.structuredOutput
-  const draft = reportDraft(structured)
+  const draft = reportDraft(structured, input.role)
   const evidenceEntries = terminalEvidence(input, draft?.report)
   const report =
     draft === undefined ? undefined : pruneFailedPassEvidence(draft.report, evidenceEntries).report
@@ -1855,6 +1880,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
   pi.on('tool_result', (event, ctx) => {
     if (event.toolName !== 'Task') return
     const bindings = loadBindings(ctx)
+    const failed: FailedManagedAttempt[] = []
     const bind = (task: Static<typeof TaskViewSchema>, agentId: string) => {
       const issue = task.delivery?.kind === 'managed' ? task.delivery.issue : undefined
       if (issue === undefined) return
@@ -1876,29 +1902,45 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
     ) {
       for (const result of event.details.items) {
         const task = event.input.tasks.find((entry) => entry.id === result.taskId)
-        if (task !== undefined && result.agentId !== undefined && result.attemptStarted !== false)
-          bind(task, result.agentId)
+        if (task === undefined || result.agentId === undefined || result.attemptStarted === false)
+          continue
+        bind(task, result.agentId)
+        if (
+          task.delivery?.kind === 'managed' &&
+          (result.status === 'failed' || result.status === 'aborted')
+        )
+          failed.push({ agentId: result.agentId, issue: task.delivery.issue })
       }
     } else if (
       Value.Check(TaskViewSchema, event.input) &&
       Value.Check(TaskResultSchema, event.details) &&
       event.details.attemptStarted !== false
-    )
+    ) {
       bind(event.input, event.details.agentId)
+      if (
+        event.input.delivery?.kind === 'managed' &&
+        Value.Check(FailedTaskResultSchema, event.details)
+      )
+        failed.push({ agentId: event.details.agentId, issue: event.input.delivery.issue })
+    }
+    const notices: string[] = []
+    if (failed.length > 0) notices.push(failedAttemptNotice(failed))
     if (
-      event.isError ||
-      !Value.Check(TaskViewSchema, event.input) ||
-      !Value.Check(CompletedTaskResultSchema, event.details) ||
-      event.input.role !== 'publication' ||
-      event.input.run_in_background !== false ||
-      event.input.delivery?.kind !== 'managed'
+      !event.isError &&
+      Value.Check(TaskViewSchema, event.input) &&
+      Value.Check(CompletedTaskResultSchema, event.details) &&
+      event.input.role === 'publication' &&
+      event.input.run_in_background === false &&
+      event.input.delivery?.kind === 'managed'
     )
-      return
-    const notice = publicationReleaseNotice(
-      event.input.delivery.issue,
-      resolve(ctx.cwd, event.input.cwd ?? '.'),
-    )
-    const content = [...event.content, { text: notice, type: 'text' as const }]
+      notices.push(
+        publicationReleaseNotice(
+          event.input.delivery.issue,
+          resolve(ctx.cwd, event.input.cwd ?? '.'),
+        ),
+      )
+    if (notices.length === 0) return
+    const content = [...event.content, ...notices.map((text) => ({ text, type: 'text' as const }))]
     return event.structuredContent === undefined
       ? { content }
       : { content, structuredContent: event.structuredContent }
