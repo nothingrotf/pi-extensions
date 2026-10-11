@@ -166,7 +166,7 @@ describe('delivery benchmark metrics', () => {
       timestamp,
       message: { role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: {} }] },
     })
-    const done = (timestamp: string, id: string, name: string, text: string) => ({
+    const done = (timestamp: string, id: string, name: string, text: string, cached = false) => ({
       type: 'message',
       timestamp,
       message: {
@@ -174,6 +174,7 @@ describe('delivery benchmark metrics', () => {
         toolCallId: id,
         toolName: name,
         content: [{ type: 'text', text }],
+        details: { cached },
       },
     })
     const worker = jsonl(
@@ -181,7 +182,7 @@ describe('delivery benchmark metrics', () => {
       call('2026-01-01T00:00:01.000Z', 'suite', 'pstack_gate'),
       done('2026-01-01T00:01:31.000Z', 'suite', 'pstack_gate', 'Gate passed: test'),
       call('2026-01-01T00:01:32.000Z', 'again', 'pstack_gate'),
-      done('2026-01-01T00:01:33.000Z', 'again', 'pstack_gate', 'Gate passed. No command ran.'),
+      done('2026-01-01T00:01:33.000Z', 'again', 'pstack_gate', 'Gate passed.', true),
       call('2026-01-01T00:01:34.000Z', 'focused', 'bash'),
       done('2026-01-01T00:01:40.000Z', 'focused', 'bash', 'ok'),
       call('2026-01-01T00:01:41.000Z', 'slow', 'bash'),

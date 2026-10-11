@@ -318,14 +318,25 @@ async function prepareRevision(config: Options, revision: Revision): Promise<Rev
     ['worktree', 'add', '--detach', '-q', worktree, revision.revision],
     sourceRoot,
   )
-  await required('bun', ['install', '--frozen-lockfile'], worktree, process.env, 600_000)
-  const agentDir = await mirrorAgentDirectory({
-    revisionRoot: worktree,
-    sourceRoot,
-    target: join(config.out, 'agents', revision.label),
-  })
-  write(`Revision ${revision.label}: ${revision.revision} in ${worktree}\n`)
-  return { ...revision, agentDir, worktree }
+  try {
+    await required('bun', ['install', '--frozen-lockfile'], worktree, process.env, 600_000)
+    const agentDir = await mirrorAgentDirectory({
+      revisionRoot: worktree,
+      sourceRoot,
+      target: join(config.out, 'agents', revision.label),
+    })
+    write(`Revision ${revision.label}: ${revision.revision} in ${worktree}\n`)
+    return { ...revision, agentDir, worktree }
+  } catch (error) {
+    await execute(
+      'git',
+      ['worktree', 'remove', '--force', worktree],
+      sourceRoot,
+      process.env,
+      120_000,
+    )
+    throw error
+  }
 }
 
 async function releaseRevisions(config: Options, revisions: readonly Revision[]): Promise<void> {
