@@ -119,17 +119,23 @@ export interface DeliveryReportDraft {
 function claimsNoFailure(report: Static<typeof DeliveryReportDraftSchema>): boolean {
   return (
     (report.state === 'accepted' || report.state === 'candidate') &&
-    report.criteria.every((criterion) => criterion.result === 'pass') &&
-    report.findings.every((finding) => finding.disposition !== 'open')
+    report.criteria.every(
+      (criterion) => criterion.result === 'pass' || criterion.result === 'pending',
+    ) &&
+    report.findings.every((finding) => !finding.blocking || finding.disposition !== 'open')
   )
 }
 
-export function deliveryReportDraft(value: JsonValue | undefined): DeliveryReportDraft | undefined {
+export function deliveryReportDraft(
+  value: JsonValue | undefined,
+  verdictOnly = false,
+): DeliveryReportDraft | undefined {
   if (value === undefined) return undefined
   if (Value.Check(DeliveryReportSemanticSchema, value)) {
     return { failureClassProvided: true, report: value }
   }
-  if (!Value.Check(DeliveryReportDraftSchema, value) || !claimsNoFailure(value)) return undefined
+  if (!Value.Check(DeliveryReportDraftSchema, value)) return undefined
+  if (!verdictOnly && !claimsNoFailure(value)) return undefined
   return { failureClassProvided: false, report: { ...value, failureClass: 'none' } }
 }
 
