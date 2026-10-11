@@ -10,6 +10,7 @@ Data: 2026-10-10. Escopo: o tempo até uma issue gerenciada ficar aceita, e quan
 4. Numa tarefa folha, Opus 5.5 e Sonnet 5.5 terminaram em 9 a 17 s. O GPT-6.1-Sol, modelo atual de `feature` e `bug-fix`, levou de 48 a 67 s. A tarefa era pequena e cada configuração rodou duas vezes.
 5. A recomendação é reescrever a camada de orquestração como um motor de entrega determinístico com várias issues em paralelo. O runtime do subagent, os workspaces de issue e o ledger continuam.
 6. O pi-harness, o harness anterior, mediu 26 features reais. O retrabalho foi 56% do custo, e 83% dos bloqueios depois da primeira rodada vieram da correção anterior. No A/B dele, o Sonnet 5 levou 3,55 h e o Opus 2,76 h na mesma feature. O roteamento de modelo só deve mudar depois de um A/B numa issue real.
+7. Medido depois das mudanças: o `pstack_gate` cortou a verificação de runtime de cerca de 130 s para 40 a 50 s. O `pstack_deliver` cortou a coordenação de 41 a 45 s para 30 a 32 s por issue. A revisão estática do Opus em `high` levou cerca de 30% menos que em `xhigh`, sem perda de aceite. A parede de uma issue continua dominada pelo dono e pela revisão estática.
 
 ## Método
 
@@ -209,6 +210,76 @@ Uma segunda rodada repetiu o Sol e o Opus depois das correções do pstack. Os c
 - **Modelo do dono:** nas execuções aceitas das duas rodadas, a mediana do dono foi 306 s no Sol e 305 s no Opus. Os dados não justificam trocar a política de `bug-fix`.
 - **Suítes completas:** o número por execução não caiu. O dono e o verificador rodam a suíte, cada um uma ou duas vezes. Um serviço de gates por SHA de árvore é a alavanca para esse custo.
 
+## Experimento: serviço de gates
+
+O `pstack_gate` roda suítes, checks e builds com cache pela árvore do workspace. O [ADR 0002](adr/0002-tree-keyed-gates.md) descreve o desenho. O A/B comparou o commit `4e73660`, sem a ferramenta, com o `ee33737`, com ela. Cada braço rodou 3 vezes por tarefa, em sequência e intercalado, com a política padrão.
+
+| Tarefa e braço           | Aceitas | Parede, mediana | Verificação de runtime | Execução de agentes | Comandos longos | Custo    |
+| ------------------------ | ------- | --------------- | ---------------------- | ------------------- | --------------- | -------- |
+| `diagnosis-owner`, base  | 3 de 3  | 442 s           | 134 s                  | 546 s               | 2 e 202 s       | US$ 1,42 |
+| `diagnosis-owner`, gates | 3 de 3  | 431 s           | 41 s                   | 425 s               | 1 e 88 s        | US$ 1,32 |
+| `workspace-setup`, base  | 3 de 3  | 592 s           | 131 s                  | 673 s               | 2 e 179 s       | US$ 1,59 |
+| `workspace-setup`, gates | 2 de 3  | 647 s           | 50 s                   | 639 s               | 1 e 85 s        | US$ 1,87 |
+
+Todas as execuções passaram no aceite oculto. O que os dados mostram:
+
+- **Verificação:** o verificador reaproveitou a suíte do dono em todas as execuções. A verificação de runtime caiu de 131 a 134 s para 41 a 50 s.
+- **Parede:** a mediana quase não mudou. A revisão estática do Opus 5 xhigh, de 160 a 420 s, ficou sozinha no caminho crítico.
+- **CPU:** a execução de agentes caiu de 5% a 22%. Isso conta mais quando várias issues rodam ao mesmo tempo.
+- **Falha:** uma execução terminou como `candidate`. O revisor estático repetiu um critério com o mesmo resultado, e a correção que removeu a repetição contou como mudança de veredito. O `next` pedia outra revisão, mas o preflight exigia o reparo do relatório, e o coordenador parou.
+
+Correções feitas a partir dessa falha:
+
+- O pstack junta entradas repetidas de critério ou achado que têm o mesmo veredito, antes da validação. Entradas repetidas que discordam ainda são rejeitadas.
+- O `next` agora tem o passo `repair`, que nomeia o relatório a reparar. O `next` e o preflight concordam.
+
+O reaproveitamento de gates não muda a parede de uma issue enquanto a revisão estática for o caminho crítico. O ganho dele está na CPU e na vazão de várias issues.
+
+As chamadas de `git` do isolamento também foram medidas. A preparação de cada tentativa leva cerca de 0,5 s em todas as execuções, menos de 0,5% da parede. Reduzir essas chamadas não muda o tempo de entrega.
+
+## Experimento: motor de entrega
+
+O `pstack_deliver` segue o `next` em código. O coordenador abre a issue, chama o motor uma vez e lê o checkpoint final. O [ADR 0003](adr/0003-delivery-engine.md) descreve o desenho. O A/B comparou o braço `workspace`, em que o coordenador segue o `next` à mão, com o braço `engine`. Os dois braços rodaram o commit `7b8bb01`, com o mesmo brief, os mesmos critérios e os mesmos prompts de revisão. Cada braço rodou 3 vezes por tarefa, em sequência e intercalado.
+
+A sobrecarga de coordenação é a parede menos o caminho crítico dos agentes: dono, a revisão mais longa e a preparação.
+
+| Tarefa e braço                 | Aceitas | Rodadas | Parede, mediana | Sobrecarga, mediana | Turnos do coordenador | Custo    |
+| ------------------------------ | ------- | ------- | --------------- | ------------------- | --------------------- | -------- |
+| `diagnosis-owner`, coordenador | 3 de 3  | 1, 1, 1 | 403 s           | 45 s                | 12                    | US$ 1,29 |
+| `diagnosis-owner`, motor       | 3 de 3  | 1, 1, 1 | 421 s           | 32 s                | 8                     | US$ 1,17 |
+| `workspace-setup`, coordenador | 3 de 3  | 1, 1, 1 | 602 s           | 41 s                | 14                    | US$ 1,41 |
+| `workspace-setup`, motor       | 3 de 3  | 1, 1, 2 | 814 s           | 30 s                | 8                     | US$ 1,97 |
+
+Todas as execuções passaram no aceite oculto. O que os dados mostram:
+
+- **Sobrecarga:** o motor cortou a coordenação de 41 a 45 s para 30 a 32 s por issue, e os turnos do coordenador de 12 a 14 para 8. Uma segunda rodada não aumentou a sobrecarga do motor.
+- **Parede:** a diferença de parede vem do dono e do revisor, não do motor. O dono variou de 286 a 647 s e a revisão estática de 173 a 492 s na mesma tarefa.
+- **Contexto real:** o benchmark começa cada coordenador com contexto vazio. Na sessão de autopilot, cada turno do coordenador carregava 257 mil tokens de prompt, então o ganho do motor ali é maior.
+
+Três rodadas de medição foram descartadas:
+
+- Na primeira, o motor e o coordenador davam prompts diferentes aos revisores. O verificador do motor testava cada critério com checks executáveis e achou um caminho real que o fix original não cobria. Isso custou uma rodada a mais em todas as execuções do motor. Agora o benchmark e o motor usam o mesmo `reviewPrompt`.
+- Em outra, o Mac dormiu 2 h 40 min no meio de uma execução. A fila agora roda com `caffeinate`.
+- Uma execução do motor no `workspace-setup` precisou de 2 rodadas por um defeito de protocolo, descrito abaixo.
+
+O defeito: o revisor estático omitiu o `failureClass` num relatório `candidate` com critérios `pending` e achados não bloqueantes. O pstack só inferia `none` quando todos os critérios passavam. A correção acrescentou o campo, mas o pstack tratou a semântica original como indisponível e forçou `wip`. O `wip` virou uma rodada de correção do dono para achados não bloqueantes. Correções feitas:
+
+- O pstack infere `failureClass: none` para um `candidate` ou `accepted` sem critério `fail` ou `blocked` e sem achado bloqueante aberto.
+- Uma correção que só acrescenta o `failureClass` mantém o veredito original.
+
+## Experimento: esforço da revisão estática
+
+A revisão estática do Opus 5 xhigh ficou no caminho crítico depois do serviço de gates. O A/B trocou só o seletor de `code review` por `anthropic/claude-opus-5:high`, no braço `engine` do mesmo commit, com 3 execuções por tarefa.
+
+| Tarefa e esforço         | Aceitas | Rodadas | Revisão estática              | Parede, mediana | Custo    |
+| ------------------------ | ------- | ------- | ----------------------------- | --------------- | -------- |
+| `diagnosis-owner`, xhigh | 3 de 3  | 1, 1, 1 | 185, 213 e 260 s              | 421 s           | US$ 1,17 |
+| `diagnosis-owner`, high  | 3 de 3  | 1, 1, 1 | 125, 163 e 177 s              | 413 s           | US$ 1,11 |
+| `workspace-setup`, xhigh | 3 de 3  | 1, 1, 2 | 173, 331 e 492 s em 2 rodadas | 814 s           | US$ 1,97 |
+| `workspace-setup`, high  | 3 de 3  | 1, 1, 1 | 162, 212 e 244 s              | 520 s           | US$ 1,29 |
+
+Nas 11 revisões de uma rodada com xhigh do A/B do motor, nos dois braços, a mediana foi 241 s. Com high, foi 170 s, cerca de 30% menos. Todas as execuções com high passaram no aceite oculto. Nenhuma execução dos dois esforços precisou de correção por achado da revisão estática, então o experimento não mede a perda de achados. A política de modelos é do usuário e continua igual. A recomendação é trocar `code review` para `high` e acompanhar as rodadas de correção.
+
 ## Referências externas
 
 | Fonte                                                                                                                                                            | Achado                                                                                                                                                                                                                       |
@@ -388,7 +459,7 @@ As metas são projeções a partir dos componentes medidos, não medições. Cad
 
 Os passos 2 a 4 pedem um ADR antes do código, como o ADR 0001.
 
-### Estado em 2026-10-10
+### Estado em 2026-10-11
 
 Feito na branch `perf/delivery-first-steps`:
 
@@ -396,15 +467,22 @@ Feito na branch `perf/delivery-first-steps`:
 - A revisão segue um piso de severidade e não reabre um achado julgado sem evidência nova.
 - Um guard bloqueia o `setup` repetido num workspace pronto.
 - O autopilot pergunta de forma assíncrona e segue com o trabalho independente.
-- O `bench:delivery` repete fixes reais com `--task` e compara donos com `--owner`.
+- O `bench:delivery` repete fixes reais com `--task`, compara donos com `--owner`, revisores com `--reviewer`, commits com `--revision` e o motor com `--arms workspace,engine`.
 - Um papel de implementação sempre registra `kind: "implementation"`, e uma tentativa falha traz o comando de registro.
 - O pacote de entrega pede uma suíte completa por vez e um timeout suficiente.
 - As suítes do pstack e do subagent foram divididas em arquivos paralelos.
+- O `pstack_gate` roda os gates com cache pela árvore, conforme o ADR 0002.
+- O `pstack_deliver` roda o loop de entrega em código, conforme o ADR 0003. Ele roda várias issues em paralelo.
+- O protocolo junta entradas repetidas de relatório, tem o passo `repair` e infere `failureClass: none` para revisões que adiam a execução.
 
-Decisão: a política de modelos continua igual, porque o A/B real não mostrou diferença no dono.
+Decisões:
+
+- O `todo_write` continua nos briefs de folha só para escopos de vários passos.
+- As chamadas de `git` do isolamento continuam iguais, porque custam menos de 0,5% da parede.
+- A política de modelos é do usuário e não mudou. Os dados recomendam `code review` em `high`.
 
 Pendente:
 
-- Encurtar os relatórios de revisão e tirar o `todo_write` dos briefs de folha.
+- Medir várias issues em paralelo num fixture com gate pesado.
 - Medir o efeito do limite de rodadas e do piso de severidade em entregas reais.
-- Escrever o ADR do serviço de gates e do motor de entrega.
+- Encurtar os relatórios de revisão.
