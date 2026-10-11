@@ -5,6 +5,7 @@ import {
   type DeliverySubmission,
   recoverableDeliveryReview,
   reviewEndorsesCandidate,
+  settledDeliveryReview,
   sameDeliveryArtifact,
   summarizeDelivery,
 } from './delivery.ts'
@@ -55,7 +56,7 @@ function currentReviews(
       role === undefined ||
       submission.role !== role ||
       authors.has(submission.agentId) ||
-      submission.execution !== 'completed' ||
+      !settledDeliveryReview(submission) ||
       submission.artifact === undefined ||
       !sameDeliveryArtifact(artifact, submission.artifact)
     )

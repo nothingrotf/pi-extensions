@@ -318,6 +318,15 @@ export interface DeliveryRepairIdentity {
   reportSha256: string
 }
 
+export function settledDeliveryReview(submission: DeliverySubmission): boolean {
+  return (
+    submission.execution === 'completed' ||
+    (submission.execution === 'failed' &&
+      submission.failureKind === 'report-contract' &&
+      (submission.reportCorrections?.length ?? 0) > 0)
+  )
+}
+
 export function recoverableDeliveryReview(
   issue: DeliveryIssue,
   role: 'code review' | 'runtime verification',
@@ -446,7 +455,7 @@ export function reviewEndorsesCandidate(issue: DeliveryIssue, review: DeliverySu
     issue.runtimeRequired &&
     report.kind === 'technical-review' &&
     report.state === 'candidate' &&
-    review.execution === 'completed' &&
+    settledDeliveryReview(review) &&
     review.artifact !== undefined &&
     report.criteria.length === issue.criteria.length &&
     report.criteria.every((criterion) =>
@@ -501,7 +510,7 @@ function rejectsCandidate(submission: DeliverySubmission): boolean {
   const report = currentDeliveryReport(submission)
   return (
     technical(submission) &&
-    submission.execution === 'completed' &&
+    settledDeliveryReview(submission) &&
     submission.artifact !== undefined &&
     (report.criteria.some((criterion) => criterion.result === 'fail') ||
       report.findings.some((finding) => finding.blocking && finding.disposition === 'open'))
@@ -544,7 +553,7 @@ export function summarizeDelivery(issue: DeliveryIssue): DeliverySummary {
       } else if (
         reviews.includes(submission) &&
         submission.artifact !== undefined &&
-        submission.execution === 'completed' &&
+        settledDeliveryReview(submission) &&
         proven(finding.evidence, submission.evidence)
       ) {
         findings.set(finding.id, {
