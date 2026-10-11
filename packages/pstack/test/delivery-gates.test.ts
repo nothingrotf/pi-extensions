@@ -98,6 +98,45 @@ describe('tree-keyed gates', () => {
     expect(await runs(counter)).toBe(1)
   })
 
+  it('keeps a shared run alive until every caller aborts', async () => {
+    const { counter, root } = await repository()
+    const command = `sleep 0.5; echo run >> '${counter}'`
+    const leaving = new AbortController()
+    const staying = runGate({ command, cwd: root })
+    const left = runGate({ command, cwd: root, signal: leaving.signal })
+    setTimeout(() => leaving.abort(), 100)
+    await expect(left).rejects.toThrow('pstack_gate was aborted.')
+    expect(await staying).toMatchObject({ cached: false, status: 'passed' })
+    expect(await runs(counter)).toBe(1)
+
+    const first = new AbortController()
+    const second = new AbortController()
+    const slow = 'sleep 5; echo slow >> ' + `'${counter}'`
+    const started = Date.now()
+    const calls = [
+      runGate({ command: slow, cwd: root, signal: first.signal }),
+      runGate({ command: slow, cwd: root, signal: second.signal }),
+    ]
+    setTimeout(() => {
+      first.abort()
+      second.abort()
+    }, 200)
+    for (const call of calls) await expect(call).rejects.toThrow('pstack_gate was aborted.')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(Date.now() - started).toBeLessThan(4000)
+    expect(await runs(counter)).toBe(1)
+  })
+
+  it('starts a fresh run instead of joining a run in flight', async () => {
+    const { counter, root } = await repository()
+    const command = `sleep 0.5; echo run >> '${counter}'`
+    const shared = runGate({ command, cwd: root })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const fresh = runGate({ command, cwd: root, fresh: true })
+    expect(await shared).not.toBe(await fresh)
+    expect(await runs(counter)).toBe(2)
+  })
+
   it('bounds concurrent gates with the configured slot count', async () => {
     process.env['PSTACK_GATE_CONCURRENCY'] = '1'
     const { counter, root } = await repository()
