@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vite-plus/test'
 
+import { reviewPrompt } from '../../packages/pstack/src/delivery-engine.ts'
 import { formatReport, type RunResult, sessionRunMetrics } from './metrics.ts'
 import {
   benchmarkPrompt,
   ENGINE_DISPATCH_LIMIT,
+  REPLAY_REVIEW_BRIEF,
   REPLAY_ROUND_LIMIT,
   replayEnginePrompt,
   replayPrompt,
@@ -232,6 +234,12 @@ describe('delivery benchmark metrics', () => {
       expect(prompt).toContain('role "bug-fix"')
       expect(prompt).toContain('model "review/model:high"')
       expect(prompt).toContain(`after ${REPLAY_ROUND_LIMIT} implementation submissions`)
+      expect(prompt).toContain(
+        JSON.stringify(reviewPrompt('runtime verification', REPLAY_REVIEW_BRIEF)),
+      )
+      expect(replayEnginePrompt(task, models)).toContain(
+        `"brief":${JSON.stringify(REPLAY_REVIEW_BRIEF)}`,
+      )
       expect(task.acceptance.join(' ')).toContain(task.hiddenTests[0] ?? 'missing')
     }
   })
