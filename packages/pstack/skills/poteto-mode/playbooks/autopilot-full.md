@@ -19,6 +19,7 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Resume the recorded owner for each fix round and follow-up with the consolidated scope from the checkpoint.
    Give a retry after a diagnosis to a fresh implementer in the same workspace.
    After each verifiable unit, publish a WIP snapshot through `../references/delivery-operations.md`.
+   Run the build, review, and correction loop of each issue with `pstack_deliver`, per the Delivery engine section of `../references/delivery-operations.md`. Publish the WIP snapshot after the engine returns.
    Diagnose repeated incomplete returns before another equivalent dispatch.
    Update the checkpoint after each handoff, verdict, and publication.
    Use the exact implementation role and `pstack-leaf` for a bounded implementer.
