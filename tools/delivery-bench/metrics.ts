@@ -59,6 +59,8 @@ const EngineDetailsSchema = Type.Object(
   { additionalProperties: true },
 )
 
+const GateDetailsSchema = Type.Object({ cached: Type.Boolean() }, { additionalProperties: true })
+
 const engineDispatchSteps = new Set(['implement', 'correct', 'review', 'diagnose'])
 
 const CustomEntrySchema = Type.Object(
@@ -185,8 +187,8 @@ function commandMetrics(file: SessionFile, metrics: SessionRunMetrics): void {
     pending.delete(message.toolCallId)
     if (call.name === 'pstack_gate') {
       metrics.gateCalls += 1
-      const text = (message.content ?? []).map((part) => part.text ?? '').join('')
-      if (text.includes('No command ran.')) metrics.gateReuses += 1
+      if (Value.Check(GateDetailsSchema, message.details) && message.details.cached)
+        metrics.gateReuses += 1
     }
     const durationMs = at - call.startedAt
     if (durationMs < LONG_COMMAND_MS) continue
