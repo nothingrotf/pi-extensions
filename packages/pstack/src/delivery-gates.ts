@@ -304,12 +304,16 @@ async function prune(store: string): Promise<void> {
   await Promise.all(stale.map((name) => rm(join(store, name), { force: true })))
 }
 
-async function runFresh(request: GateRequest, identity: GateIdentity): Promise<GateOutcome> {
-  const release = await acquireSlot(request.signal)
+async function runFresh(
+  request: GateRequest,
+  identity: GateIdentity,
+  signal: AbortSignal,
+): Promise<GateOutcome> {
+  const release = await acquireSlot(signal)
   try {
     await mkdir(identity.store, { recursive: true })
     const log = join(identity.store, `${identity.key}.${Date.now()}.log`)
-    const execution = await execute(request.command, request.cwd, log, request.signal)
+    const execution = await execute(request.command, request.cwd, log, signal)
     if (execution.status === 'aborted') throw new Error(`${GATE_TOOL} was aborted.`)
     const finishedAt = Date.now()
     const logSha256 = await fileSha256(log)
@@ -352,7 +356,46 @@ async function runFresh(request: GateRequest, identity: GateIdentity): Promise<G
   }
 }
 
-const inflight = new Map<string, Promise<GateOutcome>>()
+interface SharedRun {
+  controller: AbortController
+  participants: number
+  promise: Promise<GateOutcome>
+}
+
+const inflight = new Map<string, SharedRun>()
+
+function participate(shared: SharedRun, signal: AbortSignal | undefined): Promise<GateOutcome> {
+  shared.participants += 1
+  return new Promise((resolve, reject) => {
+    let joined = true
+    const leave = () => {
+      if (!joined) return
+      joined = false
+      signal?.removeEventListener('abort', abort)
+      shared.participants -= 1
+    }
+    const abort = () => {
+      leave()
+      if (shared.participants === 0) shared.controller.abort()
+      reject(new Error(`${GATE_TOOL} was aborted.`))
+    }
+    if (signal?.aborted === true) {
+      abort()
+      return
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    shared.promise.then(
+      (outcome) => {
+        leave()
+        resolve(outcome)
+      },
+      (error) => {
+        leave()
+        reject(error)
+      },
+    )
+  })
+}
 
 export async function runGate(request: GateRequest): Promise<GateOutcome> {
   request.signal?.throwIfAborted()
@@ -374,15 +417,20 @@ export async function runGate(request: GateRequest): Promise<GateOutcome> {
       }
     }
   }
-  const existing = inflight.get(identity.key)
-  if (existing !== undefined) return existing
-  const run = runFresh(request, identity)
-  inflight.set(identity.key, run)
-  try {
-    return await run
-  } finally {
-    if (inflight.get(identity.key) === run) inflight.delete(identity.key)
+  const existing = request.fresh === true ? undefined : inflight.get(identity.key)
+  if (existing !== undefined) return participate(existing, request.signal)
+  const controller = new AbortController()
+  const shared: SharedRun = {
+    controller,
+    participants: 0,
+    promise: runFresh(request, identity, controller.signal),
   }
+  inflight.set(identity.key, shared)
+  const settle = () => {
+    if (inflight.get(identity.key) === shared) inflight.delete(identity.key)
+  }
+  shared.promise.then(settle, settle)
+  return participate(shared, request.signal)
 }
 
 function seconds(durationMs: number): string {
