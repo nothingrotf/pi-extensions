@@ -1321,9 +1321,10 @@ function terminalEvidence(
 function reportDraft(
   output: StructuredOutput | undefined,
   role: string | undefined,
+  verdictOnly = false,
 ): DeliveryReportDraft | undefined {
   if (output?.status !== 'valid') return undefined
-  const draft = deliveryReportDraft(output.data)
+  const draft = deliveryReportDraft(output.data, verdictOnly)
   if (draft === undefined) return undefined
   const report = mergeDuplicateReportEntries(normalizeDeliveryReportProse(draft.report))
   if (role === undefined || !isImplementationRole(role)) return { ...draft, report }
@@ -1336,6 +1337,7 @@ function semanticReport(input: TerminalValidationInput): DeliveryReportDraft | u
       ? input.structuredOutput
       : input.previousOutputs[0]?.structuredOutput,
     input.role,
+    true,
   )
 }
 

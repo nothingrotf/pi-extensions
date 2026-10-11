@@ -1667,6 +1667,140 @@ describe('pstack delivery tool interception', () => {
     expect(result).toEqual({ status: 'accepted' })
   })
 
+  it('infers no failure for a static review that defers execution and lists follow-ups', () => {
+    const issue = { ...emptyDeliveryIssue('owner', 'static-follow-ups'), runtimeRequired: true }
+    const snapshot = {
+      repositories: [
+        {
+          base: 'a'.repeat(40),
+          patch: { byteLength: 1, sha256: 'b'.repeat(64), uri: 'artifact://patch' },
+          relativePath: '',
+          root: '/repo',
+          tree: 'c'.repeat(40),
+        },
+      ],
+    }
+    issue.submissions.push({
+      agentId: 'implementation',
+      attempt: 1,
+      role: 'feature',
+      execution: 'completed',
+      integration: 'integrated',
+      artifact: deliveryArtifact(snapshot),
+      evidence: [
+        {
+          id: 'command:1',
+          kind: 'command',
+          passed: true,
+          reference: 'artifact://implementation-command',
+          sha256: 'd'.repeat(64),
+        },
+      ],
+      report: {
+        issue: issue.issue,
+        kind: 'implementation',
+        state: 'candidate',
+        criteria: [{ id: 'receipt', result: 'pass', evidence: ['command:1'] }],
+        findings: [],
+        reason: 'Candidate ready.',
+        failureClass: 'none',
+      },
+      recordedAt: 1,
+    })
+    const draft = {
+      issue: issue.issue,
+      kind: 'technical-review',
+      state: 'candidate',
+      criteria: [{ id: 'receipt', result: 'pending', evidence: ['patch:.'] }],
+      findings: [{ id: 'follow-up', blocking: false, disposition: 'open', evidence: ['patch:.'] }],
+      reason: 'No blocking defect. Execution criteria stay pending for runtime verification.',
+    }
+    const result = validateDeliveryTerminal({
+      agentId: 'reviewer',
+      artifact: {
+        attempt: 1,
+        byteLength: 1,
+        id: 'output',
+        lineCount: 1,
+        mediaType: 'application/json',
+        runId: 'reviewer',
+        sha256: 'a'.repeat(64),
+        taskId: 'task',
+        uri: 'artifact://output',
+      },
+      attempt: 1,
+      output: '{}',
+      previousOutputs: [],
+      prompt: deliveryReviewerPacket(issue),
+      readonly: true,
+      role: 'code review',
+      structuredOutput: { data: draft, mode: 'strict', source: 'caller', status: 'valid' },
+      toolExecutionReceipts: [],
+      workspaceIdentity: {
+        baselineCommit: 'a'.repeat(40),
+        baselineTree: 'c'.repeat(40),
+        expectedTree: 'c'.repeat(40),
+        patch: snapshot.repositories[0].patch,
+        repositoryRoot: '/repo',
+        snapshot,
+        syntheticBaseline: true,
+      },
+    })
+    if (result.status !== 'accepted') throw new Error(`REJECTED: ${result.error}`)
+    if (result.normalizedOutput === undefined) throw new Error('Missing normalized output.')
+    expect(JSON.parse(result.normalizedOutput)).toMatchObject({
+      failureClass: 'none',
+      state: 'candidate',
+    })
+  })
+
+  it('keeps the original verdict when a correction only adds the failure class', () => {
+    const issue = emptyDeliveryIssue('owner', 'added-failure-class')
+    const draft = {
+      issue: issue.issue,
+      kind: 'comments',
+      state: 'blocked',
+      criteria: [],
+      findings: [],
+      reason: 'An operator decision blocks the work.',
+    }
+    const artifact = (id) => ({
+      attempt: 1,
+      byteLength: 1,
+      id,
+      lineCount: 1,
+      mediaType: 'application/json',
+      runId: 'worker',
+      sha256: 'a'.repeat(64),
+      taskId: 'task',
+      uri: `artifact://${id}`,
+    })
+    const result = validateDeliveryTerminal({
+      agentId: 'worker',
+      artifact: artifact('output'),
+      attempt: 1,
+      output: '{}',
+      previousOutputs: [
+        {
+          artifact: artifact('original'),
+          correction: 0,
+          structuredOutput: { data: draft, mode: 'strict', source: 'caller', status: 'valid' },
+        },
+      ],
+      prompt: `work\n\n${deliveryReviewerPacket(issue)}`,
+      readonly: true,
+      role: 'code review',
+      structuredOutput: {
+        data: { ...draft, failureClass: 'external-decision' },
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+      toolExecutionReceipts: [],
+    })
+    if (result.status !== 'accepted') throw new Error(`REJECTED: ${result.error}`)
+  })
+
   it('fails closed when the original correction semantics are missing', () => {
     const issue = emptyDeliveryIssue('owner', 'semantic-origin')
     const report = {
