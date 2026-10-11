@@ -23,7 +23,7 @@ Claude Code dynamic workflows, the pi-harness runner, and pstack-t3 also keep th
 - One `pstack_deliver` call lasts the whole delivery. Aborting the call stops the loop and cancels its running Task.
 - The coordinator writes the owner brief once. The engine writes the review prompts and the correction prompts from the checkpoint.
 - Several issues run in parallel when the coordinator calls `pstack_deliver` for each one in the same turn. `pstack_gate` bounds the gate load.
-- Child decisions still reach the parent model through `request_parent`.
+- Engine Tasks run in the foreground, so a child that needs a decision returns a blocker to the coordinator instead of waiting on `request_parent`.
 - Engine Tasks have no tool row in the coordinator transcript. The delivery journal and the subagent state record them, and the engine result lists every step with its duration.
 - A subagent version without the execution event fails the first dispatch before any Task starts.
 - Publication, an integration refresh, and running background Tasks stay with the coordinator.
