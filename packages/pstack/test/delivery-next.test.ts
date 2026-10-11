@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vite-plus/test'
 
 import { nextDeliveryStep } from '../src/delivery-next.ts'
 import { deliveryView } from '../src/delivery-views.ts'
-import { type DeliveryIssue, type DeliverySubmission, recordDelivery } from '../src/delivery.ts'
+import {
+  deliveryRepairIdentity,
+  type DeliveryIssue,
+  type DeliverySubmission,
+  recordDelivery,
+  repairDeliveryReport,
+  summarizeDelivery,
+} from '../src/delivery.ts'
 
 const artifact = (tree: string) => ({
   repositories: [
@@ -198,6 +205,34 @@ describe('next delivery step', () => {
       review('runtime verification', 'b'.repeat(40), 'blocked'),
     )
     expect(nextDeliveryStep(blocked, idle)).toMatchObject({ step: 'correct' })
+
+    const repaired = (issue: DeliveryIssue, report: DeliverySubmission['report']) => {
+      const recorded = issue.submissions.find((entry) => entry.agentId === 'static')
+      if (recorded === undefined) throw new Error('The failed review is missing.')
+      const result = repairDeliveryReport(issue, {
+        ...deliveryRepairIdentity(recorded),
+        agentId: 'static',
+        attempt: 1,
+        recordedAt: 20,
+        report,
+        revision: 1,
+      })
+      if (!result.ok) throw result.error
+      return result.value
+    }
+    const rejection = review('code review', 'b'.repeat(40), 'blocked')
+    const repairedRejection = repaired(
+      save(first, { ...rejection, execution: 'failed', failureKind: 'report-contract' }),
+      { ...rejection.report, reason: 'Repaired: a regression remains.' },
+    )
+    expect(nextDeliveryStep(repairedRejection, idle)).toMatchObject({ step: 'correct' })
+    expect(summarizeDelivery(repairedRejection).rejectedReviewRounds).toBe(1)
+
+    const repairedAcceptance = save(
+      repaired(recoverable, { ...failedContract.report, reason: 'Repaired: accepted.' }),
+      review('runtime verification', 'b'.repeat(40), 'accepted'),
+    )
+    expect(nextDeliveryStep(repairedAcceptance, idle)).toMatchObject({ step: 'publish' })
   })
 
   it('requires a diagnosis after three rejected review rounds', () => {
