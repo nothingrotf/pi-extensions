@@ -176,15 +176,19 @@ function ownerTask(input: DeliveryEngineInput, prompt: string): EngineTask {
   return task
 }
 
-function reviewTask(input: DeliveryEngineInput, role: ReviewRole): EngineTaskFields {
-  const runtime = role === 'runtime verification'
-  const prompt = [
-    runtime
+export function reviewPrompt(role: ReviewRole, brief: string | undefined): string {
+  return [
+    role === 'runtime verification'
       ? 'Verify the current candidate in this directory against every criterion with focused executable checks. Do not change any tracked file.'
       : 'Review the current candidate in this directory statically against every criterion. Do not change any file.',
     'Give one complete verdict. Report each defect as a finding with evidence, and apply the blocking rule of the delivery packet.',
-    ...(input.review.brief === undefined ? [] : ['', input.review.brief]),
+    ...(brief === undefined ? [] : ['', brief]),
   ].join('\n')
+}
+
+function reviewTask(input: DeliveryEngineInput, role: ReviewRole): EngineTaskFields {
+  const runtime = role === 'runtime verification'
+  const prompt = reviewPrompt(role, input.review.brief)
   const node: EngineTaskFields = {
     capability_profile: 'pstack-leaf',
     delivery: { issue: input.issue, kind: 'managed' },
