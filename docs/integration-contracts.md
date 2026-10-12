@@ -78,6 +78,17 @@ Listeners must not assume that the emitter is installed.
 Add a `version` field to every new channel.
 Document the owner, the payload, and the cleanup rule here before another package depends on the channel.
 
+## Session message types
+
+| Custom type               | Owner            | Purpose                                                    |
+| ------------------------- | ---------------- | ---------------------------------------------------------- |
+| `ask-question-completion` | `ask`            | Delivers the answer of an async form to the model.         |
+| `subdir-context`          | `subdir-context` | Delivers subdirectory instruction files with their hashes. |
+
+| Custom entry           | Owner | Purpose                                                         |
+| ---------------------- | ----- | --------------------------------------------------------------- |
+| `ask-question-settled` | `ask` | Marks an async form as answered, skipped, failed, or cancelled. |
+
 ## Shared modules
 
 `@nothingrotf/fast-mode/policy` is the only cross-package import of shared logic.
@@ -86,11 +97,12 @@ Change its exports only together with every importer.
 
 ## Optional capabilities
 
-| Capability              | Provider    | Behavior when the provider is absent                               |
-| ----------------------- | ----------- | ------------------------------------------------------------------ |
-| Bounded `read`, `patch` | `filetools` | Pi registers its native `read`. Tasks receive native tools only.   |
-| `grep` with tgrep       | `tgrep`     | Pi registers its native `grep`.                                    |
-| Action rail             | `hud`       | Providers keep their own renderers. Rail reports have no listener. |
-| Question state          | `ask`       | `todo` treats questions as absent.                                 |
-| Task runtime            | `subagent`  | `pstack_deliver` returns an error that names the missing runtime.  |
-| Fast Mode policy        | `fast-mode` | Not optional. `subagent` declares it as a dependency.              |
+| Capability                | Provider         | Behavior when the provider is absent                               |
+| ------------------------- | ---------------- | ------------------------------------------------------------------ |
+| Bounded `read`, `patch`   | `filetools`      | Pi registers its native `read`. Tasks receive native tools only.   |
+| `grep` with tgrep         | `tgrep`          | Pi registers its native `grep`.                                    |
+| Action rail               | `hud`            | Providers keep their own renderers. Rail reports have no listener. |
+| Question state            | `ask`            | `todo` treats questions as absent.                                 |
+| Subdirectory instructions | `subdir-context` | Only the session directory and its ancestors provide instructions. |
+| Task runtime              | `subagent`       | `pstack_deliver` returns an error that names the missing runtime.  |
+| Fast Mode policy          | `fast-mode`      | Not optional. `subagent` declares it as a dependency.              |

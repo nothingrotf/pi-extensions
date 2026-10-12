@@ -43,6 +43,7 @@ Read the [integration contracts](docs/integration-contracts.md) for tool visibil
 | [`@nothingrotf/pstack`](packages/pstack)                   | Workflow skills and Pi compatibility helpers                                      |
 | [`@nothingrotf/session-history`](packages/session-history) | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |
 | [`@nothingrotf/subagent`](packages/subagent)               | In-process Task runtime with isolated, persistent Pi child sessions               |
+| [`@nothingrotf/subdir-context`](packages/subdir-context)   | Instruction files of subdirectories loaded when tools touch them                  |
 | [`@nothingrotf/tgrep`](packages/tgrep)                     | Microsoft tgrep search with fresh and opt-in indexed modes                        |
 | [`@nothingrotf/todo`](packages/todo)                       | Structured todo lifecycle with session state and a persistent tree                |
 

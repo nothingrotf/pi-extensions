@@ -198,6 +198,22 @@
         "typebox": "*",
       },
     },
+    "packages/subdir-context": {
+      "name": "@nothingrotf/subdir-context",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@earendil-works/pi-ai": "catalog:",
+        "@earendil-works/pi-coding-agent": "catalog:",
+        "@earendil-works/pi-tui": "catalog:",
+        "@nothingrotf/filetools": "workspace:^",
+        "typebox": "catalog:",
+      },
+      "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
+        "typebox": "*",
+      },
+    },
     "packages/tgrep": {
       "name": "@nothingrotf/tgrep",
       "version": "0.1.0",
@@ -424,6 +440,8 @@
     "@nothingrotf/session-history": ["@nothingrotf/session-history@workspace:packages/session-history"],
 
     "@nothingrotf/subagent": ["@nothingrotf/subagent@workspace:packages/subagent"],
+
+    "@nothingrotf/subdir-context": ["@nothingrotf/subdir-context@workspace:packages/subdir-context"],
 
     "@nothingrotf/tgrep": ["@nothingrotf/tgrep@workspace:packages/tgrep"],
 
