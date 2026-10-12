@@ -25,6 +25,8 @@ The packages require Pi 1.1.0 or later.
 Pi loads every extension with its own installed Pi packages, not with the versions in this workspace.
 The root catalog pins the minimum supported version, so checks and tests run against that runtime.
 
+Read the [integration contracts](docs/integration-contracts.md) for tool visibility, isolation limits, and cross-package events.
+
 ## Packages
 
 | Package                                                    | Purpose                                                                           |
@@ -36,6 +38,7 @@ The root catalog pins the minimum supported version, so checks and tests run aga
 | [`@nothingrotf/filetools`](packages/filetools)             | Bounded file reads and all-or-nothing multi-file patches                          |
 | [`@nothingrotf/goal`](packages/goal)                       | Durable autonomous goal lifecycle for Pi sessions                                 |
 | [`@nothingrotf/hud`](packages/hud)                         | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
+| [`@nothingrotf/pi-inline-skill`](packages/inline-skill)    | Native fuzzy completion, highlighting, and expansion for inline `$skill` aliases  |
 | [`@nothingrotf/loop`](packages/loop)                       | Session loop for recurring and self-paced prompts or skills                       |
 | [`@nothingrotf/pstack`](packages/pstack)                   | Workflow skills and Pi compatibility helpers                                      |
 | [`@nothingrotf/session-history`](packages/session-history) | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |

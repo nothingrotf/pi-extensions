@@ -90,7 +90,7 @@ Read-only policy removes default mutable tools and rejects explicitly requested 
 
 ### Codemode
 
-Pi's `codemode` tool is an optional child tool. It requires Pi 0.99 or later.
+Pi's `codemode` tool is an optional child tool. The package requires Pi 1.1.0 or later.
 A child receives it when the call lists it in `tools` or when the capability profile lists it in `defaultTools`.
 An agent allowlist does not need to name it, because a script only reaches the child's effective tools.
 
