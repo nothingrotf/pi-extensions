@@ -803,7 +803,8 @@ export default function hud(pi: ExtensionAPI): void {
           output: railResultText(event.result),
           status: event.isError ? 'error' : 'ok',
         }
-        if (startedAt !== undefined) patch.durationMs = Math.max(0, Date.now() - startedAt)
+        if (event.durationMs !== undefined) patch.durationMs = event.durationMs
+        else if (startedAt !== undefined) patch.durationMs = Math.max(0, Date.now() - startedAt)
         railFor(event.parentToolCallId).reportChild(event.parentToolCallId, event.toolCallId, patch)
         reconcileRailVoice()
         requestRender?.()
@@ -813,6 +814,7 @@ export default function hud(pi: ExtensionAPI): void {
     const target = railFor(event.toolCallId)
     if (target.has(event.toolCallId)) {
       const patch: RailPatch = { status: event.isError ? 'error' : 'ok' }
+      if (event.durationMs !== undefined) patch.durationMs = event.durationMs
       if (event.toolName === 'AskQuestion') {
         Object.assign(patch, askResultPatch(event.toolName, event.result.details))
       }

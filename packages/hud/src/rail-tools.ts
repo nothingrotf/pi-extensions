@@ -315,7 +315,9 @@ export function mapSessionRails(entries: readonly SessionEntry[], cwd = ''): Ses
         ...askResultPatch(message.toolName, message.details),
         status: message.isError ? 'error' : 'ok',
       }
-      if (began !== undefined && message.timestamp >= began) {
+      if (message.durationMs !== undefined) {
+        patch.durationMs = message.durationMs
+      } else if (began !== undefined && message.timestamp >= began) {
         patch.durationMs = message.timestamp - began
       }
       const parentToolCallId = parentByToolCallId.get(message.toolCallId)

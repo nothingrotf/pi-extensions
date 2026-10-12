@@ -1518,6 +1518,18 @@ describe('mapSessionRails', () => {
     expect(rails.byToolCallId.get('a')?.groups()[0]?.actions[0]?.durationMs).toBe(1_500)
   })
 
+  test('prefers the recorded execution time over message timestamps', () => {
+    const result = toolResultEntry('a', 'ok')
+    const rails = mapSessionRails([
+      userEntry,
+      assistantEntry('a'),
+      result.type === 'message' && result.message.role === 'toolResult'
+        ? { ...result, message: { ...result.message, durationMs: 320 } }
+        : result,
+    ])
+    expect(rails.byToolCallId.get('a')?.groups()[0]?.actions[0]?.durationMs).toBe(320)
+  })
+
   test('marks a backfilled failure as an error row', () => {
     const rails = mapSessionRails([
       userEntry,

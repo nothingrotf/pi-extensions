@@ -806,6 +806,46 @@ describe('HUD lifecycle', () => {
     expect(reports[1]?.durationMs).toBeTypeOf('number')
   })
 
+  test('uses the execution time measured by Pi for top-level and nested calls', async () => {
+    const instance = harness()
+    await instance.emit('agent_start')
+    await instance.emit('tool_execution_start', {
+      args: { code: 'await tools.read({ path: "package.json" })' },
+      toolCallId: 'script-2',
+      toolName: 'codemode',
+    })
+    await instance.emit('tool_execution_start', {
+      args: { path: 'package.json' },
+      parentToolCallId: 'script-2',
+      toolCallId: 'script-2/1',
+      toolName: 'read',
+    })
+    await instance.emit('tool_execution_end', {
+      durationMs: 7,
+      isError: false,
+      parentToolCallId: 'script-2',
+      result: { content: [{ text: '{}', type: 'text' }] },
+      toolCallId: 'script-2/1',
+      toolName: 'read',
+    })
+    await instance.emit('tool_execution_end', {
+      durationMs: 42,
+      isError: false,
+      result: { content: [{ text: 'Script completed', type: 'text' }] },
+      toolCallId: 'script-2',
+      toolName: 'codemode',
+    })
+    await instance.emit('agent_end')
+    const reports = instance
+      .appended()
+      .filter((entry) => entry.customType === 'hud-rail-state')
+      .map((entry) => [entry.data.report.toolCallId, entry.data.report.durationMs])
+    expect(reports).toEqual([
+      ['script-2', 42],
+      ['script-2/1', 7],
+    ])
+  })
+
   test('renders an unmapped tool through the event fallback', async () => {
     const instance = harness()
     await instance.emit('agent_start')
