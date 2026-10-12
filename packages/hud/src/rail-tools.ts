@@ -2,32 +2,27 @@ import { relative } from 'node:path'
 
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import {
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createFindToolDefinition,
-  createLsToolDefinition,
-  createWriteToolDefinition,
-  type ExtensionAPI,
-  type ToolDefinition,
-} from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, ToolRenderers } from '@earendil-works/pi-coding-agent'
 import type { Component } from '@earendil-works/pi-tui'
-import { Type, type Static, type TSchema } from 'typebox'
+import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { argumentGlyphs } from './arg-glyphs.ts'
 import { sanitizeScalar } from './format.ts'
 import type { IconKey } from './icons.ts'
 import { askCallPatch, askResultPatch, normalizeAskPatch } from './rail-ask.ts'
-import { defaultRailIcon, defaultRailLabel, type RailActionReport } from './rail-channel.ts'
+import {
+  builtInRailToolNames,
+  defaultRailIcon,
+  defaultRailLabel,
+  type RailActionReport,
+} from './rail-channel.ts'
 import { decodeRailEntry, railEntryType } from './rail-entry.ts'
 import { decodeRailReplacementEntry, railReplacementEntryType } from './rail-replacement-entry.ts'
 import type { RailSegment } from './rail-segments.ts'
 import { decodeRailStateEntry, railStateEntryType } from './rail-state-entry.ts'
 import { messageSegments, projectRailVoice } from './rail-voice.ts'
 import { RailStore, type RailCategory, type RailPatch, type RailStatus } from './rail.ts'
-
-type RailState = { store?: RailStore }
 
 const emptyComponent: Component = {
   invalidate: () => undefined,
@@ -367,105 +362,60 @@ export function shortPath(value: string | undefined, cwd: string): string {
   return relativePath.startsWith('..') ? raw : relativePath
 }
 
-export type RailToolSpec<TParams extends TSchema> = {
-  category: RailCategory
-  detail: (args: Static<TParams>) => string
-  doneLabel: string
-  iconKey: IconKey
-  runningLabel: string
-}
-
-export function railTool<TParams extends TSchema, TDetails, TBaseState>(
-  base: ToolDefinition<TParams, TDetails, TBaseState>,
-  storeFor: (toolCallId: string) => RailStore,
-  spec: RailToolSpec<TParams>,
-): ToolDefinition<TParams, TDetails, RailState> {
-  return {
-    ...base,
-    renderShell: 'self',
-    renderCall(args, _theme, context) {
-      const store = (context.state.store ??= storeFor(context.toolCallId))
-      store.report(context.toolCallId, {
-        argGlyphs: argumentGlyphs(base.name, args),
-        category: spec.category,
-        detail: spec.detail(args),
-        doneLabel: spec.doneLabel,
-        iconKey: spec.iconKey,
-        runningLabel: spec.runningLabel,
-        status: 'pending',
-      })
-      return emptyComponent
-    },
-    renderResult(result, options, _theme, context) {
-      const store = (context.state.store ??= storeFor(context.toolCallId))
-      const text = resultText(result.content)
-      const status: RailStatus = context.isError ? 'error' : options.isPartial ? 'pending' : 'ok'
-      const argDetail = spec.detail(context.args)
-      const patch: RailPatch = { detail: argDetail, output: text, status }
-      if (spec.category === 'edit' && status !== 'error') patch.summary = ''
-      store.report(context.toolCallId, patch)
-      return emptyComponent
-    },
-  }
-}
-
-type RailRegistration = {
-  create: (cwd: string) => void
-}
-
-function specFor<TParams extends TSchema>(name: string, cwd: string): RailToolSpec<TParams> {
+function railRenderers(name: string, storeFor: (toolCallId: string) => RailStore): ToolRenderers {
   const meta = builtInMeta.get(name) ?? {
     category: 'other',
     doneLabel: defaultRailLabel(name),
     iconKey: defaultRailIcon(name),
     runningLabel: defaultRailLabel(name),
   }
-  return { ...meta, detail: (args) => railDetail({ arguments: args, toolName: name }, cwd) }
+  const stores = new Map<string, RailStore>()
+  const storeOf = (toolCallId: string) => {
+    const known = stores.get(toolCallId)
+    if (known !== undefined) return known
+    const store = storeFor(toolCallId)
+    stores.set(toolCallId, store)
+    return store
+  }
+  return {
+    renderShell: 'self',
+    renderCall(args, _theme, context) {
+      storeOf(context.toolCallId).report(context.toolCallId, {
+        argGlyphs: argumentGlyphs(name, args),
+        category: meta.category,
+        detail: railDetail({ arguments: args, toolName: name }, context.cwd),
+        doneLabel: meta.doneLabel,
+        iconKey: meta.iconKey,
+        runningLabel: meta.runningLabel,
+        status: 'pending',
+      })
+      return emptyComponent
+    },
+    renderResult(result, options, _theme, context) {
+      const status: RailStatus = context.isError ? 'error' : options.isPartial ? 'pending' : 'ok'
+      const patch: RailPatch = {
+        detail: railDetail({ arguments: context.args, toolName: name }, context.cwd),
+        output: resultText(result.content),
+        status,
+      }
+      if (context.durationMs !== undefined) patch.durationMs = context.durationMs
+      if (meta.category === 'edit' && status !== 'error') patch.summary = ''
+      storeOf(context.toolCallId).report(context.toolCallId, patch)
+      if (status !== 'pending') stores.delete(context.toolCallId)
+      return emptyComponent
+    },
+  }
 }
 
-function builtInRegistrations(
-  pi: ExtensionAPI,
+export function registerRailRenderers(
+  pi: Pick<ExtensionAPI, 'registerToolRenderer'>,
   storeFor: (toolCallId: string) => RailStore,
-): RailRegistration[] {
-  return [
-    {
-      create: (cwd) =>
-        pi.registerTool(railTool(createWriteToolDefinition(cwd), storeFor, specFor('write', cwd))),
-    },
-    {
-      create: (cwd) =>
-        pi.registerTool(railTool(createEditToolDefinition(cwd), storeFor, specFor('edit', cwd))),
-    },
-    {
-      create: (cwd) =>
-        pi.registerTool(railTool(createBashToolDefinition(cwd), storeFor, specFor('bash', cwd))),
-    },
-    {
-      create: (cwd) =>
-        pi.registerTool(railTool(createFindToolDefinition(cwd), storeFor, specFor('find', cwd))),
-    },
-    {
-      create: (cwd) =>
-        pi.registerTool(railTool(createLsToolDefinition(cwd), storeFor, specFor('ls', cwd))),
-    },
-  ]
-}
-
-export function applyRailTools(
-  pi: ExtensionAPI,
-  storeFor: (toolCallId: string) => RailStore,
-  cwd: string,
-  enabled: boolean,
+  enabled: () => boolean,
 ): void {
-  if (!enabled) {
-    pi.registerTool(createWriteToolDefinition(cwd))
-    pi.registerTool(createEditToolDefinition(cwd))
-    pi.registerTool(createBashToolDefinition(cwd))
-    pi.registerTool(createFindToolDefinition(cwd))
-    pi.registerTool(createLsToolDefinition(cwd))
-    return
-  }
-  for (const registration of builtInRegistrations(pi, storeFor)) {
-    registration.create(cwd)
-  }
+  const renderers = new Map(
+    builtInRailToolNames.map((name) => [name, railRenderers(name, storeFor)] as const),
+  )
+  pi.registerToolRenderer(
+    (toolName, next) => (enabled() ? renderers.get(toolName) : undefined) ?? next(),
+  )
 }

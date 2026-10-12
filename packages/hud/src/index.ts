@@ -28,7 +28,12 @@ import {
 import { decodeRailEntry, railEntryType, RailComponent, RailUsageLine } from './rail-entry.ts'
 import { railReplacementEntryType } from './rail-replacement-entry.ts'
 import { railStateEntryType } from './rail-state-entry.ts'
-import { applyRailTools, mapSessionRails, railPatchForCall, railResultText } from './rail-tools.ts'
+import {
+  mapSessionRails,
+  railPatchForCall,
+  railResultText,
+  registerRailRenderers,
+} from './rail-tools.ts'
 import { RailVoice } from './rail-voice.ts'
 import {
   isPseudo,
@@ -257,7 +262,7 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   railCwd = process.cwd()
-  applyRailTools(pi, railFor, railCwd, railEnabled)
+  registerRailRenderers(pi, railFor, () => railEnabled)
 
   const restoreRailAnchors = (ctx: ExtensionContext) => {
     if (!ctx.hasUI || ctx.mode !== 'tui') return
@@ -420,10 +425,7 @@ export default function hud(pi: ExtensionAPI): void {
     }
     restoreRails(ctx)
     applyThinkingLabel(ctx)
-    if (railCwd !== ctx.cwd) {
-      railCwd = ctx.cwd
-      applyRailTools(pi, railFor, ctx.cwd, railEnabled)
-    }
+    railCwd = ctx.cwd
     if (!ctx.hasUI || ctx.mode !== 'tui') return
     generation += 1
     const life = generation
@@ -865,7 +867,6 @@ export default function hud(pi: ExtensionAPI): void {
 
   const setRail = (enabled: boolean, ctx: ExtensionContext) => {
     railEnabled = enabled
-    applyRailTools(pi, railFor, railCwd ?? ctx.cwd, railEnabled)
     pi.events.emit(railEnabledChannel, { enabled: railEnabled })
     applyThinkingLabel(ctx)
     reconcileRailVoice()

@@ -128,7 +128,9 @@ The `Sound settings` menu controls both sounds, the focus policy, and the sound 
 
 The rail draws a tree of the tool calls in the current turn.
 
-The HUD does not register or replace `grep`, `read`, or `patch`, including when the rail toggles on or off.
+The HUD does not register or replace any tool, including when the rail toggles on or off.
+It draws `bash`, `edit`, `find`, `ls`, and `write` through `pi.registerToolRenderer()`, so their definitions, output schemas, and codemode contracts stay native.
+Durations come from the execution time that Pi records. Sessions recorded before Pi 1.1 show durations estimated from timestamps.
 Calls from the native tools, from `@nothingrotf/tgrep`, or from `@nothingrotf/filetools` use the fallback action rail with their own icons, labels, and path details.
 Those packages can load in any order without competing tool registrations.
 

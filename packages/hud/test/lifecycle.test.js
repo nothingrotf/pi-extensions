@@ -41,6 +41,7 @@ function harness(sessionManager = SessionManager.inMemory(), model) {
     },
     registerMarkdownTransformer() {},
     registerTool() {},
+    registerToolRenderer() {},
     appendEntry(customType, data) {
       appended.push({ customType, data })
       sessionManager.appendCustomEntry(customType, data)
