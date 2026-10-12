@@ -19,6 +19,12 @@ packages/
 Each extension owns its source, tests, documentation, and npm metadata.
 The root owns shared dependency versions, checks, formatting, and Git hooks.
 
+## Pi compatibility
+
+The packages require Pi 1.1.0 or later.
+Pi loads every extension with its own installed Pi packages, not with the versions in this workspace.
+The root catalog pins the minimum supported version, so checks and tests run against that runtime.
+
 ## Packages
 
 | Package                                                    | Purpose                                                                           |

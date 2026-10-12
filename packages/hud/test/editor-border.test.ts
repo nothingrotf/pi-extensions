@@ -31,6 +31,7 @@ class SilentTerminal implements Terminal {
   clearScreen(): void {}
   setTitle(): void {}
   setProgress(): void {}
+  setProgramStatus(): void {}
 }
 
 const idle = (text: string) => `<idle>${text}</idle>`

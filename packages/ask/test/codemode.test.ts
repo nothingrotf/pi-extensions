@@ -42,7 +42,7 @@ it('keeps AskQuestion declared to the model and out of codemode scripts', async 
       (context) => {
         declared = getCurrentTools(context.messages).map((tool) => tool.name)
         return fauxAssistantMessage(
-          fauxToolCall('codemode', { code: 'return typeof tools.AskQuestion' }, { id: 'script' }),
+          fauxToolCall('codemode', { code: "return 'AskQuestion' in tools" }, { id: 'script' }),
           { stopReason: 'toolUse' },
         )
       },
@@ -71,7 +71,7 @@ it('keeps AskQuestion declared to the model and out of codemode scripts', async 
 
       expect(declared).toEqual(expect.arrayContaining(['AskQuestion', 'codemode']))
       expect(text).toContain('Script completed')
-      expect(text.trimEnd().endsWith('undefined')).toBe(true)
+      expect(text.trimEnd().endsWith('false')).toBe(true)
     } finally {
       session.dispose()
     }

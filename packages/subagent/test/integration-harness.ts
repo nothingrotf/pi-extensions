@@ -457,10 +457,10 @@ export function childMessage(model: Model<Api>, context: TranscriptContext): Ass
             code: [
               'const [read, probe] = await Promise.allSettled([',
               "  tools.read({ path: 'receipt.txt' }),",
-              "  tools.secret_probe ? tools.secret_probe({}) : Promise.reject(new Error('absent')),",
+              "  'secret_probe' in tools ? tools.secret_probe({}) : Promise.reject(new Error('absent')),",
               '])',
               "const orchestration = ['Task', 'TaskControl', 'request_parent', 'ask_parent', 'receive_peers']",
-              "  .filter((name) => typeof tools[name] === 'function')",
+              '  .filter((name) => name in tools)',
               'return {',
               "  read: read.status === 'fulfilled' ? read.value : read.reason.message,",
               "  probe: probe.status === 'fulfilled' ? 'reached' : probe.reason.message,",
@@ -469,6 +469,30 @@ export function childMessage(model: Model<Api>, context: TranscriptContext): Ass
             ].join('\n'),
           },
           id: `run-codemode-scope-${Date.now()}`,
+          name: 'codemode',
+          type: 'toolCall',
+        },
+      ],
+      'toolUse',
+    )
+  }
+  if (prompt === 'RUN_CODEMODE_MCP_SCOPE') {
+    const script = toolResultText(context, 'codemode')
+    if (script !== undefined)
+      return assistant(model, [{ text: `codemode:${script}`, type: 'text' }], 'stop')
+    return assistant(
+      model,
+      [
+        {
+          arguments: {
+            code: [
+              'return {',
+              "  mcp: ALL_TOOLS.map((tool) => tool.name).filter((name) => name.startsWith('mcp__')),",
+              "  search: 'tool_search' in tools,",
+              '}',
+            ].join('\n'),
+          },
+          id: `run-codemode-mcp-scope-${Date.now()}`,
           name: 'codemode',
           type: 'toolCall',
         },

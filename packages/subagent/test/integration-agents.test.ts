@@ -889,6 +889,56 @@ describe('subagent Task integration: registered agents and preflight', () => {
     }
   })
 
+  it('keeps configured MCP servers out of read-only codemode Tasks', async () => {
+    const harness = await createHarness()
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-subagent-agent-'))
+    const marker = join(agentDir, 'mcp-spawned')
+    const previous = process.env.PI_CODING_AGENT_DIR
+    try {
+      const server = {
+        args: ['-e', "require('node:fs').writeFileSync(process.argv[1], '')", marker],
+        command: process.execPath,
+      }
+      await writeFile(
+        join(agentDir, 'mcp.json'),
+        JSON.stringify({ mcpServers: { probe: server } }),
+        'utf8',
+      )
+      await mkdir(join(harness.dir, '.pi'), { recursive: true })
+      await writeFile(
+        join(harness.dir, '.pi', 'mcp.json'),
+        JSON.stringify({ mcpServers: { project_probe: server } }),
+        'utf8',
+      )
+      process.env.PI_CODING_AGENT_DIR = agentDir
+
+      const declared = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RETURN_TOOLS',
+        readonly: true,
+        tools: ['read', 'codemode'],
+      })
+      expect(declared).toContain('codemode')
+      expect(declared).not.toContain('mcp__')
+      expect(declared).not.toContain('tool_search')
+
+      const scripted = await runTask(harness, {
+        ...baseInput,
+        prompt: 'RUN_CODEMODE_MCP_SCOPE',
+        readonly: true,
+        tools: ['read', 'codemode'],
+      })
+      expect(scripted).toContain('"mcp":[]')
+      expect(scripted).toContain('"search":false')
+      await expect(readFile(marker, 'utf8')).rejects.toThrow(/ENOENT/)
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = previous
+      await harness.close()
+      await rm(agentDir, { force: true, recursive: true })
+    }
+  })
+
   it('rejects explicitly requested mutable tools in read-only preflight', async () => {
     const harness = await createHarness()
     harness.controller.registerAgents('preflight', [
