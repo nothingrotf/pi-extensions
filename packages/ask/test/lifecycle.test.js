@@ -18,9 +18,11 @@ const params = {
   ],
 }
 
-function harness(mode = 'tui') {
+function harness(mode = 'tui', initialBranch = []) {
   const tools = new Map()
   const messages = []
+  const appended = []
+  let branch = initialBranch
   const handlers = new Map()
   const states = []
   const reports = []
@@ -45,6 +47,10 @@ function harness(mode = 'tui') {
     sendMessage(message, options) {
       messages.push({ message, options })
     },
+    appendEntry(customType, data) {
+      appended.push({ customType, data })
+      branch = [...branch, { type: 'custom', customType, data }]
+    },
   }
   const theme = {
     bold(text) {
@@ -56,6 +62,9 @@ function harness(mode = 'tui') {
   }
   const ctx = {
     mode,
+    sessionManager: {
+      getBranch: () => branch,
+    },
     ui: {
       custom(factory) {
         opened += 1
@@ -74,7 +83,11 @@ function harness(mode = 'tui') {
   }
   return {
     tool,
+    appended,
     messages,
+    setBranch(next) {
+      branch = next
+    },
     reports,
     states,
     blocked,
@@ -346,5 +359,111 @@ describe('AskQuestion lifecycle', () => {
     expect(instance.renderCall(params, { hasResult: true })).toEqual([
       '⏳ Ask Language · 1 question',
     ])
+  })
+})
+
+function asyncResultEntry(toolCallId, title = 'Language') {
+  return {
+    type: 'message',
+    message: {
+      role: 'toolResult',
+      toolCallId,
+      toolName: 'AskQuestion',
+      content: [{ type: 'text', text: 'The questions are open.' }],
+      details: {
+        status: 'async',
+        title,
+        questions: params.questions,
+        originalToolCallId: toolCallId,
+      },
+      isError: false,
+      timestamp: 0,
+    },
+  }
+}
+
+function settledEntry(toolCallId) {
+  return {
+    type: 'custom',
+    customType: 'ask-question-settled',
+    data: { version: 1, toolCallId },
+  }
+}
+
+describe('AskQuestion restoration', () => {
+  it('reopens only async forms that are still open on the active branch', async () => {
+    const instance = harness('tui', [
+      asyncResultEntry('answered'),
+      settledEntry('answered'),
+      asyncResultEntry('open', 'Open form'),
+    ])
+    await instance.emit('session_start', { reason: 'resume' })
+    expect(instance.opened()).toBe(1)
+    expect(instance.blocked).toEqual([{ active: true, label: 'Open form' }])
+    expect(instance.states.at(-1)).toEqual({ version: 1, pending: 1, paused: false })
+
+    instance.completePrompt({
+      kind: 'answered',
+      answers: [{ questionId: 'language', selectedOptionIds: ['ts'], freeformText: '' }],
+    })
+    await expect.poll(() => instance.messages.length).toBe(1)
+    expect(instance.messages[0]).toMatchObject({
+      message: { customType: 'ask-question-completion', details: { status: 'success' } },
+      options: { triggerTurn: true, deliverAs: 'followUp' },
+    })
+    expect(instance.appended).toEqual([
+      { customType: 'ask-question-settled', data: { version: 1, toolCallId: 'open' } },
+    ])
+    expect(instance.states.at(-1)).toEqual({ version: 1, pending: 0, paused: false })
+  })
+
+  it('keeps a form open across reload and records its settlement once', async () => {
+    const instance = harness()
+    await instance.execute({ ...params, runAsync: true }, 'one')
+    instance.setBranch([asyncResultEntry('one')])
+    await instance.emit('session_start', { reason: 'reload' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(instance.appended).toEqual([])
+    await expect.poll(instance.opened).toBe(2)
+    instance.completePrompt({ kind: 'answered', answers: [] })
+    await expect.poll(() => instance.messages.length).toBe(1)
+    expect(instance.appended).toHaveLength(1)
+  })
+
+  it('does not reopen a form that the user cancelled', async () => {
+    const instance = harness()
+    const controller = new AbortController()
+    await instance.execute({ ...params, runAsync: true }, 'one', controller.signal)
+    controller.abort()
+    expect(instance.appended).toEqual([
+      { customType: 'ask-question-settled', data: { version: 1, toolCallId: 'one' } },
+    ])
+    instance.setBranch([
+      asyncResultEntry('one'),
+      ...instance.appended.map(({ data }) => settledEntry(data.toolCallId)),
+    ])
+    await instance.emit('session_start', { reason: 'resume' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(instance.opened()).toBe(1)
+  })
+
+  it('follows the branch selected in the session tree', async () => {
+    const instance = harness('tui', [asyncResultEntry('first')])
+    await instance.emit('session_start', { reason: 'resume' })
+    expect(instance.opened()).toBe(1)
+    instance.setBranch([])
+    await instance.emit('session_tree')
+    instance.completePrompt({ kind: 'answered', answers: [] })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(instance.messages).toEqual([])
+    expect(instance.opened()).toBe(1)
+    expect(instance.states.at(-1)).toEqual({ version: 1, pending: 0, paused: false })
+  })
+
+  it('does not reopen forms without an interactive client', async () => {
+    const instance = harness('print', [asyncResultEntry('open')])
+    await instance.emit('session_start', { reason: 'resume' })
+    expect(instance.opened()).toBe(0)
+    expect(instance.states.at(-1)).toEqual({ version: 1, pending: 0, paused: false })
   })
 })

@@ -1,5 +1,12 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
+  Theme,
+} from '@earendil-works/pi-coding-agent'
 import { stripTerminalSequences, Text } from '@earendil-works/pi-tui'
+import { Type } from 'typebox'
+import { Value } from 'typebox/value'
 
 import {
   type AskAnswer,
@@ -33,6 +40,38 @@ Use this tool when the user's choice materially changes the result and the answe
 Keep questions concise. Use stable IDs. Give two to four distinct options when possible. Do not ask for confirmation when the request is already clear.`
 
 const asyncMessageType = 'ask-question-completion'
+const settledEntryType = 'ask-question-settled'
+
+const SettledEntrySchema = Type.Object({
+  toolCallId: Type.String({ minLength: 1 }),
+  version: Type.Literal(1),
+})
+
+type PendingAsyncQuestion = { input: AskQuestionInput; toolCallId: string }
+
+export function pendingAsyncQuestions(branch: readonly SessionEntry[]): PendingAsyncQuestion[] {
+  const opened = new Map<string, AskQuestionInput>()
+  const settled = new Set<string>()
+  for (const entry of branch) {
+    if (entry.type === 'custom' && entry.customType === settledEntryType) {
+      if (Value.Check(SettledEntrySchema, entry.data)) settled.add(entry.data.toolCallId)
+      continue
+    }
+    if (entry.type !== 'message') continue
+    const message = entry.message
+    if (message.role !== 'toolResult' || message.toolName !== 'AskQuestion') continue
+    const details = decodeAskQuestionDetails(message.details)
+    if (details?.status !== 'async') continue
+    opened.set(details.originalToolCallId, {
+      questions: details.questions,
+      runAsync: true,
+      title: details.title,
+    })
+  }
+  return [...opened]
+    .filter(([toolCallId]) => !settled.has(toolCallId))
+    .map(([toolCallId, input]) => ({ input, toolCallId }))
+}
 
 type AsyncTask = () => Promise<void>
 
@@ -302,8 +341,92 @@ export default function ask(pi: ExtensionAPI): void {
     publishState()
   }
   const unsubscribe = pi.events.on('ask:state:request', publishState)
-  pi.on('session_start', reset)
-  pi.on('session_tree', reset)
+  const markSettled = (toolCallId: string) => {
+    pi.appendEntry(settledEntryType, { version: 1, toolCallId })
+  }
+  const track = (toolCallId: string) => {
+    const controller = new AbortController()
+    pending.set(toolCallId, controller)
+    publishState()
+    return controller
+  }
+  const release = (toolCallId: string, controller: AbortController) => {
+    if (pending.get(toolCallId) !== controller) return
+    pending.delete(toolCallId)
+    publishState()
+  }
+  const resolveQuestion = async (
+    input: AskQuestionInput,
+    ctx: ExtensionContext,
+    controller: AbortController,
+  ) => {
+    const result = await promptUser(pi, input, ctx, controller.signal)
+    if (!controller.signal.aborted && result.kind === 'skipped') paused = true
+    return resultFromPrompt(input, result)
+  }
+  const openAsync = (
+    toolCallId: string,
+    input: AskQuestionInput,
+    ctx: ExtensionContext,
+    controller: AbortController,
+    onSettled: () => void,
+  ) => {
+    queue.enqueue(async () => {
+      let details: AskQuestionDetails
+      try {
+        details = await resolveQuestion(input, ctx, controller)
+      } catch (error) {
+        details = errorDetails(
+          input.title,
+          input.questions,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+      try {
+        if (controller.signal.aborted) return
+        markSettled(toolCallId)
+        asyncResults.set(toolCallId, details)
+        if (rail.active) {
+          rail.report({
+            detail: railDetail(input.questions),
+            doneLabel: 'Ask',
+            runningLabel: 'Ask',
+            summary: railSummary(details),
+            status: details.status === 'error' ? 'error' : 'ok',
+            toolCallId,
+            iconKey: 'ask',
+            toolName: 'AskQuestion',
+          })
+        }
+        asyncInvalidators.get(toolCallId)?.()
+        asyncInvalidators.delete(toolCallId)
+        pi.sendMessage(
+          {
+            customType: asyncMessageType,
+            content: resultText(details),
+            display: false,
+            details,
+          },
+          {
+            triggerTurn: details.status !== 'rejected',
+            deliverAs: details.status === 'rejected' ? 'nextTurn' : 'followUp',
+          },
+        )
+      } finally {
+        onSettled()
+        release(toolCallId, controller)
+      }
+    })
+  }
+  const restore = (ctx: ExtensionContext) => {
+    reset()
+    if (ctx.mode !== 'tui') return
+    for (const question of pendingAsyncQuestions(ctx.sessionManager.getBranch())) {
+      openAsync(question.toolCallId, question.input, ctx, track(question.toolCallId), () => {})
+    }
+  }
+  pi.on('session_start', (_event, ctx) => restore(ctx))
+  pi.on('session_tree', (_event, ctx) => restore(ctx))
   pi.on('session_shutdown', () => {
     reset()
     unsubscribe()
@@ -348,9 +471,11 @@ export default function ask(pi: ExtensionAPI): void {
           details,
         }
       }
-      const controller = new AbortController()
+      const runAsync = params.runAsync === true
+      const controller = track(toolCallId)
       const abort = () => {
         paused = true
+        if (runAsync) markSettled(toolCallId)
         controller.abort()
         pending.delete(toolCallId)
         publishState()
@@ -361,66 +486,11 @@ export default function ask(pi: ExtensionAPI): void {
         () => signal?.removeEventListener('abort', abort),
         { once: true },
       )
-      pending.set(toolCallId, controller)
       if (signal?.aborted) abort()
-      publishState()
-      const finish = () => {
-        signal?.removeEventListener('abort', abort)
-        if (pending.get(toolCallId) === controller) {
-          pending.delete(toolCallId)
-          publishState()
-        }
-      }
-      const resolveQuestion = async () => {
-        const result = await promptUser(pi, params, ctx, controller.signal)
-        if (!controller.signal.aborted && result.kind === 'skipped') paused = true
-        return resultFromPrompt(params, result)
-      }
-      if (params.runAsync === true) {
-        queue.enqueue(async () => {
-          let details: AskQuestionDetails
-          try {
-            details = await resolveQuestion()
-          } catch (error) {
-            details = errorDetails(
-              params.title,
-              params.questions,
-              error instanceof Error ? error.message : String(error),
-            )
-          }
-          try {
-            if (controller.signal.aborted) return
-            asyncResults.set(toolCallId, details)
-            if (rail.active) {
-              rail.report({
-                detail: railDetail(params.questions),
-                doneLabel: 'Ask',
-                runningLabel: 'Ask',
-                summary: railSummary(details),
-                status: details.status === 'error' ? 'error' : 'ok',
-                toolCallId,
-                iconKey: 'ask',
-                toolName: 'AskQuestion',
-              })
-            }
-            asyncInvalidators.get(toolCallId)?.()
-            asyncInvalidators.delete(toolCallId)
-            pi.sendMessage(
-              {
-                customType: asyncMessageType,
-                content: resultText(details),
-                display: false,
-                details,
-              },
-              {
-                triggerTurn: details.status !== 'rejected',
-                deliverAs: details.status === 'rejected' ? 'nextTurn' : 'followUp',
-              },
-            )
-          } finally {
-            finish()
-          }
-        })
+      if (runAsync) {
+        openAsync(toolCallId, params, ctx, controller, () =>
+          signal?.removeEventListener('abort', abort),
+        )
         const details = asyncDetails(params.title, params.questions, toolCallId)
         return {
           content: [{ type: 'text', text: resultText(details) }],
@@ -428,13 +498,14 @@ export default function ask(pi: ExtensionAPI): void {
         }
       }
       try {
-        const details = await resolveQuestion()
+        const details = await resolveQuestion(params, ctx, controller)
         return {
           content: [{ type: 'text', text: resultText(details) }],
           details,
         }
       } finally {
-        finish()
+        signal?.removeEventListener('abort', abort)
+        release(toolCallId, controller)
       }
     },
     renderShell: 'self',

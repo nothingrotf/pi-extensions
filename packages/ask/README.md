@@ -90,7 +90,9 @@ Ask publishes `ask:state` on Pi's shared event bus:
 
 The `ask:state:request` event requests the current snapshot. Session start, tree navigation, and shutdown clear the state. They also discard old queued forms and late async completions.
 
-Historical tool results do not restore the state because those forms are no longer open.
+Session start and tree navigation then reopen every `runAsync` form that is still open on the active branch, in the order the model asked them.
+Ask records an `ask-question-settled` session entry when an async form is answered, skipped, fails, or is cancelled. Settled forms never reopen.
+Synchronous forms and forms in print or JSON mode do not reopen.
 
 Todo uses this optional protocol to avoid reminders while questions are outstanding or the user has skipped a form. Neither package requires the other.
 
