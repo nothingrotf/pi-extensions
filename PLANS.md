@@ -7,7 +7,7 @@ O objetivo é aproveitar mecanismos úteis sem substituir componentes locais que
 
 A análise recomenda melhorias, experimentos e exclusões.
 A criação deste documento não autoriza a implementação integral do backlog, instalações, publicação ou mudanças de configuração.
-PLAN-00, PLAN-16, PLAN-20 e a fase PLAN-04a estão concluídos.
+PLAN-00, PLAN-05, PLAN-16, PLAN-20 e a fase PLAN-04a estão concluídos.
 PLAN-17 e PLAN-18 estão concluídos, exceto os critérios marcados como pendentes.
 Os demais itens permanecem pendentes. A seção 7 registra o estado de cada item.
 
@@ -328,7 +328,7 @@ Os IDs permanecem estáveis. Itens novos recebem números posteriores, mesmo qua
 | PLAN-02 | Selecionar exposição de ferramentas por profile.         | P1                         | Médio           | PLAN-01                                      |
 | PLAN-03 | Descobrir skills e referências sob demanda.              | P1                         | Médio           | PLAN-01                                      |
 | PLAN-04 | Evoluir decisões humanas no `ask`. PLAN-04a concluído.   | P1                         | Médio a alto    | PLAN-01                                      |
-| PLAN-05 | Carregar instruções por diretório explorado.             | P1                         | Médio           | PLAN-01                                      |
+| PLAN-05 | Carregar instruções por diretório. Concluído.            | P1                         | Médio           | PLAN-01                                      |
 | PLAN-06 | Mostrar previsão de cache e presets seguros.             | P2                         | Pequeno a médio | PLAN-01                                      |
 | PLAN-07 | Oferecer conversas laterais controladas pelo usuário.    | P2                         | Médio           | PLAN-01                                      |
 | PLAN-08 | Marcar e encerrar explorações por branch.                | P2                         | Médio           | PLAN-01                                      |
@@ -540,13 +540,31 @@ O loader externo acrescenta instruções novas ou alteradas durante a descoberta
 
 **Critérios de aceite:**
 
-- [ ] Leituras multifile carregam as cadeias correspondentes sem duplicatas.
-- [ ] Conteúdo alterado pode ser reapresentado sem reapresentar arquivos idênticos.
-- [ ] Symlinks, caminhos externos e worktrees respeitam o limite definido.
-- [ ] Listagens não carregam indiscriminadamente instruções de todos os filhos.
-- [ ] Chamadas aninhadas recebem o mesmo tratamento das chamadas diretas.
-- [ ] Instruções descobertas não autorizam retroativamente uma operação já executada.
-- [ ] O loader respeita o modelo nativo de trust e o escopo das instruções.
+- [x] Leituras multifile carregam as cadeias correspondentes sem duplicatas.
+- [x] Conteúdo alterado pode ser reapresentado sem reapresentar arquivos idênticos.
+- [x] Symlinks, caminhos externos e worktrees respeitam o limite definido.
+- [x] Listagens não carregam indiscriminadamente instruções de todos os filhos.
+- [x] Chamadas aninhadas recebem o mesmo tratamento das chamadas diretas.
+- [x] Instruções descobertas não autorizam retroativamente uma operação já executada.
+- [ ] O loader respeita o modelo nativo de trust e o escopo das instruções. O código consulta `isProjectTrusted()`, mas nenhum teste cobre um projeto não confiável.
+
+**Estado:** implementado no package [`subdir-context`](packages/subdir-context/README.md).
+
+**Decisões:**
+
+- Os nomes e a ordem dos arquivos seguem o Pi: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md` e `CLAUDE.MD`.
+- Só diretórios abaixo do diretório da sessão contam. Caminhos e symlinks que saem dele não carregam nada.
+- Além das ferramentas de leitura, `write`, `edit` e `patch` também carregam a cadeia. `bash` não carrega.
+- A entrega usa uma mensagem customizada depois dos resultados do turno, sem reconstruir o system prompt.
+- Um arquivo com conteúdo igual a um arquivo já carregado pelo Pi é ignorado. Isso cobre a cópia do `AGENTS.md` em worktrees aninhados.
+- Tasks do `subagent` não carregam a extensão, porque os filhos usam `noExtensions`.
+
+**Evidência:**
+
+- `subdir-context/test/session.test.ts` executa sessões reais do Pi com provider simulado.
+- Os testes cobrem cadeia externa para interna, repetição, `paths` do `filetools`, codemode, retomada com arquivo alterado, symlinks, cópias e `--no-context-files`.
+- Uma sessão real em tmux carregou a extensão e mostrou a linha `Loaded instructions: packages/hud/AGENTS.md`.
+- O caminho completo com um modelo real não foi executado, para evitar custo.
 
 **Risco concreto:** o código externo reconhece `path`, mas não o formato multifile `paths`.
 A descoberta externa ocorre após o resultado da ferramenta.
@@ -994,7 +1012,7 @@ Isso permite atribuir ganhos e regressões ao mecanismo correto.
 
 ### Etapa 2. Melhorar decisões e contexto local
 
-PLAN-04a e PLAN-18 estão concluídos. Execute PLAN-05.
+PLAN-04a, PLAN-05 e PLAN-18 estão concluídos.
 Avance PLAN-19 assim que existir uma API pública do Pi.
 Execute PLAN-04b a PLAN-04d depois da fase de persistência.
 Preserve os contratos existentes de `ask`, `todo`, `goal` e capabilities.
