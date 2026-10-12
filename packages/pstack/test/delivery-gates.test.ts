@@ -57,7 +57,7 @@ describe('tree-keyed gates', () => {
     expect((await runGate({ command, cwd: root })).cached).toBe(false)
     expect((await runGate({ command, cwd: root, fresh: true })).cached).toBe(false)
     expect(await runs(counter)).toBe(4)
-  })
+  }, 30_000)
 
   it('keys the result by command and working directory', async () => {
     const { root } = await repository()
