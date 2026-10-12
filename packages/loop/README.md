@@ -58,7 +58,7 @@ The agent uses `loop_next` after each dynamic tick. It selects a fallback delay 
 
 The repeat loop waits 800 ms after each settled turn, then re-sends the prompt. While the repeat loop is enabled, every prompt that the user types becomes the new loop prompt.
 
-An aborted turn (Esc) pauses the loop. A session resume pauses the loop. Use `/loop resume` or send a prompt to continue. A repeat loop and a scheduled loop cannot run at the same time.
+An aborted turn (Esc) pauses the loop, including a cancel during a pending retry or compaction. A session resume pauses the loop. Use `/loop resume` or send a prompt to continue. A repeat loop and a scheduled loop cannot run at the same time.
 
 ## Control the loop
 

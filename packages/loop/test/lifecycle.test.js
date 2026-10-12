@@ -120,10 +120,6 @@ function latestRepeat(instance) {
   return entry.data
 }
 
-function assistant(stopReason = 'stop') {
-  return { role: 'assistant', content: [], stopReason }
-}
-
 function latestState(instance) {
   const entry = instance.entries.at(-1)
   if (entry === undefined) {
@@ -487,10 +483,9 @@ describe('repeat loop', () => {
       await instance.emit('input', { text: 'from extension', source: 'extension' })
       expect(latestRepeat(instance).prompt).toBe('keep going')
 
-      await instance.emit('agent_end', { messages: [assistant('aborted')] })
+      await instance.emit('agent_settled', { aborted: true })
       expect(latestRepeat(instance).paused).toBe(true)
       expect(instance.notices.at(-1).text).toContain('Repeat loop paused.')
-      await instance.emit('agent_settled')
       await vi.advanceTimersByTimeAsync(800)
       expect(instance.messages).toHaveLength(0)
 

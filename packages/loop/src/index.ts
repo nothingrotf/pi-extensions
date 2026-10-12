@@ -566,25 +566,6 @@ export default function loop(pi: ExtensionAPI): void {
     cancelRepeatTimer()
   })
 
-  pi.on('agent_end', (event, ctx) => {
-    if (repeat?.enabled !== true || repeat.paused) {
-      return
-    }
-    for (let index = event.messages.length - 1; index >= 0; index -= 1) {
-      const message = event.messages[index]
-      if (message?.role !== 'assistant') {
-        continue
-      }
-      if (message.stopReason === 'aborted') {
-        cancelRepeatTimer()
-        repeat = pauseRepeat(repeat)
-        persistRepeat(ctx)
-        ctx.ui.notify('Repeat loop paused. Send a prompt or /loop resume to continue.', 'info')
-      }
-      return
-    }
-  })
-
   pi.on('before_agent_start', (event, ctx) => {
     if (!supportsLoops(ctx) || !isActiveLoop(state) || !state.inFlight) {
       return
@@ -592,7 +573,13 @@ export default function loop(pi: ExtensionAPI): void {
     return { systemPrompt: `${event.systemPrompt}\n\n${activeInstructions(state)}` }
   })
 
-  pi.on('agent_settled', (_event, ctx) => {
+  pi.on('agent_settled', (event, ctx) => {
+    if (event.aborted && repeat?.enabled === true && !repeat.paused) {
+      cancelRepeatTimer()
+      repeat = pauseRepeat(repeat)
+      persistRepeat(ctx)
+      ctx.ui.notify('Repeat loop paused. Send a prompt or /loop resume to continue.', 'info')
+    }
     if (!isActiveLoop(state)) {
       scheduleRepeat(ctx)
       return
