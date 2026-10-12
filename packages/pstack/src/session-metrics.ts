@@ -36,6 +36,7 @@ const NestedCallsSchema = Type.Object(
 const MessageSchema = Type.Object(
   {
     content: Type.Optional(Type.Array(ContentPartSchema)),
+    durationMs: Type.Optional(Type.Number({ minimum: 0 })),
     model: Type.Optional(Type.String()),
     nestedCalls: Type.Optional(NestedCallsSchema),
     role: Type.String(),
@@ -61,6 +62,9 @@ type SessionMessage = Static<typeof MessageSchema>
 
 export interface ToolUsageMetric {
   calls: number
+  /** Milliseconds of `execute()` recorded by Pi, summed over the results that carry them. */
+  executionMs: number
+  measuredCalls: number
   name: string
   nestedCalls: number
   resultChars: number
@@ -75,6 +79,14 @@ export interface SessionMetrics {
   modelMs: number
   /** Milliseconds attributed to tool execution, measured as the gap before each tool result. */
   toolMs: number
+  /** Response milliseconds that Pi recorded on assistant messages, a measured value. */
+  measuredModelMs: number
+  /** Assistant messages that carry a recorded response time. */
+  measuredModelTurns: number
+  /** Execution milliseconds that Pi recorded on tool results, summed per call. */
+  measuredToolMs: number
+  /** Tool results that carry a recorded execution time. */
+  measuredToolCalls: number
   models: readonly string[]
   cacheReadTokens: number
   costUsd: number
@@ -95,13 +107,15 @@ export interface SessionMetrics {
 
 interface MutableToolUsage {
   calls: number
+  executionMs: number
+  measuredCalls: number
   nestedCalls: number
   resultChars: number
   wallMs: number
 }
 
 function emptyUsage(): MutableToolUsage {
-  return { calls: 0, nestedCalls: 0, resultChars: 0, wallMs: 0 }
+  return { calls: 0, executionMs: 0, measuredCalls: 0, nestedCalls: 0, resultChars: 0, wallMs: 0 }
 }
 
 const rejectionMarker = 'Your terminal delivery report was rejected'
@@ -175,6 +189,10 @@ export function sessionMetrics(content: string): SessionMetrics {
   let outputTokens = 0
   let modelMs = 0
   let toolMs = 0
+  let measuredModelMs = 0
+  let measuredModelTurns = 0
+  let measuredToolMs = 0
+  let measuredToolCalls = 0
   let readResultChars = 0
   let singleCallTurns = 0
   let terminalRejections = 0
@@ -204,6 +222,10 @@ export function sessionMetrics(content: string): SessionMetrics {
     if (message.role === 'assistant') {
       assistantTurns += 1
       modelMs += gap
+      if (message.durationMs !== undefined) {
+        measuredModelMs += message.durationMs
+        measuredModelTurns += 1
+      }
       if (message.model !== undefined) models.add(message.model)
       const totals = usageOf(message)
       cacheReadTokens += totals.cacheRead ?? 0
@@ -249,6 +271,12 @@ export function sessionMetrics(content: string): SessionMetrics {
     if (call?.startedAt !== undefined && currentMs !== undefined) {
       current.wallMs += Math.max(0, currentMs - call.startedAt)
     }
+    if (message.durationMs !== undefined) {
+      current.executionMs += message.durationMs
+      current.measuredCalls += 1
+      measuredToolMs += message.durationMs
+      measuredToolCalls += 1
+    }
     usage.set(name, current)
   }
 
@@ -261,6 +289,10 @@ export function sessionMetrics(content: string): SessionMetrics {
     durationMs: start === undefined || finish === undefined ? 0 : Math.max(0, finish - start),
     finishedAt,
     inputTokens,
+    measuredModelMs,
+    measuredModelTurns,
+    measuredToolCalls,
+    measuredToolMs,
     modelMs,
     models: [...models].sort(),
     nestedToolCalls,
@@ -320,6 +352,16 @@ export function compareSessionMetrics(
   const metrics = [
     compareValue('model min', baseline.modelMs / 60_000, candidate.modelMs / 60_000),
     compareValue('tool min', baseline.toolMs / 60_000, candidate.toolMs / 60_000),
+    compareValue(
+      'measured model min',
+      baseline.measuredModelMs / 60_000,
+      candidate.measuredModelMs / 60_000,
+    ),
+    compareValue(
+      'measured tool min',
+      baseline.measuredToolMs / 60_000,
+      candidate.measuredToolMs / 60_000,
+    ),
     compareValue('wall min', baseline.durationMs / 60_000, candidate.durationMs / 60_000),
     compareValue('turns', baseline.assistantTurns, candidate.assistantTurns),
     compareValue('single-call turns', baseline.singleCallTurns, candidate.singleCallTurns),
@@ -378,15 +420,20 @@ export function formatSessionMetrics(metrics: SessionMetrics): string {
   const lines = [
     `window ${metrics.startedAt ?? 'unknown'} -> ${metrics.finishedAt ?? 'unknown'} (${minutes(metrics.durationMs)})`,
     `models ${metrics.models.join(', ') || 'unknown'}`,
-    `model ${minutes(metrics.modelMs)} (${share}%) | tool ${minutes(metrics.toolMs)}`,
+    `model ${minutes(metrics.modelMs)} (${share}%) | tool ${minutes(metrics.toolMs)} (inferred from entry gaps)`,
+    `measured model ${minutes(metrics.measuredModelMs)} over ${metrics.measuredModelTurns}/${metrics.assistantTurns} turns | measured tool ${minutes(metrics.measuredToolMs)} over ${metrics.measuredToolCalls} results`,
     `turns ${metrics.assistantTurns} | single-call turns ${metrics.singleCallTurns} | tool calls ${metrics.toolCalls} | nested ${metrics.nestedToolCalls} | ${perTurn}s per turn`,
     `read result chars ${metrics.readResultChars} | cache read ${metrics.cacheReadTokens} | output ${metrics.outputTokens}`,
     `cost ${metrics.costUsd.toFixed(2)} USD (tools ${metrics.toolCostUsd.toFixed(2)}) | terminal rejections ${metrics.terminalRejections}`,
   ]
   for (const tool of metrics.tools.slice(0, 8)) {
     const nested = tool.nestedCalls === 0 ? '' : ` + ${tool.nestedCalls} nested`
+    const measured =
+      tool.measuredCalls === 0
+        ? ''
+        : `, measured ${minutes(tool.executionMs)} over ${tool.measuredCalls}`
     lines.push(
-      `  ${tool.name}: ${tool.calls} calls${nested}, ${minutes(tool.wallMs)}, ${tool.resultChars} chars`,
+      `  ${tool.name}: ${tool.calls} calls${nested}, ${minutes(tool.wallMs)}${measured}, ${tool.resultChars} chars`,
     )
   }
   return lines.join('\n')

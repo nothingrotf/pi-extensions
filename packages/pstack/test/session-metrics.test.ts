@@ -16,6 +16,7 @@ interface TranscriptPart {
 
 interface TranscriptMessage {
   content?: TranscriptPart[]
+  durationMs?: number
   model?: string
   role: string
   toolCallId?: string
@@ -197,6 +198,53 @@ describe('session metrics', () => {
     expect(metrics.tools.map((tool) => tool.name)).toEqual(['bash'])
     expect(metrics.modelMs).toBe(20_000)
     expect(metrics.toolMs).toBe(6_000)
+  })
+
+  it('separates times recorded by Pi from times inferred from entry gaps', () => {
+    const measured = [
+      entry('2026-09-17T00:00:00.000Z', {
+        content: [{ text: 'work', type: 'text' }],
+        role: 'user',
+      }),
+      entry('2026-09-17T00:00:10.000Z', {
+        content: [
+          { id: 'a', name: 'read', type: 'toolCall' },
+          { id: 'b', name: 'read', type: 'toolCall' },
+        ],
+        durationMs: 8_000,
+        role: 'assistant',
+      }),
+      entry('2026-09-17T00:00:12.000Z', {
+        content: [{ text: 'one', type: 'text' }],
+        durationMs: 1_500,
+        role: 'toolResult',
+        toolCallId: 'a',
+        toolName: 'read',
+      }),
+      entry('2026-09-17T00:00:13.000Z', {
+        content: [{ text: 'two', type: 'text' }],
+        role: 'toolResult',
+        toolCallId: 'b',
+        toolName: 'read',
+      }),
+      entry('2026-09-17T00:00:20.000Z', { content: [], role: 'assistant' }),
+    ].join('\n')
+    const metrics = sessionMetrics(measured)
+
+    expect(metrics.modelMs).toBe(10_000 + 7_000)
+    expect(metrics.measuredModelMs).toBe(8_000)
+    expect(metrics.measuredModelTurns).toBe(1)
+    expect(metrics.toolMs).toBe(3_000)
+    expect(metrics.measuredToolMs).toBe(1_500)
+    expect(metrics.measuredToolCalls).toBe(1)
+    expect(metrics.tools.find((tool) => tool.name === 'read')).toMatchObject({
+      executionMs: 1_500,
+      measuredCalls: 1,
+    })
+    const report = formatSessionMetrics(metrics)
+    expect(report).toContain('(inferred from entry gaps)')
+    expect(report).toContain('measured model 0.1 min over 1/2 turns')
+    expect(report).toContain('measured tool 0.0 min over 1 results')
   })
 
   it('reports an empty session without inventing a window', () => {
