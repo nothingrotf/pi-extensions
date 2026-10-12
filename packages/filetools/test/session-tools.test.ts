@@ -1,4 +1,4 @@
-import { readFile, rm, symlink } from 'node:fs/promises'
+import { readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vite-plus/test'
@@ -243,6 +243,29 @@ describe('codemode scripts', () => {
       'patch:ok',
     ])
     expect(await readFile(join(harness.cwd, 'a.ts'), 'utf8')).toBe('export const a = 2\n')
+  })
+
+  it('returns image blocks that a script can show', async () => {
+    harness = await createFiletoolsHarness([], {
+      codemode: true,
+      tools: ['read', 'codemode'],
+    })
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    await writeFile(join(harness.cwd, 'dot.png'), Buffer.from(png, 'base64'))
+
+    const result = await harness.runScript(
+      [
+        "const read = await tools.read({ path: 'dot.png' })",
+        'const [file] = read.files',
+        'image(file.imageBlocks[0])',
+        'return { images: file.images, mimeType: file.imageBlocks[0].mimeType }',
+      ].join('\n'),
+    )
+
+    expect(result.isError).toBe(false)
+    expect(result.text).toContain('{"images":1,"mimeType":"image/png"}')
+    expect(result.text).not.toContain(png)
   })
 
   it('cannot reach patch from a script when patch is inactive', async () => {

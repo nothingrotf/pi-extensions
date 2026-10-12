@@ -61,7 +61,7 @@ Two guards protect the workspace:
 Both tools declare an `outputSchema` and return `structuredContent`, so Pi `codemode` scripts receive data instead of text.
 The model still receives the same text content.
 
-- `read` resolves to `{ files, unread, value? }`. Each file record has `path`, `text`, `images`, and `bounded`. `unread` lists paths left for another call after the multi-path budget. `value` holds the parsed JSON selection.
+- `read` resolves to `{ files, unread, value? }`. Each file record has `path`, `text`, `images`, and `bounded`. A file with images also has `imageBlocks`, which codemode `image()` shows. `unread` lists paths left for another call after the multi-path budget. `value` holds the parsed JSON selection.
 - `patch` resolves to `{ files }` with the same fields as the text report: `path`, `created`, `edits`, `lineDelta`, and an optional `warning`.
 
 ```js

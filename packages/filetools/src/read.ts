@@ -57,6 +57,15 @@ const ReadFileOutputSchema = Type.Object(
       description: 'Text returned to the model for the file, including any continuation notice.',
     }),
     images: Type.Number({ description: 'Image blocks returned to the model for the file.' }),
+    imageBlocks: Type.Optional(
+      Type.Array(
+        Type.Object(
+          { data: Type.String(), mimeType: Type.String(), type: Type.Literal('image') },
+          { additionalProperties: false },
+        ),
+        { description: 'Image blocks of the file that codemode image() shows.' },
+      ),
+    ),
     bounded: Type.Boolean({
       description: 'Whether a large file returned only its head and a declaration map.',
     }),
@@ -164,13 +173,20 @@ type ReadDefinition = ReturnType<typeof createReadToolDefinition>
 type Block = Awaited<ReturnType<ReadDefinition['execute']>>['content'][number]
 
 function readFileOutput(path: string, blocks: readonly Block[], bounded: boolean): ReadFileOutput {
-  let images = 0
+  const imageBlocks: { data: string; mimeType: string; type: 'image' }[] = []
   const text: string[] = []
   for (const block of blocks) {
     if (block.type === 'text') text.push(block.text)
-    else images += 1
+    else imageBlocks.push({ data: block.data, mimeType: block.mimeType, type: 'image' })
   }
-  return { bounded, images, path, text: text.join('\n') }
+  const output: ReadFileOutput = {
+    bounded,
+    images: imageBlocks.length,
+    path,
+    text: text.join('\n'),
+  }
+  if (imageBlocks.length > 0) output.imageBlocks = imageBlocks
+  return output
 }
 
 function parseProjection(text: string): JsonValue {
