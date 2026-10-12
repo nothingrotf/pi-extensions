@@ -308,16 +308,6 @@ function renderGoalResult(details: GoalToolDetails, theme: Theme): string {
   return lines.join('\n')
 }
 
-function lastAssistantAborted(messages: readonly { role: string; stopReason?: string }[]): boolean {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message?.role === 'assistant') {
-      return message.stopReason === 'aborted'
-    }
-  }
-  return false
-}
-
 export interface GoalExtensionDependencies {
   checkRunner?: GoalCheckRunner
   reviewer?: GoalReviewer
@@ -1188,17 +1178,19 @@ function registerGoalExtension(pi: ExtensionAPI, dependencies: GoalExtensionDepe
     await runtime.onToolCompleted(event.toolName)
   })
 
-  pi.on('agent_end', async (event, ctx) => {
+  pi.on('agent_end', async (_event, ctx) => {
     coderTools.clear()
     context = ctx
     await runtime.onAgentEnd({ currentUsage: usage })
-    if (!lastAssistantAborted(event.messages)) return
-    await runtime.onTaskAborted({ reason: 'interrupted' })
-    if (isPaused()) ctx.ui.notify('Goal paused. Use /goal resume to continue.', 'info')
   })
 
-  pi.on('agent_settled', (_event, ctx) => {
+  pi.on('agent_settled', async (event, ctx) => {
     context = ctx
+    if (event.aborted) {
+      await runtime.onTaskAborted({ reason: 'interrupted' })
+      if (isPaused()) ctx.ui.notify('Goal paused. Use /goal resume to continue.', 'info')
+      return
+    }
     if (state?.enabled === true && isAccountingStatus(state.goal)) launchReview(ctx)
   })
 

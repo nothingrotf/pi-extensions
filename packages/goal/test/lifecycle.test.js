@@ -319,7 +319,9 @@ async function runTurn(instance, options = {}) {
     })
   }
   await instance.emit('agent_end', { messages: [message] })
-  await instance.emit('agent_settled')
+  await instance.emit('agent_settled', {
+    aborted: options.settledAborted ?? options.stopReason === 'aborted',
+  })
   await flushAsync()
 }
 
@@ -831,6 +833,18 @@ describe('goal lifecycle', () => {
     await instance.emit('session_start', { reason: 'startup' })
     await instance.command('goal', 'long task')
     await runTurn(instance, { stopReason: 'aborted', usage: { output: 4 } })
+    expect(instance.reviewer.calls).toHaveLength(0)
+    expect(latestState(instance)).toMatchObject({
+      enabled: false,
+      goal: { status: 'paused', tokensUsed: 4 },
+    })
+  })
+
+  test('pauses a turn cancelled while a retry was pending', async () => {
+    const instance = harness()
+    await instance.emit('session_start', { reason: 'startup' })
+    await instance.command('goal', 'long task')
+    await runTurn(instance, { settledAborted: true, stopReason: 'error', usage: { output: 4 } })
     expect(instance.reviewer.calls).toHaveLength(0)
     expect(latestState(instance)).toMatchObject({
       enabled: false,
