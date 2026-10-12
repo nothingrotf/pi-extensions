@@ -7,8 +7,9 @@ O objetivo é aproveitar mecanismos úteis sem substituir componentes locais que
 
 A análise recomenda melhorias, experimentos e exclusões.
 A criação deste documento não autoriza a implementação integral do backlog, instalações, publicação ou mudanças de configuração.
-PLAN-00 está concluído. A correção de `outputSchema` do PLAN-17 está concluída.
-Os demais itens permanecem pendentes.
+PLAN-00, PLAN-16, PLAN-20 e a fase PLAN-04a estão concluídos.
+PLAN-17 e PLAN-18 estão concluídos, exceto os critérios marcados como pendentes.
+Os demais itens permanecem pendentes. A seção 7 registra o estado de cada item.
 
 ### Referências da análise
 
@@ -221,13 +222,13 @@ A migração do workspace é pequena e deve preceder o restante do backlog.
    - `railTool` agora preserva todos os campos nativos e substitui apenas os campos de renderização.
 2. **Lacuna no `ask`:** perguntas usam `ctx.ui.custom`, que não marca `blocked` no OSC 7501.
    - Terminais e dashboards mostram `working` enquanto a sessão espera o usuário.
-3. **Lacuna no `hud`:** chamadas aninhadas medem duração com `Date.now()`.
+3. **Lacuna no `hud`, corrigida:** chamadas aninhadas mediam duração com `Date.now()`.
    - Após reload, a duração vem da diferença entre timestamps e inclui tempo fora de `execute()`.
-4. **Lacuna no `pstack`:** `session-metrics.ts` atribui tempo pelos intervalos entre entradas da sessão.
+4. **Lacuna no `pstack`, corrigida:** `session-metrics.ts` atribuía tempo só pelos intervalos entre entradas da sessão.
    - O runtime 1.1 grava `durationMs` medido em mensagens de assistant e de resultado de ferramenta.
-5. **Lacuna em `goal` e `loop`:** ambos detectam cancelamento pela última mensagem com `stopReason: 'aborted'`.
+5. **Lacuna em `goal` e `loop`, corrigida:** ambos detectavam cancelamento pela última mensagem com `stopReason: 'aborted'`.
    - `agent_settled.aborted` informa o resultado final, inclusive depois de retries e compactação.
-6. **Lacuna no `filetools`:** o `read` substituto devolve a scripts apenas a contagem de imagens.
+6. **Lacuna no `filetools`, corrigida:** o `read` substituto devolvia a scripts apenas a contagem de imagens.
    - O `read` nativo do 1.0.4 devolve um bloco que `image()` aceita.
 
 ### Oportunidades por package
@@ -314,35 +315,35 @@ Fontes locais:
 
 ## 7. Backlog proposto
 
-PLAN-00 está concluído. PLAN-17 está parcialmente concluído. Os demais itens permanecem pendentes.
+A coluna de proposta indica os itens concluídos. Critérios sem evidência continuam desmarcados.
 Os esforços são estimativas relativas, não compromissos de prazo.
 As decisões técnicas abertas devem ser resolvidas no escopo de cada implementação.
 
 Os IDs permanecem estáveis. Itens novos recebem números posteriores, mesmo quando têm prioridade maior.
 
-| ID      | Proposta                                                  | Prioridade                 | Esforço         | Dependências                                 |
-| ------- | --------------------------------------------------------- | -------------------------- | --------------- | -------------------------------------------- |
-| PLAN-00 | Alinhar o workspace ao Pi 1.1. Concluído.                 | P0                         | Pequeno         | Nenhuma                                      |
-| PLAN-01 | Estabelecer baseline de compatibilidade e avaliação.      | P0                         | Pequeno a médio | PLAN-00                                      |
-| PLAN-02 | Selecionar exposição de ferramentas por profile.          | P1                         | Médio           | PLAN-01                                      |
-| PLAN-03 | Descobrir skills e referências sob demanda.               | P1                         | Médio           | PLAN-01                                      |
-| PLAN-04 | Evoluir decisões humanas no `ask`.                        | P1                         | Médio a alto    | PLAN-01                                      |
-| PLAN-05 | Carregar instruções por diretório explorado.              | P1                         | Médio           | PLAN-01                                      |
-| PLAN-06 | Mostrar previsão de cache e presets seguros.              | P2                         | Pequeno a médio | PLAN-01                                      |
-| PLAN-07 | Oferecer conversas laterais controladas pelo usuário.     | P2                         | Médio           | PLAN-01                                      |
-| PLAN-08 | Marcar e encerrar explorações por branch.                 | P2                         | Médio           | PLAN-01                                      |
-| PLAN-09 | Avaliar checkpoints explícitos e novas janelas.           | Experimental               | Médio a alto    | PLAN-01                                      |
-| PLAN-10 | Avaliar memória durável com curadoria humana.             | Experimental               | Médio           | PLAN-01                                      |
-| PLAN-11 | Autorizar operações pela ação exata.                      | P2, ou P1 conforme o risco | Alto            | PLAN-01                                      |
-| PLAN-12 | Acrescentar discussões persistentes por assunto.          | Condicional                | Alto            | PLAN-01                                      |
-| PLAN-13 | Executar trabalho não confiável em sandbox real.          | Condicional                | Muito alto      | PLAN-01 e definição da política de segurança |
-| PLAN-14 | Avaliar esforço adaptativo com limites humanos.           | Experimental               | Médio           | PLAN-01                                      |
-| PLAN-15 | Avaliar pequenas melhorias de apresentação.               | P3                         | Pequeno a médio | PLAN-01                                      |
-| PLAN-16 | Corrigir inventário e documentar contratos de integração. | P1 documental              | Pequeno         | Nenhuma                                      |
-| PLAN-17 | Renderizar o rail sem substituir ferramentas nativas.     | P1, defeito corrigido      | Médio           | PLAN-00                                      |
-| PLAN-18 | Usar tempos e cancelamentos medidos pelo runtime.         | P2                         | Pequeno a médio | PLAN-00                                      |
-| PLAN-19 | Reportar bloqueio durante perguntas humanas.              | P2                         | Pequeno         | PLAN-00 e API pública do Pi                  |
-| PLAN-20 | Devolver imagens a scripts no `filetools`.                | P3                         | Pequeno         | PLAN-00                                      |
+| ID      | Proposta                                                 | Prioridade                 | Esforço         | Dependências                                 |
+| ------- | -------------------------------------------------------- | -------------------------- | --------------- | -------------------------------------------- |
+| PLAN-00 | Alinhar o workspace ao Pi 1.1. Concluído.                | P0                         | Pequeno         | Nenhuma                                      |
+| PLAN-01 | Estabelecer baseline de compatibilidade e avaliação.     | P0                         | Pequeno a médio | PLAN-00                                      |
+| PLAN-02 | Selecionar exposição de ferramentas por profile.         | P1                         | Médio           | PLAN-01                                      |
+| PLAN-03 | Descobrir skills e referências sob demanda.              | P1                         | Médio           | PLAN-01                                      |
+| PLAN-04 | Evoluir decisões humanas no `ask`. PLAN-04a concluído.   | P1                         | Médio a alto    | PLAN-01                                      |
+| PLAN-05 | Carregar instruções por diretório explorado.             | P1                         | Médio           | PLAN-01                                      |
+| PLAN-06 | Mostrar previsão de cache e presets seguros.             | P2                         | Pequeno a médio | PLAN-01                                      |
+| PLAN-07 | Oferecer conversas laterais controladas pelo usuário.    | P2                         | Médio           | PLAN-01                                      |
+| PLAN-08 | Marcar e encerrar explorações por branch.                | P2                         | Médio           | PLAN-01                                      |
+| PLAN-09 | Avaliar checkpoints explícitos e novas janelas.          | Experimental               | Médio a alto    | PLAN-01                                      |
+| PLAN-10 | Avaliar memória durável com curadoria humana.            | Experimental               | Médio           | PLAN-01                                      |
+| PLAN-11 | Autorizar operações pela ação exata.                     | P2, ou P1 conforme o risco | Alto            | PLAN-01                                      |
+| PLAN-12 | Acrescentar discussões persistentes por assunto.         | Condicional                | Alto            | PLAN-01                                      |
+| PLAN-13 | Executar trabalho não confiável em sandbox real.         | Condicional                | Muito alto      | PLAN-01 e definição da política de segurança |
+| PLAN-14 | Avaliar esforço adaptativo com limites humanos.          | Experimental               | Médio           | PLAN-01                                      |
+| PLAN-15 | Avaliar pequenas melhorias de apresentação.              | P3                         | Pequeno a médio | PLAN-01                                      |
+| PLAN-16 | Corrigir inventário e contratos. Concluído.              | P1 documental              | Pequeno         | Nenhuma                                      |
+| PLAN-17 | Renderizar o rail sem substituir ferramentas. Concluído. | P1, defeito corrigido      | Médio           | PLAN-00                                      |
+| PLAN-18 | Usar tempos e cancelamentos medidos. Concluído.          | P2                         | Pequeno a médio | PLAN-00                                      |
+| PLAN-19 | Reportar bloqueio durante perguntas humanas. Bloqueado.  | P2                         | Pequeno         | PLAN-00 e API pública do Pi                  |
+| PLAN-20 | Devolver imagens a scripts no `filetools`. Concluído.    | P3                         | Pequeno         | PLAN-00                                      |
 
 ### PLAN-00. Alinhar o workspace ao Pi 1.1
 
@@ -426,7 +427,7 @@ O Pi 1.x já oferece `hiddenTools`, `ToolLoadout.getPromptGuidelines()` e o hint
 **Critérios de aceite:**
 
 - [ ] Scripts não alcançam ferramentas removidas pela política read-only.
-- [ ] Ferramentas MCP não entram em Tasks pela semântica de allowlist do 1.0.4.
+- [x] Ferramentas MCP não entram em Tasks pela semântica de allowlist do 1.0.4. O teste do PLAN-00 cobre o invariante.
 - [ ] Scripts não passam a despachar Tasks ou responder decisões do coordenador.
 - [ ] Descoberta não amplia permissões em sessões existentes.
 - [ ] Reload e alterações permitidas de catálogo não deixam ajuda ou schemas obsoletos.
@@ -479,7 +480,7 @@ O contrato atual também não separa evidências, comentários e handoffs humano
 
 **Fases:** entregue e verifique cada fase separadamente.
 
-1. **PLAN-04a:** persista perguntas pendentes com escopo de sessão e branch. Esta fase corrige um defeito atual.
+1. **PLAN-04a, concluída:** persista perguntas pendentes com escopo de sessão e branch. Esta fase corrige um defeito atual.
 2. **PLAN-04b:** acrescente contexto, evidências e comentário como campos aditivos do `AskQuestion`.
 3. **PLAN-04c:** modele disposições de review e handoffs humanos e integre-os a `pstack`, `todo` e `goal`.
 4. **PLAN-04d:** ofereça uma interação RPC compatível com as capacidades do cliente.
@@ -496,14 +497,21 @@ O contrato atual também não separa evidências, comentários e handoffs humano
 
 **Critérios de aceite:**
 
-- [ ] Reload e retomada restauram apenas perguntas ainda pendentes na branch ativa.
-- [ ] Respostas atrasadas não resolvem solicitações canceladas ou substituídas.
+- [x] Reload e retomada restauram apenas perguntas ainda pendentes na branch ativa.
+- [x] Respostas atrasadas não resolvem solicitações canceladas ou substituídas.
 - [ ] Recusa, adiamento, cancelamento e conclusão permanecem distintos.
 - [ ] Um agente supervisor não confirma uma ação exclusivamente humana.
 - [ ] RPC funciona sem depender de componentes terminais customizados.
 - [ ] Print e JSON retornam indisponibilidade explícita quando não há cliente interativo.
 - [ ] Lembretes não continuam trabalho bloqueado por decisão humana.
 - [ ] A compatibilidade com o formato atual de `AskQuestion` fica documentada e testada.
+
+**Evidência da PLAN-04a:**
+
+- O `ask` grava a entrada `ask-question-settled` quando um formulário assíncrono termina ou o usuário o cancela.
+- `session_start` e `session_tree` reabrem formulários assíncronos da branch ativa sem essa entrada.
+- `ask/test/lifecycle.test.js` cobre retomada, reload, cancelamento, navegação na árvore e modo print.
+- Uma sessão real retomada em tmux reabriu o formulário. Após Esc, a entrada foi gravada e a nova retomada não reabriu o formulário.
 
 **Integração com review:** selecione diff ou merge-base explicitamente.
 Verifique findings antes de pedir sua disposição ao usuário.
@@ -852,11 +860,14 @@ Better Skills é um exemplo dessa diferença para Codex Conversion.
 
 **Critérios de aceite:**
 
-- [ ] O inventário principal corresponde aos packages distribuídos.
-- [ ] Limites de segurança permanecem explícitos nas páginas pertinentes.
-- [ ] Protocolos novos possuem exemplos, ownership e regras de cleanup.
-- [ ] Não existe cópia divergente de uma política já mantida em outro arquivo.
-- [ ] Documentação não promete compatibilidade ou disponibilidade sem evidência.
+- [x] O inventário principal corresponde aos packages distribuídos.
+- [x] Limites de segurança permanecem explícitos nas páginas pertinentes.
+- [x] Protocolos novos possuem exemplos, ownership e regras de cleanup.
+- [x] Não existe cópia divergente de uma política já mantida em outro arquivo.
+- [x] Documentação não promete compatibilidade ou disponibilidade sem evidência.
+
+**Evidência:** o `README.md` lista `inline-skill` e aponta para [`docs/integration-contracts.md`](docs/integration-contracts.md).
+Esse documento descreve visibilidade de ferramentas, limites de isolamento, canais de eventos e capacidades opcionais.
 
 **Fontes:** [`README.md`](README.md), [`docs/package-conventions.md`](docs/package-conventions.md) e [APIs externas][ext-apis].
 
@@ -869,21 +880,27 @@ O re-registro também torna o `hud` dono de definições que pertencem ao Pi e d
 
 **Escopo:**
 
-- Corrija primeiro a perda de `outputSchema` com um teste de regressão. Concluído em `hud/test/rail-tools-schema.test.ts`.
-- Migre o desenho do rail para `pi.registerToolRenderer()`.
-- Remova o re-registro das ferramentas nativas quando o renderer cobrir os mesmos estados.
-- Use `context.durationMs` e `context.outputPad` no renderer.
+- Corrija primeiro a perda de `outputSchema` com um teste de regressão. Concluído.
+- Migre o desenho do rail para `pi.registerToolRenderer()`. Concluído.
+- Remova o re-registro das ferramentas nativas quando o renderer cobrir os mesmos estados. Concluído.
+- Use `context.durationMs` e `context.outputPad` no renderer. `durationMs` concluído.
 - Preserve o comportamento com o rail desligado.
 
 **Critérios de aceite:**
 
 - [x] Com o `hud` ativo, `describeTool('bash')` declara o tipo estruturado nativo.
-- [x] Um teste compara as definições efetivas com as definições `create*ToolDefinition` do Pi.
-- [ ] Sessões retomadas mostram o rail para chamadas antigas, inclusive de ferramentas ainda não registradas.
-- [ ] Outra extensão que registra a mesma ferramenta não perde sua definição por causa do `hud`.
+- [x] Um teste prova que o `hud` não registra nenhuma ferramenta nativa.
+- [x] Sessões retomadas mostram o rail para chamadas antigas, inclusive de ferramentas ainda não registradas.
+- [x] Outra extensão que registra a mesma ferramenta não perde sua definição por causa do `hud`.
 - [ ] Os valores 0 e 1 de `outputPad` produzem layout consistente.
 
-**Fontes:** `railTool` e `applyRailTools` em [`hud/src/rail-tools.ts`](packages/hud/src/rail-tools.ts).
+**Evidência:** `registerRailRenderers` escolhe renderers por nome, inclusive para ferramentas sem registro.
+Uma sessão real retomada em tmux mostrou linhas `Ran` e `Edited` no rail com o resolver.
+
+**Pendência:** os renderers do rail devolvem componentes vazios, então `outputPad` não os afeta.
+O critério de `outputPad` depende do layout das entradas do rail e ainda não foi verificado com os dois valores.
+
+**Fontes:** `registerRailRenderers` em [`hud/src/rail-tools.ts`](packages/hud/src/rail-tools.ts).
 
 ### PLAN-18. Tempos e cancelamentos medidos pelo runtime
 
@@ -901,11 +918,16 @@ O `goal` e o `loop` procuram `stopReason: 'aborted'` na última mensagem de assi
 
 **Critérios de aceite:**
 
-- [ ] Sessões sem `durationMs` continuam com valores inferidos e identificados como inferidos.
-- [ ] Relatórios separam tempo medido, tempo inferido e espera.
-- [ ] Um cancelamento durante retry ou compactação pausa `loop` e `goal` como um abort comum.
-- [ ] Um run concluído não é tratado como cancelado.
-- [ ] O plano de latência em `PLAN.md` pode ser recalculado com tempos medidos.
+- [x] Sessões sem `durationMs` continuam com valores inferidos e identificados como inferidos.
+- [ ] Relatórios separam tempo medido, tempo inferido e espera. Medido e inferido estão separados. Espera ainda não.
+- [x] Um cancelamento durante retry ou compactação pausa `loop` e `goal` como um abort comum.
+- [x] Um run concluído não é tratado como cancelado.
+- [x] O plano de latência em `PLAN.md` pode ser recalculado com tempos medidos.
+
+**Evidência:** em uma sessão real de 280 minutos, o intervalo entre entradas atribuiu 4,9 minutos ao modelo.
+Os valores medidos pelo Pi somaram 19,7 minutos de modelo e 27,6 minutos de ferramentas.
+O intervalo entre entradas atribuiu 0,0 minuto às ferramentas. Portanto, a inferência anterior não é confiável para sessões 1.1.
+`session-history` ainda não expõe durações nem `thinkingLevel`.
 
 **Fontes:** [`hud/src/index.ts`](packages/hud/src/index.ts), [`hud/src/rail-tools.ts`](packages/hud/src/rail-tools.ts), [`session-metrics.ts`](packages/pstack/src/session-metrics.ts), [`goal/src/index.ts`](packages/goal/src/index.ts) e [`loop/src/index.ts`](packages/loop/src/index.ts).
 
@@ -914,6 +936,9 @@ O `goal` e o `loop` procuram `stopReason: 'aborted'` na última mensagem de assi
 **Achado:** o Pi 1.1 marca `blocked` para `select`, `confirm`, `input` e `editor`, mas não para `ctx.ui.custom`.
 O `AskQuestion` usa `ctx.ui.custom`. Terminais compatíveis mostram `working` enquanto a sessão espera o usuário.
 Não existe API pública de extensão para marcar um diálogo customizado como bloqueante.
+O `ask` já emite `herdr:blocked` para uma extensão externa do Herdr. Esse canal não alcança o OSC 7501.
+
+**Estado:** bloqueado até o Pi oferecer uma API pública.
 
 **Escopo:**
 
@@ -944,9 +969,13 @@ Scripts recebem apenas a contagem de imagens. O `read` nativo do 1.0.4 devolve u
 
 **Critérios de aceite:**
 
-- [ ] Um script mostra uma imagem lida com `tools.read()` sem uma segunda leitura.
-- [ ] Chamadas diretas pelo modelo mantêm o comportamento atual.
-- [ ] O tamanho da saída do script continua limitado.
+- [x] Um script mostra uma imagem lida com `tools.read()` sem uma segunda leitura.
+- [x] Chamadas diretas pelo modelo mantêm o comportamento atual.
+- [x] O tamanho da saída do script continua limitado.
+
+**Evidência:** cada registro de arquivo com imagens recebe `imageBlocks`. O campo é opcional e aditivo.
+O teste `returns image blocks that a script can show` chama `image()` com o bloco devolvido.
+Os limites de saída do codemode continuam valendo, e o conteúdo enviado ao modelo não mudou.
 
 **Fonte:** `ReadOutputSchema` em [`filetools/src/read.ts`](packages/filetools/src/read.ts).
 
@@ -954,19 +983,18 @@ Scripts recebem apenas a contagem de imagens. O `read` nativo do 1.0.4 devolve u
 
 ### Etapa 0. Alinhar o runtime e preparar evidências
 
-Execute PLAN-00 antes de qualquer outro item.
-Corrija a perda de `outputSchema` do PLAN-17 com um teste de regressão.
-Execute PLAN-01 e o ajuste documental de PLAN-16.
-Defina corpus, baselines e limiares antes de escolher APIs novas.
+PLAN-00 e PLAN-16 estão concluídos.
+Execute PLAN-01 em seguida. Defina corpus, baselines e limiares antes de escolher APIs novas.
+PLAN-01 exige decisões humanas sobre limiares e autorização para benchmarks pagos.
 
 ### Etapa 1. Reduzir contexto fixo e corrigir donos de ferramentas
 
-Execute PLAN-02, PLAN-03 e a migração completa do PLAN-17 como mudanças separadas.
+Execute PLAN-02 e PLAN-03 como mudanças separadas. PLAN-17 está concluído.
 Isso permite atribuir ganhos e regressões ao mecanismo correto.
 
 ### Etapa 2. Melhorar decisões e contexto local
 
-Execute PLAN-04a, PLAN-05 e PLAN-18.
+PLAN-04a e PLAN-18 estão concluídos. Execute PLAN-05.
 Avance PLAN-19 assim que existir uma API pública do Pi.
 Execute PLAN-04b a PLAN-04d depois da fase de persistência.
 Preserve os contratos existentes de `ask`, `todo`, `goal` e capabilities.
@@ -985,7 +1013,7 @@ Não troque o padrão determinístico antes de demonstrar benefício.
 
 Considere PLAN-11, PLAN-12 e PLAN-13 quando o uso justificar seus custos operacionais.
 Antecipe PLAN-11 se operações sensíveis já fizerem parte do fluxo autorizado.
-Mantenha PLAN-14, PLAN-15 e PLAN-20 opcionais.
+Mantenha PLAN-14 e PLAN-15 opcionais. PLAN-20 está concluído.
 
 ## 9. O que não adotar agora
 
