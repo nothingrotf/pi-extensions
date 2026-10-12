@@ -378,13 +378,8 @@ export function railTool<TParams extends TSchema, TDetails, TBaseState>(
   storeFor: (toolCallId: string) => RailStore,
   spec: RailToolSpec<TParams>,
 ): ToolDefinition<TParams, TDetails, RailState> {
-  const definition: ToolDefinition<TParams, TDetails, RailState> = {
-    description: base.description,
-    execute: (toolCallId, params, signal, onUpdate, ctx) =>
-      base.execute(toolCallId, params, signal, onUpdate, ctx),
-    label: base.label,
-    name: base.name,
-    parameters: base.parameters,
+  return {
+    ...base,
     renderShell: 'self',
     renderCall(args, _theme, context) {
       const store = (context.state.store ??= storeFor(context.toolCallId))
@@ -410,23 +405,6 @@ export function railTool<TParams extends TSchema, TDetails, TBaseState>(
       return emptyComponent
     },
   }
-  if (base.constrainedSampling !== undefined) {
-    definition.constrainedSampling = base.constrainedSampling
-  }
-  if (base.executionMode !== undefined) {
-    definition.executionMode = base.executionMode
-  }
-  if (base.promptGuidelines !== undefined) {
-    definition.promptGuidelines = [...base.promptGuidelines]
-  }
-  if (base.promptSnippet !== undefined) {
-    definition.promptSnippet = base.promptSnippet
-  }
-  const prepare = base.prepareArguments
-  if (prepare !== undefined) {
-    definition.prepareArguments = (args) => prepare(args)
-  }
-  return definition
 }
 
 type RailRegistration = {
