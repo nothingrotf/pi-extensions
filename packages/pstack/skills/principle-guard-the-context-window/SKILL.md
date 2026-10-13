@@ -6,9 +6,7 @@ disable-model-invocation: true
 
 # Guard the Context Window
 
-The context window is finite. Compaction reduces context but can discard evidence, so retain recoverable sources.
-
-**Why:** Context overflow degrades reasoning quality, creates compression artifacts, and halts progress.
+**Why:** Context overflow degrades reasoning quality, creates compression artifacts, and halts progress. Compaction reduces context but can discard evidence, so retain recoverable sources.
 
 **Pattern:**
 - **Bound large payloads.** Keep raw logs and documents in durable artifacts with references. Load decisive passages instead of complete dumps.

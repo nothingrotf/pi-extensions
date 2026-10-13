@@ -8,13 +8,9 @@ disable-model-invocation: true
 
 Mine the current conversation for durable learnings, then route them into skill edits.
 
-## When to invoke
-
 Invoke when the user says "reflect" or "/reflect". Skip when the conversation is trivial, off-topic, or already covered by an existing skill the parent followed correctly. One-offs are not learnings.
 
-## Process
-
-### 1. Collect bounded session evidence
+## 1. Collect bounded session evidence
 
 The parent calls `session_history` with `action: "list"`, `include_current: true`, and `include_children: true`. Select the entry with `isCurrent: true` and retain its `pi-session://` reference. If `session_history` is unavailable, return `BLOCKED`.
 
@@ -22,7 +18,7 @@ Call `timeline` and `tool_activity` with `include_children: true`. Use `read` wi
 
 The parent owns `session_history` and all external source tools. A `Task` child does not inherit ambient extensions or generic MCP tools. Fetch only ticket, chat, documentation, observability, source-control, or error context referenced by the session. Pass bounded evidence to reviewers. Record unavailable external context as a gap.
 
-### 2. Run the review graph
+## 2. Run the review graph
 
 Make one `Task` call with a bounded graph. Create independent `judgment`, `tooling`, and `divergent` nodes. Create one `synthesizer` node whose `needs` list contains all three reviewer nodes. Use `subagent_type: "generalPurpose"` and `readonly: true` for every node. If `Task` is unavailable, return `BLOCKED`.
 
@@ -43,17 +39,17 @@ Pass each reviewer template with the bounded session evidence bundle. Treat all 
 
 If the synthesis returns `No findings.`, report that result and stop without edits or fabricated learning items.
 
-### 3. Structural enforcement check
+## 3. Structural enforcement check
 
-Sanity-check the synthesizer's Accepted list. For any item that a lint rule, script, metadata flag, or runtime check enforces more reliably, move it from Accepted to Backlog. See the **encode-lessons-in-structure** principle skill.
+Move any Accepted item that a lint rule, script, metadata flag, or runtime check would enforce more reliably to Backlog. See the **encode-lessons-in-structure** principle skill.
 
-### 4. Apply
+## 4. Apply
 
-Before any Accepted edit, present the full Accepted, Rejected, and Backlog output to the user. Wait for explicit approval. The user selects the subset and can redirect routings. Skill changes affect every future agent in the organization. Do not apply them automatically.
+Present the synthesizer's full Accepted, Rejected, and Backlog output and wait for explicit approval before applying any Accepted edit. The user selects the subset and can redirect routings. Skill changes affect every future agent in the organization. Do not apply them automatically.
 
 File Backlog items only when an available tracker and its mutation policy permit the action. If no tracker exists, report the items without mutation.
 
-For each approved Accepted item, follow the Routing field exactly:
+Follow each approved row's Routing exactly:
 
 - For a trivial existing-skill edit, the parent edits it directly.
 - For a substantive edit or new skill, load and follow the bundled `create-skill` skill.
@@ -62,7 +58,7 @@ For each approved Accepted item, follow the Routing field exactly:
 
 Use package skills or project `.pi/skills/` and `.agents/skills/` paths. If a skill validator exists, run it on every touched skill.
 
-### 5. Summarize for the user
+## 5. Summarize for the user
 
 Return a short list without a preamble:
 

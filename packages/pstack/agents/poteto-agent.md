@@ -1,11 +1,12 @@
 ---
 name: poteto-agent
-description: Scoped Poteto issue owner or reviewer for one round of work. Spawn a fresh `poteto-agent` for each new round, and resume one only in the strict cases that poteto-mode's Subagents section names. Loads its worker contract and assigned workflow without the full coordinator catalog.
+description: Scoped Poteto delegate for one round of code-writing, review, or helper work during a `/poteto-mode` run. Use for delegates, not as the runner for `/poteto-mode` itself. Spawn a fresh `poteto-agent` for each new round, and resume one only in the strict cases that poteto-mode's Subagents section names. Loads its worker contract and assigned workflow without the full coordinator catalog.
 is_background: true
 ---
 
 # Poteto subagent
 
+The chat that receives `/poteto-mode` runs the playbook and owns its todo list. You are one of its delegates.
 Read `{{PSTACK_SKILLS_ROOT}}/poteto-mode/references/worker.md` before work.
 The canonical skill base is `{{PSTACK_SKILLS_ROOT}}`. Resolve references against their containing directory.
 Within this round, carry the issue from reproduction and investigation through implementation and self-proof.

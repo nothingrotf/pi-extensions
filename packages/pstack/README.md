@@ -24,7 +24,7 @@ Restart Pi after installation.
 
 ## Resources
 
-The package provides 49 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 51 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -40,7 +40,9 @@ The package provides 49 upstream skills, four Pi compatibility skills, and the l
 - `deslop`
 - `figure-it-out`
 - `how`
+- `in-your-own-words`
 - `interrogate`
+- `ketchup`
 - `maintain-verification-skill`
 - `no-comments`
 - `principle-attack-the-premise`
@@ -82,6 +84,8 @@ The package provides 49 upstream skills, four Pi compatibility skills, and the l
 - `why`
 
 The package registers the `Comment Sicko` and `poteto-agent` agents with `@nothingrotf/subagent` through the shared Pi event bus.
+
+The chat that receives `/poteto-mode` runs the playbook and owns its todo list. `poteto-agent` is the wrapper for delegates of that run. Do not spawn it to run the playbook itself.
 
 It also registers the `pstack-nested` capability profile. The profile permits three local Task levels.
 
@@ -130,6 +134,29 @@ The Pi port adapts these commits:
 - Autopilot-stack starts a dependent layer only after its parent layer is accepted and published.
 - The built-in PR tool rule is omitted because Pi has no built-in PR tool.
 - The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
+
+These upstream changes after [#496](https://github.com/cursor/plugins/pull/496) are also synchronized:
+
+- [#538](https://github.com/cursor/plugins/pull/538) at `00b14f1df36b32a8dd1529324a3a459f6563b127` shortens skill prompts.
+- [#539](https://github.com/cursor/plugins/pull/539), [#570](https://github.com/cursor/plugins/pull/570), and [#595](https://github.com/cursor/plugins/pull/595) add `ketchup`. It catches the user up since their last message with visual evidence.
+- [#571](https://github.com/cursor/plugins/pull/571) removes unneeded sections from seven skills.
+- [#536](https://github.com/cursor/plugins/pull/536) makes `check-plan.mjs` respect indented, tilde, and longer code fences.
+- [#484](https://github.com/cursor/plugins/pull/484) makes the bundled `watch-pr` read every page of review threads.
+- [#572](https://github.com/cursor/plugins/pull/572) removes "Must always apply." from the `unslop` description.
+- [#574](https://github.com/cursor/plugins/pull/574) adds `-b <ref>` to `worktree-audit.sh` and replaces `POTETO_TRUNK`.
+- [#573](https://github.com/cursor/plugins/pull/573) defines verification readiness as a usable app.
+- [#575](https://github.com/cursor/plugins/pull/575), [#577](https://github.com/cursor/plugins/pull/577), and [#597](https://github.com/cursor/plugins/pull/597) keep the `/poteto-mode` chat as the runner and `poteto-agent` as a delegate.
+- [#602](https://github.com/cursor/plugins/pull/602) and [#606](https://github.com/cursor/plugins/pull/606) add `in-your-own-words`.
+- [#604](https://github.com/cursor/plugins/pull/604) proposes a cheap always-on signal after a deep debugging dig.
+
+The Pi port adapts or omits these parts:
+
+- `poteto-mode` keeps explicit principle skill names, so the catalog test can resolve each leaf.
+- `how` and `why` keep their in-session Pi flow, so the shortened upstream delegation steps have no counterpart.
+- `poteto-agent` receives the skill base path from the extension, so it does not search `~/.cursor/plugins/`.
+- `ketchup` draws charts with an available tool instead of `/visualize`.
+- `Comment Sicko` keeps its agent name. [#486](https://github.com/cursor/plugins/pull/486) renames it only because Grok cannot spawn an id with a space, and Pi accepts that id.
+- `poteto-help`, the guide, the Agent Plugins manifest, and the version bumps have no local counterpart.
 
 `how` now explains architecture without a Critique mode.
 Existing `how critics:` configuration lines remain valid but no longer publish a dispatch role.
@@ -205,7 +232,7 @@ The notice names `scripts/release-worktree.sh` from the `poteto-mode` skill.
 That script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
 Otherwise, it prints `held` with the reason and exits with status 1.
 
-`scripts/worktree-audit.sh` compares merge state with the remote default branch. Set `POTETO_TRUNK` to override it.
+`scripts/worktree-audit.sh` compares merge state with `origin/HEAD`, then `origin/main`, then `origin/master`. Pass `-b <ref>` when pull requests target another branch.
 
 ## Managed delivery protocol
 

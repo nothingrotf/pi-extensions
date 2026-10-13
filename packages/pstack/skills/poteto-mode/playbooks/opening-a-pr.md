@@ -4,11 +4,11 @@ Invoked at the end of every other playbook.
 
 **Worktree.** Follow [Task contracts](../references/task-contracts.md). Repository writers use managed isolation and return patches for acceptance. Publication uses a separately scoped foreground Task in the destination worktree after acceptance and verification. Never publish synthetic snapshot history or reset unrelated work. If the destination contains unrelated changes, create a clean destination worktree without deleting the original. Release each destination worktree after publication, per Local footprint in [Delivery operations](../references/delivery-operations.md).
 
-**Commits.** Commit liberally. Rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit. New commit when separable.
+**Commits.** Commit liberally. Rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit. New commit when separable. Commit bodies don't restate the subject.
 
-**PRs.** Run `/deslop` over the diff before commit. Run `/no-comments` before review. Write every PR title, PR description, and commit body with `/technical-writing`, then apply `/unslop`. Apply every technical-writing layer except Diátaxis. Use one word for each action, keep articles, and avoid `-ing` when a plain verb works.
+**PRs.** Run `/deslop` over the diff before commit and `/no-comments` before review. Write every PR title, description, and commit body with `/technical-writing` (every layer except Diátaxis, and apply the STE vocabulary rules: one word per action, keep articles, a plain verb over `-ing` where one works), then apply `/unslop`.
 
-**Titles.** Use Conventional Commits in the form `type(scope): subject`. Use `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, or `perf` as the type. Use the changed area, such as `pstack` or `poteto-mode`, as the scope. Keep the subject short and imperative. Name a real symbol when one carries the change. For example, `fix(pstack): retarget opening-a-pr babysit trigger`. Do not add a trailing period.
+**Titles.** Conventional Commits `type(scope): subject`, no trailing period. Type such as `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, or `perf`. Scope is the area, such as `pstack` or `poteto-mode`. Subject is short, imperative, and names a real symbol when one carries the change, for example `fix(pstack): retarget opening-a-pr babysit trigger`.
 
 **Descriptions.** Load the bundled `pr` skill from `../pr/SKILL.md` before you write or update a PR body. Follow its workflow, template, evidence rules, and screenshot reference for every PR body and PR media attachment. The `pr` skill owns the body structure. Do not add a separate pstack body template.
 
@@ -17,8 +17,6 @@ Do not paste full SHAs, swarm or arena lane recitals, lever-correction essays, f
 Use `gh pr create --attach <file>` for a new independent PR. Use `gh pr edit <number> --attach <file>` for an existing or stacked PR. Use `gh pr comment <number> --attach <file>` for later evidence. `gh stack submit` does not accept `--attach`, so attach assets after submission. Do not use `--attach` with `--web` or `--dry-run` during creation.
 
 An upload can fail after a partial success. `gh` preserves successful uploads, prints a recoverable URL, and exits with a nonzero status. Inspect the PR before a retry so that the retry does not duplicate assets.
-
-A commit body does not restate its subject.
 
 **Size and stacks.** Prefer five narrow PRs to one large PR. Stack follow-ups through `../references/stack-backends.md`, and keep the ordered stack visible to reviewers. In Autopilot-stack, open each layer as its own draft PR at its first WIP snapshot, and mark it ready when it is accepted. Never accumulate layers locally for a later split. Branch from main only for independent work. Rebase on `main` before substantial stack work.
 

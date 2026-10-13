@@ -8,9 +8,7 @@ Read <SESSION_EVIDENCE_BUNDLE>. Preserve its `pi-session://` references in evide
 
 ## Agent self-sufficiency
 
-Flag each case where the user supplied context that the parent can fetch through an available source tool or sibling skill.
-
-For each case, provide:
+Flag each case where the user supplied context that the parent can fetch through an available source tool or sibling skill. For each case, provide:
 
 - Principle: state what the parent must fetch automatically.
 - Evidence: cite the manual handoff with a stable session reference.
@@ -29,23 +27,16 @@ Scan for:
 
 ## Scope to skills and tools the session used
 
-Findings must point to skills or tools that the evidence bundle shows. Speculative routing to an unopened skill does not count.
-
-Check supplied tool activity for:
-
-- `read` calls against package skills or project `.pi/skills/` and `.agents/skills/` paths
-- `Task` prompts that name a skill path
-- `bash`, `grep`, `find`, or supplied source-tool evidence that matches a skill workflow
+Route findings only to skills or tools that the evidence bundle shows. A skill counts as used when the supplied tool activity shows a `read` call against its `SKILL.md` in package skills or project `.pi/skills/` and `.agents/skills/` paths, a `Task` prompt that names its path, or `bash`, `grep`, `find`, or source-tool evidence that matches its workflow. Speculative routing to an unopened skill does not count.
 
 Two finding forms are valid:
 
 - The parent invoked the skill and its body contains a real gap.
 - The skill was visible but did not trigger when useful. Route this as `tune description: <skill path>`.
 
-If neither form applies, drop the finding.
+Drop any finding that fits neither form.
 
-List each durable learning you find. An empty list is valid. Do not pad or cap the list to meet a quota.
-For each finding, provide:
+List each durable learning you find. An empty list is valid. Do not pad or cap the list to meet a quota. For each finding, provide:
 
 - Principle: one sentence that states the convention or technical fact.
 - Evidence: a stable `pi-session://` reference plus the exact command, flag, or quote.

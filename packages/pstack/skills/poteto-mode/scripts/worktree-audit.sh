@@ -1,19 +1,57 @@
 #!/usr/bin/env bash
 set -u
 
+usage() {
+  cat <<'EOF'
+Usage: worktree-audit.sh [-b|--base <ref>] [repo-path]
+  repo-path defaults to the current repo.
+  -b sets the ref the MERGED column checks against, such as origin/integration.
+  Without it the base is origin/HEAD, then origin/main, then origin/master.
+  origin/HEAD is the remote default branch, not necessarily the branch that PRs
+  merge into. Pass -b when they differ.
+EOF
+}
+
+base=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -b|--base)
+      [ $# -ge 2 ] || { echo "error: $1 needs a ref" >&2; exit 2; }
+      base="$2"
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    -*) echo "error: unknown option: $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
 repo="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -n "$repo" ] || { echo "not in a git repo; pass a repo path" >&2; exit 1; }
 cd "$repo" || exit 1
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "error: not a git repo: $repo" >&2; exit 1; }
 
 main_wt=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
-trunk="${POTETO_TRUNK:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
-trunk="${trunk:-main}"
-git fetch origin "$trunk" --quiet 2>/dev/null || echo "warn: could not fetch origin/$trunk; merged state may be stale" >&2
+if [ -z "$base" ]; then
+  for candidate in "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)" origin/main origin/master; do
+    [ -n "$candidate" ] && git rev-parse --verify --quiet "$candidate^{commit}" >/dev/null && { base="$candidate"; break; }
+  done
+  [ -n "$base" ] || { echo "error: no base ref (origin/HEAD, origin/main, origin/master all missing); pass -b <ref>" >&2; exit 1; }
+  echo "warn: no -b given; MERGED checks against $base" >&2
+fi
+case "$base" in
+  origin/*)
+    git fetch origin "+refs/heads/${base#origin/}:refs/remotes/$base" --quiet 2>/dev/null \
+      || echo "warn: could not fetch $base; merged state may be stale" >&2
+    ;;
+esac
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1 || { echo "error: base ref not found: $base" >&2; exit 1; }
 prs=$(mktemp)
 trap 'rm -f "$prs"' EXIT
 gh pr list --author "@me" --state all --limit 1000 --json number,state,headRefName 2>/dev/null > "$prs" || echo "[]" > "$prs"
 now=$(date +%s)
 
+echo "# base: $base"
 printf "SIZE_KB\tAGE\tMERGED\tDIRTY\tREMOTE\tPR\tBUCKET\tWORKTREE\n"
 
 git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt; do
@@ -22,7 +60,7 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
   head=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
   head_ts=$(git -C "$wt" log -1 --format='%ct' HEAD 2>/dev/null || echo 0)
   age=$([ "$head_ts" -gt 0 ] 2>/dev/null && echo "$(((now - head_ts) / 86400))d" || echo "?")
-  git merge-base --is-ancestor "$head" "origin/$trunk" 2>/dev/null && merged=YES || merged=no
+  git merge-base --is-ancestor "$head" "$base" 2>/dev/null && merged=YES || merged=no
   porcelain=$(git -C "$wt" status --porcelain 2>/dev/null)
   if [ -z "$porcelain" ]; then
     dirty=clean

@@ -26,7 +26,7 @@ If the checkout does not build or start, reproduce the failure through the user-
 
 Write `.pi/skills/verify-<app>/SKILL.md`. Use valid YAML frontmatter with `name: verify-<app>` and a description that names the app, surface, and trigger. Ground every section in repository evidence. Leave no placeholders.
 
-- **Launch:** Give the exact start command, readiness proof, and teardown. For short-lived programs, build once and start each drive in an isolated session.
+- **Launch:** Give the exact start command, readiness proof, and teardown. Launch must reach a usable state from an empty data directory, including migrations and seed data. Ready means usable, not only that a process answers. A database health check can pass while its init scripts still run. For short-lived programs, build once and start each drive in an isolated session.
 - **Doctor:** Give one read-only check for process identity, version, port ownership, and authentication.
 - **Drive:** Give exact commands and stable handles from this repository. Prefer accessible names, data attributes, prompts, and routes over coordinates.
 - **Evidence:** Exercise the real user path. Capture both the action and result. Verify side effects through a second observable view. Use mocks only at an existing production boundary. Verify what dry-run or test modes skip.
@@ -46,6 +46,8 @@ Each feature file describes the user view, entry path, exact drive recipe, and o
 3. `Driving it with <harness>`
 4. `Gotchas`
 
+If the seed data lacks a precondition that a journey needs, the journey reports a failure, and the reason goes in that feature's `Gotchas`. Never weaken the journey to make it pass.
+
 The map is the maintained verification source. A proof that ignores listed entry points is incomplete.
 
 ## 4. Prove the generated skill
@@ -53,6 +55,8 @@ The map is the maintained verification source. A proof that ignores listed entry
 Run the generated instructions end to end once. Launch the app, run doctor, drive one mapped feature, capture evidence, and clean up. Verify that evidence remains after cleanup.
 
 Fix each failed iteration. Run cleanup after each failure. A skill that never ran is a draft, not a deliverable.
+
+If you proved the skill in a stand-in for the real target, list every setup step that the stand-in did and the target will not. Examples include a container in place of a fresh VM and a local stack in place of a remote one. Those steps stay unverified until a run on the real target covers them.
 
 ## 5. Offer maintenance
 

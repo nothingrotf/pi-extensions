@@ -72,7 +72,7 @@ describe('pstack extension', () => {
         },
         {
           description:
-            "Scoped Poteto issue owner or reviewer for one round of work. Spawn a fresh `poteto-agent` for each new round, and resume one only in the strict cases that poteto-mode's Subagents section names. Loads its worker contract and assigned workflow without the full coordinator catalog.",
+            "Scoped Poteto delegate for one round of code-writing, review, or helper work during a `/poteto-mode` run. Use for delegates, not as the runner for `/poteto-mode` itself. Spawn a fresh `poteto-agent` for each new round, and resume one only in the strict cases that poteto-mode's Subagents section names. Loads its worker contract and assigned workflow without the full coordinator catalog.",
           capabilityProfile: 'pstack-leaf',
           is_background: true,
           name: 'poteto-agent',
