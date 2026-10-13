@@ -89,6 +89,137 @@ describe('provider usage', () => {
     expect(parseRateLimitEvent({ ...event, data: { type: 'response.completed' } })).toEqual([])
   })
 
+  test.each([
+    { used_percent: 0, limit_window_seconds: 0, reset_at: 0 },
+    { used_percent: 0, limit_window_seconds: 604_800, reset_at: 0 },
+    { used_percent: 0, reset_at: 0 },
+  ])(
+    'keeps one weekly Codex API window with secondary duration $limit_window_seconds',
+    (secondary) => {
+      const primary = { used_percent: 13, limit_window_seconds: 604_800, reset_at: 1_790_000_000 }
+      const windows = parseCodexWindows({
+        rate_limit: {
+          primary_window: primary,
+          secondary_window: secondary,
+        },
+      })
+      expect(windows).toEqual(parseCodexWindows({ rate_limit: { primary_window: primary } }))
+      expect(windows.map((window) => [window.label, window.usedPercent])).toEqual([['wk', 13]])
+    },
+  )
+
+  test.each(['0', '10080', ''])(
+    'keeps one weekly header window with secondary duration %s',
+    (duration) => {
+      const primary = {
+        'x-codex-primary-used-percent': '13',
+        'x-codex-primary-window-minutes': '10080',
+        'x-codex-primary-reset-at': '1790000000',
+      }
+      const windows = parseRateLimitHeaders({
+        ...primary,
+        'x-codex-secondary-used-percent': '0',
+        'x-codex-secondary-window-minutes': duration,
+        'x-codex-secondary-reset-at': '0',
+      })
+      expect(windows).toEqual(parseRateLimitHeaders(primary))
+      expect(windows.map((window) => [window.label, window.usedPercent])).toEqual([['wk', 13]])
+    },
+  )
+
+  test.each([0, 10_080, null, undefined])(
+    'keeps one weekly stream window with secondary duration %s',
+    (duration) => {
+      const windows = parseRateLimitEvent({
+        type: 'provider_stream_event',
+        provider: 'openai-codex',
+        api: 'openai-codex-responses',
+        model: 'gpt-6.1-sol',
+        data: {
+          type: 'codex.rate_limits',
+          rate_limits: {
+            primary: { used_percent: 13, window_minutes: 10_080 },
+            secondary: { used_percent: 0, window_minutes: duration },
+          },
+        },
+      })
+      expect(windows).toEqual([{ label: 'wk', usedPercent: 13, resetsIn: undefined }])
+    },
+  )
+
+  test.each([0, -60])('ignores inactive Codex windows with duration %s', (duration) => {
+    const expected = [{ label: 'wk', usedPercent: 0, resetsIn: undefined }]
+    expect(
+      parseCodexWindows({
+        rate_limit: {
+          primary_window: { used_percent: 0, limit_window_seconds: duration },
+          secondary_window: { used_percent: 0, limit_window_seconds: 604_800 },
+        },
+      }),
+    ).toEqual(expected)
+    expect(
+      parseRateLimitHeaders({
+        'x-codex-primary-used-percent': '0',
+        'x-codex-primary-window-minutes': String(duration / 60),
+        'x-codex-secondary-used-percent': '0',
+        'x-codex-secondary-window-minutes': '10080',
+      }),
+    ).toEqual(expected)
+    expect(
+      parseRateLimitEvent({
+        type: 'provider_stream_event',
+        provider: 'openai-codex',
+        api: 'openai-codex-responses',
+        model: 'gpt-6.1-sol',
+        data: {
+          type: 'codex.rate_limits',
+          rate_limits: {
+            primary: { used_percent: 0, window_minutes: duration / 60 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+          },
+        },
+      }),
+    ).toEqual(expected)
+  })
+
+  test('preserves real zero-percent Codex windows', () => {
+    const expected = [
+      { label: '5h', usedPercent: 0, resetsIn: undefined },
+      { label: 'wk', usedPercent: 0, resetsIn: undefined },
+    ]
+    expect(
+      parseCodexWindows({
+        rate_limit: {
+          primary_window: { used_percent: 0, limit_window_seconds: 18_000 },
+          secondary_window: { used_percent: 0, limit_window_seconds: 604_800 },
+        },
+      }),
+    ).toEqual(expected)
+    expect(
+      parseRateLimitHeaders({
+        'x-codex-primary-used-percent': '0',
+        'x-codex-primary-window-minutes': '300',
+        'x-codex-secondary-used-percent': '0',
+        'x-codex-secondary-window-minutes': '10080',
+      }),
+    ).toEqual(expected)
+    expect(
+      parseRateLimitEvent({
+        type: 'provider_stream_event',
+        provider: 'openai-codex',
+        api: 'openai-codex-responses',
+        model: 'gpt-6.1-sol',
+        data: {
+          type: 'codex.rate_limits',
+          rate_limits: {
+            primary: { used_percent: 0, window_minutes: 300 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+          },
+        },
+      }),
+    ).toEqual(expected)
+  })
+
   test('clamps invalid percentages', () => {
     expect(normalizePercent(-20)).toBe(0)
     expect(normalizePercent(200)).toBe(100)

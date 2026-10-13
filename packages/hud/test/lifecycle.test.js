@@ -299,6 +299,54 @@ describe('HUD lifecycle', () => {
     }
   })
 
+  test.each([0, 10_080, null, undefined])(
+    'shows one weekly quota when the secondary duration is %s',
+    async (duration) => {
+      const instance = harness(undefined, {
+        provider: 'openai',
+        id: 'gpt-6.1-sol',
+        api: 'openai-responses',
+        reasoning: true,
+        contextWindow: 272_000,
+      })
+      await instance.emit('session_start')
+      const footer = instance.mount()
+      try {
+        await instance.emit('after_provider_response', {
+          status: 200,
+          headers: {
+            'x-codex-primary-used-percent': '13',
+            'x-codex-primary-window-minutes': '10080',
+            'x-codex-secondary-used-percent': '0',
+            'x-codex-secondary-window-minutes': duration == null ? '' : String(duration),
+          },
+        })
+        const headerLine = footer.render(180).join('')
+        expect(headerLine).toContain('wk 13%')
+        expect(headerLine.match(/\bwk\b/gu)).toHaveLength(1)
+        expect(headerLine).not.toContain('5h')
+        await instance.emit('provider_stream_event', {
+          provider: 'openai',
+          api: 'openai-responses',
+          model: 'gpt-6.1-sol',
+          data: {
+            type: 'codex.rate_limits',
+            rate_limits: {
+              primary: { used_percent: 14, window_minutes: 10_080 },
+              secondary: { used_percent: 0, window_minutes: duration },
+            },
+          },
+        })
+        const streamLine = footer.render(180).join('')
+        expect(streamLine).toContain('wk 14%')
+        expect(streamLine.match(/\bwk\b/gu)).toHaveLength(1)
+        expect(streamLine).not.toContain('5h')
+      } finally {
+        await instance.emit('session_shutdown')
+      }
+    },
+  )
+
   test('restores cache share and updates it after responses and tree navigation', async () => {
     const session = SessionManager.inMemory()
     const appendUsage = (input, cacheRead, cacheWrite) =>

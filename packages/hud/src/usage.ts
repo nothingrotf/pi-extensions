@@ -165,14 +165,17 @@ function rateWindow(
   usedPercent: number,
   durationSeconds: number | undefined,
   resetAtSeconds: number | undefined,
-): UsageWindow {
+): UsageWindow | null {
+  if (
+    durationSeconds !== undefined &&
+    (!Number.isFinite(durationSeconds) || durationSeconds <= 0)
+  ) {
+    return null
+  }
   const resolvedLabel =
     durationSeconds === 604_800
       ? 'wk'
-      : durationSeconds !== undefined &&
-          Number.isFinite(durationSeconds) &&
-          durationSeconds > 0 &&
-          durationSeconds % 3_600 === 0
+      : durationSeconds !== undefined && durationSeconds % 3_600 === 0
         ? `${durationSeconds / 3_600}h`
         : label
   return {
@@ -192,11 +195,24 @@ function codexWindow(
   return rateWindow(label, window.used_percent, window.limit_window_seconds, window.reset_at)
 }
 
+function uniqueCodexWindows(
+  primary: UsageWindow | null,
+  secondary: UsageWindow | null,
+): UsageWindow[] {
+  if (primary === null) {
+    return secondary === null ? [] : [secondary]
+  }
+  if (secondary === null || secondary.label === primary.label) {
+    return [primary]
+  }
+  return [primary, secondary]
+}
+
 export function parseCodexWindows(data: CodexUsageData): UsageWindow[] {
   const limits = data.rate_limit
   const primary = codexWindow('5h', limits?.primary_window)
   const secondary = codexWindow('wk', limits?.secondary_window)
-  return [primary, secondary].filter((window): window is UsageWindow => window !== null)
+  return uniqueCodexWindows(primary, secondary)
 }
 
 function headerNumber(
@@ -231,8 +247,9 @@ function headerWindow(
 export function parseRateLimitHeaders(
   headers: AfterProviderResponseEvent['headers'],
 ): UsageWindow[] {
-  return [headerWindow(headers, 'primary', '5h'), headerWindow(headers, 'secondary', 'wk')].filter(
-    (window): window is UsageWindow => window !== null,
+  return uniqueCodexWindows(
+    headerWindow(headers, 'primary', '5h'),
+    headerWindow(headers, 'secondary', 'wk'),
   )
 }
 
@@ -261,10 +278,10 @@ export function parseRateLimitEvent(event: ProviderStreamEvent): UsageWindow[] {
   if (limit !== 'codex') {
     return []
   }
-  return [
+  return uniqueCodexWindows(
     eventWindow('5h', data.rate_limits?.primary),
     eventWindow('wk', data.rate_limits?.secondary),
-  ].filter((window): window is UsageWindow => window !== null)
+  )
 }
 
 export async function withTimeout<ValueType>(
