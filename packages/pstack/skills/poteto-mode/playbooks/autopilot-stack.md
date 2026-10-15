@@ -43,13 +43,16 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Never use shell `sleep` to await children or wait for the heartbeat after a completion.
    At each audit, read the compact checkpoint and inspect changed evidence.
    Reload this playbook only when its instructions change or a decision requires it.
+   Probe every agent, down to the leaf lanes.
    Inspect Task status, evidence, checks, branch changes, and decision trails.
+   An agent that waits on the root or the operator is not stuck. Answer it.
    Judge each owner by its draft layer pull request and decision trail.
    Diagnose a lane that exceeds its expected runtime without evidence before replacing its owner.
    Replace an owner whose agent cannot start a turn.
    Cancel a stuck writer before replacing it from retained scope and evidence.
    On an operator stop, cancel isolated writers and stop publication dispatches.
    Steering alone cannot enforce an immediate zero-write hold.
+   End a tick that changed something for the operator by catching them up per the **ketchup** skill. A tick that changed nothing stays quiet.
 
 4. **Verify STACK-READY independently.**
    Require a passing per-criterion self-proof matrix before promoting WIP to a verification candidate.
@@ -76,7 +79,8 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    It updates the PR title and body, then marks the draft ready with `gh pr ready <number>`.
    If the layer has no draft PR, publication opens the PR ready on its parent branch.
    Append only accepted patches in verified order or the operator's specified order.
-   No implementer or publication Task merges, arms auto-merge, or closes the PR.
+   No implementer or publication Task merges, retargets, arms auto-merge, or closes the PR.
+   Owners never rebase onto another branch, trunk included, because the root owns the chain's topology.
    When publication returns the PR URL, confirm through step 6 that the layer is ready and in the stack, in the same root turn.
    Release the issue's local footprint through `../references/delivery-operations.md` before the next dispatch.
    Then the root starts the assigned loop through `playbooks/babysit.md`.
@@ -98,6 +102,8 @@ Use `../references/delivery-operations.md` for root model selection, compact che
    Never mix backend metadata within one run.
 
 7. **Reverify affected drift.**
+   Until landing starts, rebase the chain bottom-up only where the trunk test in Autopilot-full step 5 calls for one.
+   Then apply the patch-id rule link by link, because each link's base is its parent.
    For Graphite, use `gt restack` and `gt sync`.
    For GitHub, use `gh stack rebase` and `gh stack sync`.
    Run a rebase in one temporary stacker worktree created from the remote branches, and release it after the push.
@@ -111,10 +117,14 @@ Use `../references/delivery-operations.md` for root model selection, compact che
 8. **Deliver without landing.**
    Run the final footprint audit from `../references/delivery-operations.md`.
    Leave no run-owned worktree, local branch, container, or volume for a published layer.
-   Return the ordered PR chain, owners, head identities, independent verdicts, pilot limits, and evidence locations.
+   Catch the operator up per the **ketchup** skill.
+   Link the stack root and tip, give a one-line independent verdict per layer, and list anything parked or excluded with the reason.
+   Cover pilot limits and evidence locations.
    Report the local footprint before and after the audit, with the reason for each held resource.
    Include each verifier verdict in the PR body or a comment through the authorized publication boundary.
    The operator reviews and lands the stack through the selected backend.
+   Once landing starts, nobody writes to the chain, per `playbooks/shipping.md`, because a second writer breaks a landing in flight.
+   Route a mid-landing problem to the operator, and hold any fix until the operator's go.
 
 Use **Autopilot-full** only when the queue is independent and landing authority is explicit.
 Use **Autopilot-stack** when the operator retains landing control or the work requires a dependent chain.

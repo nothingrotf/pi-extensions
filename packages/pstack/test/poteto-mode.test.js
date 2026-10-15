@@ -26,6 +26,35 @@ function run(command, args, options = {}) {
   return spawnSync(command, args, { cwd: packageRoot, encoding: 'utf8', ...options })
 }
 
+function writeWatchGh(root, responses) {
+  const bin = join(root, 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(root, 'responses.json'), JSON.stringify(responses))
+  writeFileSync(
+    join(bin, 'gh'),
+    [
+      '#!/usr/bin/env node',
+      "const { appendFileSync, readFileSync } = require('node:fs')",
+      "const { join } = require('node:path')",
+      "const root = join(__dirname, '..')",
+      "const responses = JSON.parse(readFileSync(join(root, 'responses.json'), 'utf8'))",
+      'const args = process.argv.slice(2)',
+      'const field = (name) => args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1)',
+      "const query = field('query') ?? ''",
+      "appendFileSync(join(root, 'calls.log'), `${args[0]} ${args[1]} ${query.includes('ReviewThreads') ? `threads:${field('after') ?? '-'}` : ''}\\n`)",
+      'const reply = (key) => process.stdout.write(JSON.stringify(responses[key]))',
+      "if (args[0] === 'pr' && args[1] === 'checks') reply('checks')",
+      "else if (args[0] === 'pr' && args[1] === 'view') reply('facts')",
+      "else if (query.includes('ReviewThreads')) reply(field('after') === 'page-2' ? 'secondThreads' : 'firstThreads')",
+      "else if (query.includes('PrCommitStatuses')) reply('commits')",
+      'else process.exit(2)',
+      '',
+    ].join('\n'),
+  )
+  chmodSync(join(bin, 'gh'), 0o755)
+  return bin
+}
+
 describe('poteto-mode', () => {
   it('ships complete investigation playbooks', () => {
     for (const path of [
@@ -45,7 +74,6 @@ describe('poteto-mode', () => {
       'scripts/check-plan.mjs',
       'scripts/orch/orch',
       'scripts/orch/orch.bundle',
-      'scripts/orch/gt-compat.mjs',
       'scripts/worktree-audit.sh',
       'scripts/release-worktree.sh',
       'scripts/watch-pr/watch-pr',
@@ -75,6 +103,7 @@ describe('poteto-mode', () => {
       'how',
       'in-your-own-words',
       'ketchup',
+      'sharpen',
       'typescript-best-practices',
       'unslop',
       'why',
@@ -235,242 +264,104 @@ describe('poteto-mode', () => {
     rmSync(store, { force: true, recursive: true })
   })
 
-  it('prefers a GitHub stack through the orchestration frontier', () => {
-    const root = join(tmpdir(), `poteto-github-stack-${process.pid}`)
+  it('resolves the orchestration frontier from the pull request base chain', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-frontier-')))
     const repo = join(root, 'repo')
     const bin = join(root, 'bin')
     const store = join(root, 'store')
-    rmSync(root, { force: true, recursive: true })
-    mkdirSync(repo, { recursive: true })
-    mkdirSync(bin)
     const git = (args) => run('git', args, { cwd: repo })
-    expect(git(['init', '--initial-branch=main']).status).toBe(0)
-    expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-    expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-    writeFileSync(join(repo, 'main.txt'), 'main\n')
-    expect(git(['add', '.']).status).toBe(0)
-    expect(git(['commit', '-m', 'main']).status).toBe(0)
-    expect(git(['checkout', '-b', 'stack/one']).status).toBe(0)
-    writeFileSync(join(repo, 'one.txt'), 'one\n')
-    expect(git(['add', '.']).status).toBe(0)
-    expect(git(['commit', '-m', 'one']).status).toBe(0)
-    expect(git(['checkout', '-b', 'stack/two']).status).toBe(0)
-    writeFileSync(join(repo, 'two.txt'), 'two\n')
-    expect(git(['add', '.']).status).toBe(0)
-    expect(git(['commit', '-m', 'two']).status).toBe(0)
-    const gh = join(bin, 'gh')
-    writeFileSync(
-      gh,
-      `#!/usr/bin/env bash
+    try {
+      mkdirSync(repo)
+      mkdirSync(bin)
+      expect(git(['init', '--quiet', '--initial-branch=main']).status).toBe(0)
+      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
+      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
+      writeFileSync(join(repo, 'main.txt'), 'main\n')
+      expect(git(['add', '.']).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
+      const sha = {}
+      for (const branch of ['stack/one', 'stack/two', 'stack/three']) {
+        expect(git(['checkout', '--quiet', '-b', branch]).status).toBe(0)
+        writeFileSync(join(repo, `${branch.slice(6)}.txt`), `${branch}\n`)
+        expect(git(['add', '.']).status).toBe(0)
+        expect(git(['commit', '--quiet', '-m', branch]).status).toBe(0)
+        sha[branch] = git(['rev-parse', 'HEAD']).stdout.trim()
+      }
+      expect(git(['checkout', '--quiet', 'stack/two']).status).toBe(0)
+      const row = (number, state, head, base) => ({
+        baseRefName: base,
+        headRefName: head,
+        number,
+        state,
+      })
+      const list = (filter, branch) =>
+        `pr list ${filter} ${branch} --state all --json number,state,headRefName,baseRefName`
+      const reply = (rows) => `printf '%s\\n' '${JSON.stringify(rows)}'`
+      writeFileSync(
+        join(bin, 'gh'),
+        `#!/usr/bin/env bash
 set -euo pipefail
+[ "$(pwd -P)" = "${repo}" ] || exit 8
 case "$*" in
-  "stack --version") printf '%s\\n' 'gh stack version 0.1.0' ;;
-  "stack view --json")
-    [ "$(pwd -P)" = "${realpathSync(repo)}" ] || exit 8
-    printf '%s\\n' '{"trunk":"main","currentBranch":"stack/two","branches":[{"name":"stack/one","pr":{"number":10,"state":"MERGED"}},{"name":"stack/two","pr":{"number":11,"state":"QUEUED"}}]}'
-    ;;
-  *) exit 2 ;;
+  "${list('--head', 'stack/two')}") ${reply([row(11, 'OPEN', 'stack/two', 'stack/one')])} ;;
+  "${list('--head', 'stack/one')}") ${reply([row(10, 'MERGED', 'stack/one', 'main')])} ;;
+  "${list('--base', 'stack/two')}") ${reply([row(12, 'OPEN', 'stack/three', 'stack/two'), row(13, 'CLOSED', 'stack/old', 'stack/two')])} ;;
+  "${list('--base', 'stack/three')}") ${reply([])} ;;
+  *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 2 ;;
 esac
 `,
-    )
-    chmodSync(gh, 0o755)
-    const gt = join(bin, 'gt')
-    const gtCalls = join(root, 'gt-calls.txt')
-    writeFileSync(
-      gt,
-      `#!/usr/bin/env bash
-printf '%s\\n' "$*" >>"${gtCalls}"
-exit 91
-`,
-    )
-    chmodSync(gt, 0o755)
-    const env = {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
-    }
-    const orch = join(skillRoot, 'scripts', 'orch', 'orch')
-    expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
-    const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
-    expect(result.stderr).toBe('')
-    expect(result.status).toBe(0)
-    expect(JSON.parse(readFileSync(join(store, 'frontier.json'), 'utf8'))).toMatchObject({
-      generation: 1,
-      lowestUnmerged: 11,
-      prs: [
-        { branches: 'stack/one', pr: 10, state: 'MERGED' },
-        { branches: 'stack/two', pr: 11, state: 'OPEN' },
-      ],
-    })
-    expect(() => readFileSync(gtCalls, 'utf8')).toThrow(/ENOENT/)
-    rmSync(root, { force: true, recursive: true })
-  })
-
-  it('keeps Graphite as an automatic fallback and explicit selection', () => {
-    const root = join(tmpdir(), `poteto-graphite-stack-${process.pid}`)
-    const repo = join(root, 'repo')
-    const bin = join(root, 'bin')
-    rmSync(root, { force: true, recursive: true })
-    mkdirSync(repo, { recursive: true })
-    mkdirSync(bin)
-    const git = (args) => run('git', args, { cwd: repo })
-    expect(git(['init', '--initial-branch=main']).status).toBe(0)
-    expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-    expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-    writeFileSync(join(repo, 'main.txt'), 'main\n')
-    expect(git(['add', '.']).status).toBe(0)
-    expect(git(['commit', '-m', 'main']).status).toBe(0)
-    expect(git(['checkout', '-b', 'stack/one']).status).toBe(0)
-    writeFileSync(join(repo, 'one.txt'), 'one\n')
-    expect(git(['add', '.']).status).toBe(0)
-    expect(git(['commit', '-m', 'one']).status).toBe(0)
-    const gh = join(bin, 'gh')
-    writeFileSync(
-      gh,
-      '#!/usr/bin/env bash\nif [ "$*" = "stack --version" ]; then exit "${GH_STACK_STATUS:-1}"; fi\nexit 2\n',
-    )
-    chmodSync(gh, 0o755)
-    const gt = join(bin, 'gt')
-    writeFileSync(
-      gt,
-      `#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  "--no-interactive log short --stack --reverse") printf '◯ main\\n◯ stack/one\\n' ;;
-  "--no-interactive info stack/one") printf 'stack/one\\nPR #12 (Needs approvals) Test\\n' ;;
-  *) exit 2 ;;
-esac
-`,
-    )
-    chmodSync(gt, 0o755)
-    const orch = join(skillRoot, 'scripts', 'orch', 'orch')
-    const baseEnv = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
-    for (const [name, env] of [
-      ['fallback', { ...baseEnv, GH_STACK_STATUS: '1' }],
-      ['explicit', { ...baseEnv, GH_STACK_STATUS: '0', POTETO_STACK_BACKEND: 'graphite' }],
-    ]) {
-      const store = join(root, name)
+      )
+      chmodSync(join(bin, 'gh'), 0o755)
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
+      const orch = join(skillRoot, 'scripts', 'orch', 'orch')
       expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
       const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
       expect(result.stderr).toBe('')
       expect(result.status).toBe(0)
-      expect(JSON.parse(readFileSync(join(store, 'frontier.json'), 'utf8'))).toMatchObject({
+      expect(JSON.parse(readFileSync(join(store, 'frontier.json'), 'utf8'))).toEqual({
         generation: 1,
-        lowestUnmerged: 12,
-        prs: [{ branches: 'stack/one', pr: 12, state: 'OPEN' }],
+        lowestUnmerged: 11,
+        prs: [
+          { branches: 'stack/one', pr: 10, sha: sha['stack/one'], state: 'MERGED' },
+          { branches: 'stack/two', pr: 11, sha: sha['stack/two'], state: 'OPEN' },
+          { branches: 'stack/three', pr: 12, sha: sha['stack/three'], state: 'OPEN' },
+        ],
       })
+    } finally {
+      rmSync(root, { force: true, recursive: true })
     }
-    rmSync(root, { force: true, recursive: true })
   })
 
-  it('rejects a GitHub stack branch without a pull request', () => {
-    const root = join(tmpdir(), `poteto-stack-without-pr-${process.pid}`)
-    mkdirSync(root, { recursive: true })
-    const snapshot = join(root, 'stack.json')
-    writeFileSync(
-      snapshot,
-      JSON.stringify({
-        branches: [{ name: 'stack/one' }],
-        currentBranch: 'stack/one',
-        trunk: 'main',
-      }),
-    )
-    const result = run(
-      join(skillRoot, 'scripts', 'orch', 'gt-compat.mjs'),
-      ['--no-interactive', 'info', 'stack/one'],
-      { env: { ...process.env, POTETO_GH_STACK_SNAPSHOT: snapshot } },
-    )
-    expect(result.status).toBe(2)
-    expect(result.stderr).toContain('gh stack branch stack/one has no pull request')
-    rmSync(root, { force: true, recursive: true })
-  })
-
-  it('requires approval before the GitHub stack extension installation path', () => {
-    const root = join(tmpdir(), `poteto-missing-stack-${process.pid}`)
+  it('names the branch that has no pull request in the frontier chain', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-frontier-missing-')))
+    const repo = join(root, 'repo')
     const bin = join(root, 'bin')
-    mkdirSync(bin, { recursive: true })
-    const gh = join(bin, 'gh')
-    const calls = join(root, 'calls.txt')
-    writeFileSync(
-      gh,
-      `#!/usr/bin/env bash
-printf '%s\\n' "$*" >>"${calls}"
-exit 1
-`,
-    )
-    chmodSync(gh, 0o755)
-    const result = run(
-      join(skillRoot, 'scripts', 'orch', 'orch'),
-      ['frontier', 'set', '--repo', packageRoot],
-      {
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          POTETO_STACK_BACKEND: 'github',
-        },
-      },
-    )
-    expect(result.status).toBe(2)
-    expect(result.stderr).toContain(
-      'obtain approval, then run gh extension install github/gh-stack',
-    )
-    expect(readFileSync(calls, 'utf8')).toBe('stack --version\n')
-    rmSync(root, { force: true, recursive: true })
-  })
-
-  it('does not intercept non-frontier orchestration arguments', () => {
-    const root = join(tmpdir(), `poteto-orch-routing-${process.pid}`)
-    const bin = join(root, 'bin')
-    mkdirSync(bin, { recursive: true })
-    const gh = join(bin, 'gh')
-    const calls = join(root, 'calls.txt')
-    writeFileSync(
-      gh,
-      `#!/usr/bin/env bash
-printf '%s\\n' "$*" >>"${calls}"
-exit 1
-`,
-    )
-    chmodSync(gh, 0o755)
-    const result = run(
-      join(skillRoot, 'scripts', 'orch', 'orch'),
-      ['unit', 'add', 'frontier', 'set'],
-      {
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          POTETO_STACK_BACKEND: 'github',
-        },
-      },
-    )
-    expect(result.status).not.toBe(0)
-    expect(result.stderr).not.toContain('no stack backend is available')
-    expect(() => readFileSync(calls, 'utf8')).toThrow(/ENOENT/)
-    rmSync(root, { force: true, recursive: true })
-  })
-
-  it('preserves GitHub stack availability failures', () => {
-    const root = join(tmpdir(), `poteto-unavailable-stack-${process.pid}`)
-    const bin = join(root, 'bin')
-    mkdirSync(bin, { recursive: true })
-    const gh = join(bin, 'gh')
-    writeFileSync(
-      gh,
-      '#!/usr/bin/env bash\nif [ "$*" = "stack --version" ]; then exit 0; fi\nexit 9\n',
-    )
-    chmodSync(gh, 0o755)
-    const result = run(
-      join(skillRoot, 'scripts', 'orch', 'orch'),
-      ['frontier', 'set', '--repo', packageRoot],
-      {
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          POTETO_STACK_BACKEND: 'github',
-        },
-      },
-    )
-    expect(result.status).toBe(9)
-    rmSync(root, { force: true, recursive: true })
+    const store = join(root, 'store')
+    const git = (args) => run('git', args, { cwd: repo })
+    try {
+      mkdirSync(repo)
+      mkdirSync(bin)
+      expect(git(['init', '--quiet', '--initial-branch=main']).status).toBe(0)
+      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
+      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
+      writeFileSync(join(repo, 'main.txt'), 'main\n')
+      expect(git(['add', '.']).status).toBe(0)
+      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
+      expect(git(['checkout', '--quiet', '-b', 'stack/one']).status).toBe(0)
+      writeFileSync(join(bin, 'gh'), "#!/usr/bin/env bash\nprintf '[]\\n'\n")
+      chmodSync(join(bin, 'gh'), 0o755)
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
+      const orch = join(skillRoot, 'scripts', 'orch', 'orch')
+      expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
+      const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain(
+        'branch stack/one has no pull request; open one with gh pr create',
+      )
+      expect(readFileSync(join(store, 'frontier.json'), 'utf8')).toBe('{}\n')
+    } finally {
+      rmSync(root, { force: true, recursive: true })
+    }
   })
 
   it('releases only a published clean destination worktree', () => {
@@ -613,7 +504,6 @@ exit 1
 
   it('reads review threads beyond the first page through the bundled watcher', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-watch-')))
-    const bin = join(root, 'bin')
     const thread = (id, resolved) => ({
       id,
       isResolved: resolved,
@@ -658,30 +548,7 @@ exit 1
       secondThreads: page([thread('late', false)], null),
     }
     try {
-      mkdirSync(bin)
-      writeFileSync(join(root, 'responses.json'), JSON.stringify(responses))
-      writeFileSync(
-        join(bin, 'gh'),
-        [
-          '#!/usr/bin/env node',
-          "const { appendFileSync, readFileSync } = require('node:fs')",
-          "const { join } = require('node:path')",
-          "const root = join(__dirname, '..')",
-          "const responses = JSON.parse(readFileSync(join(root, 'responses.json'), 'utf8'))",
-          'const args = process.argv.slice(2)',
-          'const field = (name) => args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1)',
-          "const query = field('query') ?? ''",
-          "appendFileSync(join(root, 'calls.log'), `${args[0]} ${args[1]} ${query.includes('ReviewThreads') ? `threads:${field('after') ?? '-'}` : ''}\\n`)",
-          'const reply = (key) => process.stdout.write(JSON.stringify(responses[key]))',
-          "if (args[0] === 'pr' && args[1] === 'checks') reply('checks')",
-          "else if (args[0] === 'pr' && args[1] === 'view') reply('facts')",
-          "else if (query.includes('ReviewThreads')) reply(field('after') === 'page-2' ? 'secondThreads' : 'firstThreads')",
-          "else if (query.includes('PrCommitStatuses')) reply('commits')",
-          'else process.exit(2)',
-          '',
-        ].join('\n'),
-      )
-      chmodSync(join(bin, 'gh'), 0o755)
+      const bin = writeWatchGh(root, responses)
       const result = run(
         join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'),
         ['--owner', 'o', '--repo', 'r', '--pr', '7', '--status-only'],
@@ -697,6 +564,59 @@ exit 1
           .split('\n')
           .filter((line) => line.includes('threads:')),
       ).toEqual(['api graphql threads:-', 'api graphql threads:page-2'])
+    } finally {
+      rmSync(root, { force: true, recursive: true })
+    }
+  })
+
+  it('waits on a Code Review Gate that needs owner approval instead of failing it', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-watch-gate-')))
+    const emptyThreads = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } },
+          },
+        },
+      },
+    }
+    const check = (name, state, bucket) => ({
+      bucket,
+      description: '',
+      link: '',
+      name,
+      state,
+      workflow: '',
+    })
+    const responses = {
+      checks: [
+        check('ci', 'SUCCESS', 'pass'),
+        check('Code Review Gate', 'ACTION_REQUIRED', 'fail'),
+      ],
+      commits: { data: { repository: { pullRequest: { commits: { nodes: [] } } } } },
+      facts: {
+        baseRefName: 'main',
+        headRefName: 'feature',
+        headRefOid: 'abc',
+        isDraft: false,
+        mergeStateStatus: 'BLOCKED',
+        mergeable: 'MERGEABLE',
+        mergedAt: null,
+        reviewDecision: 'REVIEW_REQUIRED',
+        state: 'OPEN',
+      },
+      firstThreads: emptyThreads,
+    }
+    try {
+      const bin = writeWatchGh(root, responses)
+      const result = run(
+        join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'),
+        ['--owner', 'o', '--repo', 'r', '--pr', '7', '--pretty'],
+        { cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` } },
+      )
+      expect(result.stderr).toBe('')
+      expect(result.stdout).toMatch(/^READY: /)
+      expect(result.status).toBe(0)
     } finally {
       rmSync(root, { force: true, recursive: true })
     }

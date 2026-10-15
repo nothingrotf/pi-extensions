@@ -17,7 +17,7 @@ Run these checks in order:
 
 Never install an extension without approval. Never change the selected backend after a stack mutation starts.
 
-Set the backend for bundled commands:
+Record the selected backend for the session:
 
 ```bash
 export POTETO_STACK_BACKEND=graphite
@@ -74,9 +74,7 @@ Always use `gh stack submit --auto`. The command without `--auto` can prompt for
 
 ## Frontier
 
-The bundled `orch frontier set` command supports both backends. It reads `POTETO_STACK_BACKEND` and normalizes the selected backend into the same frontier record.
-
-The GitHub adapter consumes `gh stack view --json`. It does not modify the stack.
+The bundled `orch frontier set` command works with both backends and does not read `POTETO_STACK_BACKEND`. It walks the pull request base chain from the checkout's current branch with `gh pr list`. Run it from the stacker's clone, because head SHAs come from local branch refs. It does not modify the stack.
 
 ## Merge semantics
 

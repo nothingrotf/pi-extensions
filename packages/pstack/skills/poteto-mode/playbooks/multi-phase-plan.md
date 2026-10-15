@@ -65,7 +65,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ### Verdict and merge, for every PR
 
-- [ ] At the merge-ready head SHA, run the swarm per the bundled `../swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. One audit lane that reads the diff and the receipts and distrusts the PR body.
+- [ ] A full swarm runs once, at the merge-ready head SHA. Another full swarm runs only for new behavior, a redesign, or a large new diff. A rebase, a merge-conflict resolution, or a minor fix gets one independent verifier at the new head. Run each full swarm per the bundled `../swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. One audit lane that reads the diff and the receipts and distrusts the PR body.
 - [ ] Clean only when every required lane is `PASS`. Return findings to the owner with the affected evidence.
 - [ ] For a changed head, invalidate affected evidence through `../references/delivery-contract.md` and issue a complete current verdict.
 - [ ] Reuse unaffected passing evidence only with explicit identity and applicability records. Preserve repository-required final gates.

@@ -24,7 +24,7 @@ Restart Pi after installation.
 
 ## Resources
 
-The package provides 51 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 52 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -74,6 +74,7 @@ The package provides 51 upstream skills, four Pi compatibility skills, and the l
 - `recall`
 - `reflect`
 - `setup-pstack`
+- `sharpen`
 - `show-me-your-work`
 - `swarm`
 - `tdd`
@@ -163,6 +164,26 @@ Existing `how critics:` configuration lines remain valid but no longer publish a
 `setup-pstack` announces which known legacy rows its rewrite removes before confirmation.
 `poteto-mode` starts its task list with the matched playbook steps and cites only principles read during the session.
 The new principles cover questioning a shared premise after repeated failed fixes and testing observable behavior.
+
+These upstream changes through [#634](https://github.com/cursor/plugins/pull/634) at `99743e9c151c8537cbbf1f98bb38f34ef3368453` are also synchronized:
+
+- [#609](https://github.com/cursor/plugins/pull/609) and [#628](https://github.com/cursor/plugins/pull/628) make `ketchup` read like `bro` in about 150 words and explain changes with screenshots, videos, and small diagrams.
+- [#613](https://github.com/cursor/plugins/pull/613) resolves the orchestration frontier from the pull request base chain instead of Graphite. It also trims the autopilot, shipping, orchestrate, and plan playbooks, and the bundled `watch-pr` no longer fails a Code Review Gate that waits on an owner approval.
+- [#615](https://github.com/cursor/plugins/pull/615) adds `sharpen`.
+- [#616](https://github.com/cursor/plugins/pull/616) makes autopilot audit ticks and replies catch the operator up with `ketchup`.
+- [#633](https://github.com/cursor/plugins/pull/633) restates four principles as reasoning instead of rules.
+- [#634](https://github.com/cursor/plugins/pull/634) removes marginal sections from four skills.
+
+The Pi port adapts or omits these parts:
+
+- The runtime model policy fixes the model, effort, and speed of each role. The upstream rule that picks a reasoning level and speed for each subagent has no counterpart.
+- The playbooks keep the Graphite and GitHub stack backends, the delivery engine, and one independent reviewer per round. They take the principles from #613 without its base-chain landing steps or the Origin forge.
+- The delivery contract invalidates a code verdict on any patch change, so the upstream rule that carries a lane result across a test-only patch change has no counterpart.
+- The bundled `orch` keeps the upstream `--forge origin` choice. The Pi playbooks use the default `gh` forge.
+- The orchestration frontier no longer needs a backend adapter, so the `gt` compatibility shim is removed.
+- `ketchup` still draws charts with an available tool instead of `/visualize`.
+- `worktree-audit.sh` keeps its `gh` pull request lookup, so the Origin lookup has no counterpart.
+- `poteto-help` and the version bumps have no local counterpart.
 
 ## Task roles and workspace contracts
 
@@ -441,5 +462,7 @@ gh extension install github/gh-stack
 ```
 
 Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers GitHub when both exist. Graphite remains an explicit selection and an automatic fallback.
+
+The bundled `orch frontier set` command needs neither backend. It walks the pull request base chain from the current branch with `gh pr list`, so it reads stacks from both backends.
 
 GitHub stack workflows require GitHub Stacked Pull Requests on the repository.

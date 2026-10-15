@@ -47,7 +47,8 @@ CONTEXT      immutable pointers to files, PRs, and upstream reports; inline only
 ACCEPTANCE   checkable criteria, one per line
 VERIFY       exact commands or the control-skill path, plus known gotchas
 TIMEBOX      diagnostic checkpoint; stop only for an explicit operator limit or genuine blocker
-FORBIDDEN    no stack backend commands, no rebase, no force-push, no fixes outside scope, plus unit-specific bans
+FORBIDDEN    no stack backend commands, no PR retargets or merges, no rebase, no force-push,
+             no fixes outside scope, plus unit-specific bans
 REPORT       status, branch, head SHA, PRs, verdict, what you actually ran, deviations,
              suggested follow-ups
 STANDING     <preferences.md reference and identity, plus relevant constraints>
@@ -84,9 +85,9 @@ Never substitute shell `sleep` or wait for a heartbeat after a child completes.
 
 #### Stack safety
 
-- The frontier is a computed object, never narrative. Recompute `frontier.json` through the selected backend after every merge and stack mutation: ordered PR list, branch names, head SHAs, a generation number, the lowest unmerged PR. Resolve it where that backend tracks the stack, normally the stacker's clone. A checkout without the selected backend's metadata must error rather than guess.
-- Exactly one stacker per stack can run stack backend commands, serialized within its stack. Record the holder in the standing orders. Run rebases in one dedicated `Task` worktree so topology remains isolated.
-- Workers never rebase and never run stack backend commands. Babysitters follow `playbooks/babysit.md`, one per stack, scoped to one immutable frontier generation. They report conflicts to the stacker rather than rebasing.
+- The frontier is a computed object, never narrative. Recompute `frontier.json` after every merge and stack mutation: ordered PR list, branch names, head SHAs, a generation number, the lowest unmerged PR. The command walks the PR base chain through the checkout's current branch with `gh pr list`, so chain order and PR states come from GitHub under either backend. Head SHAs come from local branch refs, so resolve it from the stacker's clone. A branch with no PR errors rather than guessing.
+- Exactly one stacker per stack can mutate topology, serialized within its stack. Topology writes include stack backend commands, chain rebases, force-pushes, base retargets, and merges. Record the holder in the standing orders. Run rebases in one dedicated `Task` worktree so topology remains isolated.
+- Workers never rebase, never run stack backend commands, and never retarget or merge PRs. Babysitters follow `playbooks/babysit.md`, one per stack, scoped to one immutable frontier generation. They report conflicts to the stacker rather than rebasing.
 - PR closes and retargets go through the stacker only. Closing a base PR orphans every chain above it. Merges and stack surgery are units with briefs like any other.
 - One retro watcher follows merged PRs for reverts, post-merge CI breaks, and orphaned follow-ups.
 

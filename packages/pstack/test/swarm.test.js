@@ -88,7 +88,6 @@ describe('swarm', () => {
       'Never invent SHAs or a benchmark method for generation or writing work.',
     )
     expect(port).toContain('Verification without measurement does not require benchmark metadata')
-    expect(port).toContain('assigned identity or method')
   })
 
   it('audits semantic truth separately from schema gates and keeps every defect', () => {

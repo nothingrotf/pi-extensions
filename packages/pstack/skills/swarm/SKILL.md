@@ -6,8 +6,6 @@ disable-model-invocation: true
 
 # Swarm
 
-Fan out N parallel local Task workers. They can cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report.
-
 ## Start
 
 Use `todo_write` to create one item per phase before you launch anything.
@@ -21,8 +19,7 @@ Use `todo_write` to create one item per phase before you launch anything.
 
 1. State the done predicate and the artifact or report the swarm must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
-3. Set N from the user or derive it from the shape. N is total workers.
-4. For ordinary workers, use the parsed `swarm workers` runtime policy in context.
+3. For ordinary workers, use the parsed `swarm workers` runtime policy in context.
    Omit `Task.model` to select its scalar default.
    Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
    If the role is absent, use inherited workers.
@@ -33,7 +30,7 @@ Use `todo_write` to create one item per phase before you launch anything.
    Verify each concrete selector against the active Pi runtime.
    If Pi rejects it, mark that arm `BLOCKED`.
    Do not substitute a model.
-5. Give each worker its own writable output when it writes. For repository writers, use `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, use `/tmp/swarm-<slug>/worker-<n>/` or another distinct output directory.
+4. Give each worker its own writable output when it writes. For repository writers, use `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, use `/tmp/swarm-<slug>/worker-<n>/` or another distinct output directory.
 
 ## Phase B: Fan out
 
@@ -125,8 +122,6 @@ Check that recorded evidence supports the verdict. Keep every demonstrated defec
 If the proof exists with receipts intact and only the report is defective, repair the report through the supported path. In a managed delivery, use `pstack_delivery` with `action: "repair"` per [Delivery operations](../poteto-mode/references/delivery-operations.md), without a new Task or model run. Missing execution needs real proof, not repair. Obtain it through an authorized execution. Existing diagnoses still apply.
 
 For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
-
-Keep a compact result table, one-line evidenced issues, and explicit gaps or dropouts. Downgrade a result when its assigned identity or method is missing or incompatible.
 
 ## Phase D: Report
 
