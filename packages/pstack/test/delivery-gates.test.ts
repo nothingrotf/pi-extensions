@@ -117,11 +117,12 @@ describe('tree-keyed gates', () => {
       runGate({ command: slow, cwd: root, signal: first.signal }),
       runGate({ command: slow, cwd: root, signal: second.signal }),
     ]
+    const rejections = calls.map((call) => expect(call).rejects.toThrow('pstack_gate was aborted.'))
     setTimeout(() => {
       first.abort()
       second.abort()
     }, 200)
-    for (const call of calls) await expect(call).rejects.toThrow('pstack_gate was aborted.')
+    await Promise.all(rejections)
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(Date.now() - started).toBeLessThan(4000)
     expect(await runs(counter)).toBe(1)

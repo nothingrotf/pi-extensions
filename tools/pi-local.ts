@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -45,16 +47,58 @@ function runPi(args: string[], env: NodeJS.ProcessEnv): void {
   if (result.status !== 0) fail(`pi ${args.join(' ')} failed.`)
 }
 
+const PackageSourcesSchema = Type.Array(
+  Type.Union([
+    Type.String(),
+    Type.Object({ source: Type.String() }, { additionalProperties: true }),
+  ]),
+)
+const StringSchema = Type.String()
+
+function localPackages(agentDir: string, scope: 'legacy' | 'all'): string[] {
+  const path = join(agentDir, 'settings.json')
+  if (!existsSync(path)) return []
+  const settings = parseSettings(readFileSync(path, 'utf8'))
+  const packages = settings.get('packages') ?? []
+  if (!Value.Check(PackageSourcesSchema, packages)) fail('The settings packages list is invalid.')
+  const managed = new Set(packagePaths())
+  if (scope === 'all') managed.add(repoRoot)
+  const found = packages.map((entry) => {
+    const source = Value.Check(StringSchema, entry) ? entry : entry.source
+    const expanded = source.startsWith('~/') ? join(homedir(), source.slice(2)) : source
+    return resolve(agentDir, expanded)
+  })
+  return [...new Set(found.filter((source) => managed.has(source)))]
+}
+
+function backupSettings(agentDir: string): void {
+  const path = join(agentDir, 'settings.json')
+  if (!existsSync(path)) return
+  const backup = `${path}.pi-extensions-${randomUUID()}.bak`
+  copyFileSync(path, backup)
+  write(`Settings backup: ${backup}`)
+}
+
 function install(agentDir: string | undefined): void {
-  const env =
-    agentDir === undefined ? process.env : { ...process.env, PI_CODING_AGENT_DIR: agentDir }
-  for (const path of packagePaths()) runPi(['install', path], env)
+  const directory = resolve(agentDir ?? globalAgentDir)
+  const legacy = localPackages(directory, 'legacy')
+  const env = { ...process.env, PI_CODING_AGENT_DIR: directory, PI_OFFLINE: '1' }
+  backupSettings(directory)
+  runPi(['install', repoRoot], env)
+  for (const path of legacy) runPi(['remove', path], env)
+  write('All local extensions now load through one repository entry. Run /reload in Pi.')
 }
 
 function remove(agentDir: string | undefined): void {
-  const env =
-    agentDir === undefined ? process.env : { ...process.env, PI_CODING_AGENT_DIR: agentDir }
-  for (const path of packagePaths()) runPi(['remove', path], env)
+  const directory = resolve(agentDir ?? globalAgentDir)
+  const installed = localPackages(directory, 'all')
+  if (installed.length === 0) {
+    write('No local extension packages are configured.')
+    return
+  }
+  const env = { ...process.env, PI_CODING_AGENT_DIR: directory, PI_OFFLINE: '1' }
+  backupSettings(directory)
+  for (const path of installed) runPi(['remove', path], env)
 }
 
 const SettingsSchema = Type.Object({}, { additionalProperties: Type.Unknown() })
@@ -76,7 +120,7 @@ function profile(profileDir: string): void {
   const settings = existsSync(globalSettingsPath)
     ? parseSettings(readFileSync(globalSettingsPath, 'utf8'))
     : new Map<string, unknown>()
-  settings.set('packages', packagePaths())
+  settings.set('packages', [repoRoot])
   settings.set('subagents', { disableBuiltins: true })
   writeFileSync(
     join(profileDir, 'settings.json'),
@@ -94,8 +138,10 @@ else if (command === 'remove') remove(argument)
 else if (command === 'profile') profile(resolve(argument ?? defaultProfileDir))
 else {
   write('Usage:')
-  write('  bun run pi:install [agentDir]   Add every workspace package to the Pi settings')
-  write('  bun run pi:remove [agentDir]    Remove every workspace package from the Pi settings')
+  write(
+    '  bun run pi:install [agentDir]   Install the repository bundle and migrate individual entries',
+  )
+  write('  bun run pi:remove [agentDir]    Remove the bundle and legacy local entries')
   write('  bun run pi:profile [dir]        Create an isolated Pi profile with the full local stack')
   process.exit(command === undefined ? 0 : 1)
 }

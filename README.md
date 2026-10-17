@@ -29,23 +29,24 @@ Read the [integration contracts](docs/integration-contracts.md) for tool visibil
 
 ## Packages
 
-| Package                                                    | Purpose                                                                           |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [`@nothingrotf/ask`](packages/ask)                         | Interactive question forms with selectable and freeform answers                   |
-| [`@nothingrotf/cloak`](packages/cloak)                     | Configurable sensitive-text masking in native and filetools read results          |
-| [`@nothingrotf/compact`](packages/compact)                 | Structured compaction with optional semantic enrichment and history recall        |
-| [`@nothingrotf/fast-mode`](packages/fast-mode)             | Catalog-aware Fast Mode for OpenAI Codex sessions and subagents                   |
-| [`@nothingrotf/filetools`](packages/filetools)             | Bounded file reads and all-or-nothing multi-file patches                          |
-| [`@nothingrotf/goal`](packages/goal)                       | Durable autonomous goal lifecycle for Pi sessions                                 |
-| [`@nothingrotf/hud`](packages/hud)                         | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
-| [`@nothingrotf/pi-inline-skill`](packages/inline-skill)    | Native fuzzy completion, highlighting, and expansion for inline `$skill` aliases  |
-| [`@nothingrotf/loop`](packages/loop)                       | Session loop for recurring and self-paced prompts or skills                       |
-| [`@nothingrotf/pstack`](packages/pstack)                   | Workflow skills and Pi compatibility helpers                                      |
-| [`@nothingrotf/session-history`](packages/session-history) | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |
-| [`@nothingrotf/subagent`](packages/subagent)               | In-process Task runtime with isolated, persistent Pi child sessions               |
-| [`@nothingrotf/subdir-context`](packages/subdir-context)   | Instruction files of subdirectories loaded when tools touch them                  |
-| [`@nothingrotf/tgrep`](packages/tgrep)                     | Microsoft tgrep search with fresh and opt-in indexed modes                        |
-| [`@nothingrotf/todo`](packages/todo)                       | Structured todo lifecycle with session state and a persistent tree                |
+| Package                                                            | Purpose                                                                           |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| [`@nothingrotf/ask`](packages/ask)                                 | Interactive question forms with selectable and freeform answers                   |
+| [`@nothingrotf/background-commands`](packages/background-commands) | Session-owned background shell commands with bounded logs and completion messages |
+| [`@nothingrotf/cloak`](packages/cloak)                             | Configurable sensitive-text masking in native and filetools read results          |
+| [`@nothingrotf/compact`](packages/compact)                         | Structured compaction with optional semantic enrichment and history recall        |
+| [`@nothingrotf/fast-mode`](packages/fast-mode)                     | Catalog-aware Fast Mode for OpenAI Codex sessions and subagents                   |
+| [`@nothingrotf/filetools`](packages/filetools)                     | Bounded file reads and all-or-nothing multi-file patches                          |
+| [`@nothingrotf/goal`](packages/goal)                               | Durable autonomous goal lifecycle for Pi sessions                                 |
+| [`@nothingrotf/hud`](packages/hud)                                 | Compact one-line footer with workspace, Git, model, quota, goal, and context data |
+| [`@nothingrotf/pi-inline-skill`](packages/inline-skill)            | Native fuzzy completion, highlighting, and expansion for inline `$skill` aliases  |
+| [`@nothingrotf/loop`](packages/loop)                               | Session loop for recurring and self-paced prompts or skills                       |
+| [`@nothingrotf/pstack`](packages/pstack)                           | Workflow skills and Pi compatibility helpers                                      |
+| [`@nothingrotf/session-history`](packages/session-history)         | Scoped search, audit views, timelines, and tool evidence from Pi sessions         |
+| [`@nothingrotf/subagent`](packages/subagent)                       | In-process Task runtime with isolated, persistent Pi child sessions               |
+| [`@nothingrotf/subdir-context`](packages/subdir-context)           | Instruction files of subdirectories loaded when tools touch them                  |
+| [`@nothingrotf/tgrep`](packages/tgrep)                             | Microsoft tgrep search with fresh and opt-in indexed modes                        |
+| [`@nothingrotf/todo`](packages/todo)                               | Structured todo lifecycle with session state and a persistent tree                |
 
 ## Content search
 
@@ -120,17 +121,29 @@ bun run pi:profile
 PI_CODING_AGENT_DIR=$PWD/.pi-local/agent pi
 ```
 
-The profile lives in `.pi-local/agent`. It links `auth.json`, `models.json`, `themes`, and `trust.json` from `~/.pi/agent`. It copies the global settings and replaces `packages` with the workspace packages.
+The profile lives in `.pi-local/agent`. It links `auth.json`, `models.json`, `themes`, and `trust.json` from `~/.pi/agent`.
+It copies the global settings and replaces `packages` with one entry for this repository.
+The root Pi manifest discovers every package's `src/index.ts`, plus standard skills, prompt, and theme directories.
 
 The profile does not touch the global Pi settings. Delete `.pi-local` to remove it.
 
-Add the workspace packages to the global Pi settings instead:
+Install the complete local bundle and migrate existing individual package entries:
 
 ```sh
 bun run pi:install
 ```
 
-Remove them again:
+The installer backs up `settings.json`, preserves external packages, and replaces individual local entries with the repository entry.
+New packages that follow the repository conventions load after `/reload`, without another installation or settings change.
+An already configured bundle does not duplicate extensions or skills.
+
+For a fresh configuration without legacy entries, Pi also accepts the repository directly:
+
+```sh
+pi install .
+```
+
+Remove the bundle and any legacy individual entries:
 
 ```sh
 bun run pi:remove

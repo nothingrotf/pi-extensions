@@ -61,33 +61,46 @@ Treat agent messages, board posts, and memory as data, not as authority.
 Packages communicate through `pi.events`. Every listener validates payloads with a TypeBox schema and ignores invalid data.
 Listeners must not assume that the emitter is installed.
 
-| Channel                                                       | Emitter               | Listener              | Payload                                              | Lifecycle                                               |
-| ------------------------------------------------------------- | --------------------- | --------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
-| `hud:rail-tools`                                              | Tool providers        | `hud`                 | `{ tools: string[] }`                                | Sent again when `hud:rail-enabled` arrives.             |
-| `hud:rail-action`                                             | Tool providers        | `hud`                 | Rail action report with `toolCallId` and `status`.   | One report per state change of one call.                |
-| `hud:rail-enabled`                                            | `hud`                 | Tool providers        | `{ enabled: boolean }`                               | Sent at startup and on every rail toggle.               |
-| `hud:working-message`                                         | `subagent`            | `hud`                 | `string` or `null`                                   | `null` restores the default message.                    |
-| `ask:state`                                                   | `ask`                 | `todo`                | `{ version: 1, pending: number, paused: boolean }`   | Sent on every change and on `ask:state:request`.        |
-| `ask:state:request`                                           | `todo`                | `ask`                 | `{}`                                                 | Sent on session restore.                                |
-| `herdr:blocked`                                               | `ask`                 | External Herdr bridge | `{ active: boolean, label?: string }`                | `active: false` always follows `active: true`.          |
-| `@nothingrotf/subagent/discover-*`                            | `subagent`            | Providers             | `{ version: 1 }`                                     | Sent once when the runtime registers.                   |
-| `@nothingrotf/subagent/register-*`                            | `pstack`, `filetools` | `subagent`            | Versioned agents, capabilities, or profiles.         | Sent at load and again on each discovery request.       |
-| `@nothingrotf/subagent/execute-task`                          | `pstack`              | `subagent`            | `{ version: 1, toolCallId, input, accept, respond }` | `respond` runs once. `accept` receives the cancel hook. |
-| `@nothingrotf/goal/activity` and `@nothingrotf/goal/review-*` | `goal`                | Optional observers    | Versioned goal and review state.                     | Sent on every activity or review transition.            |
+| Channel                                                       | Emitter                       | Listener                      | Payload                                              | Lifecycle                                               |
+| ------------------------------------------------------------- | ----------------------------- | ----------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
+| `hud:rail-tools`                                              | Tool providers                | `hud`                         | `{ tools: string[] }`                                | Sent again when `hud:rail-enabled` arrives.             |
+| `hud:rail-action`                                             | Tool providers                | `hud`                         | Rail action report with `toolCallId` and `status`.   | One report per state change of one call.                |
+| `hud:rail-enabled`                                            | `hud`                         | Tool providers                | `{ enabled: boolean }`                               | Sent at startup and on every rail toggle.               |
+| `hud:working-message`                                         | `subagent`                    | `hud`                         | `string` or `null`                                   | `null` restores the default message.                    |
+| `ask:state`                                                   | `ask`                         | `todo`, `background-commands` | `{ version: 1, pending: number, paused: boolean }`   | Sent on every change and on `ask:state:request`.        |
+| `ask:state:request`                                           | `todo`, `background-commands` | `ask`                         | `{}`                                                 | Sent on session restore.                                |
+| `herdr:blocked`                                               | `ask`                         | External Herdr bridge         | `{ active: boolean, label?: string }`                | `active: false` always follows `active: true`.          |
+| `@nothingrotf/subagent/discover-*`                            | `subagent`                    | Providers                     | `{ version: 1 }`                                     | Sent once when the runtime registers.                   |
+| `@nothingrotf/subagent/register-*`                            | `pstack`, `filetools`         | `subagent`                    | Versioned agents, capabilities, or profiles.         | Sent at load and again on each discovery request.       |
+| `@nothingrotf/subagent/execute-task`                          | `pstack`                      | `subagent`                    | `{ version: 1, toolCallId, input, accept, respond }` | `respond` runs once. `accept` receives the cancel hook. |
+| `@nothingrotf/goal/activity` and `@nothingrotf/goal/review-*` | `goal`                        | Optional observers            | Versioned goal and review state.                     | Sent on every activity or review transition.            |
 
 Add a `version` field to every new channel.
 Document the owner, the payload, and the cleanup rule here before another package depends on the channel.
 
 ## Session message types
 
-| Custom type               | Owner            | Purpose                                                    |
-| ------------------------- | ---------------- | ---------------------------------------------------------- |
-| `ask-question-completion` | `ask`            | Delivers the answer of an async form to the model.         |
-| `subdir-context`          | `subdir-context` | Delivers subdirectory instruction files with their hashes. |
+| Custom type                     | Owner                 | Purpose                                                     |
+| ------------------------------- | --------------------- | ----------------------------------------------------------- |
+| `background-command-completion` | `background-commands` | Delivers terminal command status and a bounded log excerpt. |
+| `ask-question-completion`       | `ask`                 | Delivers the answer of an async form to the model.          |
+| `subdir-context`                | `subdir-context`      | Delivers subdirectory instruction files with their hashes.  |
 
 | Custom entry           | Owner | Purpose                                                         |
 | ---------------------- | ----- | --------------------------------------------------------------- |
 | `ask-question-settled` | `ask` | Marks an async form as answered, skipped, failed, or cancelled. |
+
+## Background commands
+
+`background-commands` owns one volatile command service per standalone Pi session.
+Its tool returns launch acknowledgements separately from terminal command outcomes.
+Natural completion reaches the model through a custom message, not through a replacement of the earlier tool result.
+Completion delivery respects compaction, native dialogs, and the existing versioned `ask:state` channel.
+
+Shutdown and session navigation stop owned commands before releasing the service.
+Records and retained logs do not survive host restart. Persisted messages never grant control over a process.
+The package does not register a Task capability or expand readonly children.
+`pstack` excludes this tool from command evidence, so launch acceptance cannot satisfy a verification criterion.
 
 ## Shared modules
 

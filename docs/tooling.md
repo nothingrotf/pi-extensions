@@ -40,6 +40,20 @@ Pi loads extensions with its installed packages, so checks against another versi
 Use exact versions for Vite+, Oxlint, and the Oxlint plugin API.
 Update the Vite override with the Vite+ version.
 
+## Local Pi bundle
+
+The root `package.json` also acts as a local Pi package.
+Its resource globs discover extension entrypoints and standard resource directories under `packages/`.
+Packages keep their independent publication metadata and can still load individually.
+
+Run `bun run pi:install` to register the root bundle and remove legacy entries for packages in this checkout.
+The installer uses Pi's package commands, preserves external package sources, and backs up existing settings before mutation.
+Run `/reload` after installation or after adding a package with a standard entrypoint.
+
+`bun run pi:remove` removes the bundle and configured legacy local entries, but leaves external packages untouched.
+`bun run pi:profile` creates an isolated profile with one repository source rather than separate workspace sources.
+All three commands accept an alternate agent directory or profile path as their existing optional argument.
+
 ## Delivery benchmark
 
 `bun run bench:delivery` compares two managed delivery flows on the same task with the real `pi` CLI.

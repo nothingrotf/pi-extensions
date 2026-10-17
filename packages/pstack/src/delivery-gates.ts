@@ -418,7 +418,8 @@ export async function runGate(request: GateRequest): Promise<GateOutcome> {
     }
   }
   const existing = request.fresh === true ? undefined : inflight.get(identity.key)
-  if (existing !== undefined) return participate(existing, request.signal)
+  if (existing !== undefined && !existing.controller.signal.aborted)
+    return participate(existing, request.signal)
   const controller = new AbortController()
   const shared: SharedRun = {
     controller,
