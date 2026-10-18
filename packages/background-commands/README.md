@@ -54,6 +54,8 @@ A command can fail after its start request succeeds.
 Natural completion posts `background-command-completion` with status, exit code, diagnostics, and a bounded log excerpt.
 Its content reaches the model, while structured `details` support rendering and session history.
 Each retained natural outcome can trigger one follow-up turn. Explicit cancellation does not wake the agent.
+An `output` read of a finished command acknowledges its outcome, so its pending completion message is skipped.
+An `output` read of a running command keeps the later completion message.
 Completion delivery waits for idle and pauses during prompt preflight, compaction, question forms, and UI dialogs.
 Pending records stay outside Pi's model queue, so Escape cannot discard their completion messages.
 Manual compaction schedules a deferred flush after Pi clears its compaction state.

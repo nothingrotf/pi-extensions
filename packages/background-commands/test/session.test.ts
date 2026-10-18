@@ -131,6 +131,56 @@ describe('real Pi session integration', () => {
     expect(fixture.requests).toHaveLength(3)
   })
 
+  it('skips the completion of a finished command that the agent already read', async () => {
+    let id = ''
+    const fixture = await sessionFixture((request) =>
+      request === 1
+        ? [toolCall('background_command', { action: 'output', id })]
+        : [{ type: 'text', text: 'Done' }],
+    )
+    fixture.hold()
+    const prompt = fixture.session.prompt('Read the finished command')
+    await expect.poll(() => fixture.requests.length).toBe(1)
+    const command = start(fixture.service, { command: 'printf read-before-delivery' })
+    id = command.id
+    await waitForCommand(fixture.service, command)
+    fixture.release()
+    await prompt
+    await fixture.session.waitForIdle()
+    expect(contextText(fixture.requests[1]?.messages ?? [])).toContain('read-before-delivery')
+    const marker = start(fixture.service, { command: 'printf delivered-marker', name: 'Marker' })
+    await waitForCommand(fixture.service, marker)
+    await expect.poll(() => fixture.completions().length).toBe(1)
+    await fixture.session.waitForIdle()
+    expect(fixture.completions()[0]).toMatchObject({ details: { id: marker.id } })
+    expect(fixture.requests).toHaveLength(3)
+  })
+
+  it('keeps the completion of a command that was still running when the agent read it', async () => {
+    let id = ''
+    const fixture = await sessionFixture((request) =>
+      request === 1
+        ? [toolCall('background_command', { action: 'output', id })]
+        : [{ type: 'text', text: 'Done' }],
+    )
+    const command = start(fixture.service, {
+      command: nodeCommand('setTimeout(() => process.stdout.write("finished-later"), 300)'),
+    })
+    id = command.id
+    await fixture.session.prompt('Read the running command')
+    expect(fixture.requests[1]?.messages.at(-1)).toMatchObject({
+      role: 'toolResult',
+      details: { snapshot: { status: 'running' } },
+    })
+    await waitForCommand(fixture.service, command)
+    await expect.poll(() => fixture.completions().length).toBe(1)
+    await fixture.session.waitForIdle()
+    expect(fixture.completions()[0]).toMatchObject({
+      details: { id: command.id, status: 'completed' },
+    })
+    expect(fixture.requests).toHaveLength(3)
+  })
+
   it('appends cancellation without a follow-up request', async () => {
     const fixture = await sessionFixture()
     const command = start(fixture.service, { command: nodeCommand('setInterval(() => {}, 1000)') })

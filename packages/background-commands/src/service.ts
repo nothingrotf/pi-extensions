@@ -37,6 +37,7 @@ export interface BackgroundCommands {
   start(input: StartCommand): CommandResult<CommandHandle>
   list(): CommandSnapshot[]
   find(id: string): CommandHandle | undefined
+  acknowledge(id: string): void
   onChange(listener: () => void): () => void
   bindCompletion(receiver: CompletionReceiver): () => void
   flushCompletions(): void
@@ -194,6 +195,11 @@ class SessionCommands implements BackgroundCommands {
 
   find(id: string): CommandHandle | undefined {
     return this.records.get(id)?.handle
+  }
+
+  acknowledge(id: string): void {
+    const record = this.records.get(id)
+    if (record !== undefined && isTerminal(record.handle.snapshot())) record.pending = false
   }
 
   onChange(listener: () => void): () => void {
