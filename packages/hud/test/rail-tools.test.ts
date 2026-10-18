@@ -60,4 +60,12 @@ describe('railPatchForCall tense', () => {
     const patch = railPatchForCall({ arguments: {}, toolName: 'custom_thing' }, '')
     expect(patch.runningLabel).toBe(patch.doneLabel)
   })
+
+  test('a nested background command uses the shell icon', () => {
+    const patch = railPatchForCall(
+      { arguments: { action: 'list' }, toolName: 'background_command' },
+      '',
+    )
+    expect(patch.iconKey).toBe('shell')
+  })
 })

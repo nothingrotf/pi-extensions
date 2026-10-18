@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionFactory,
+  ThemeColor,
 } from '@earendil-works/pi-coding-agent'
 import {
   type Component,
@@ -12,6 +13,13 @@ import {
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import {
+  commandsState,
+  HudBridge,
+  railCallReport,
+  railResultReport,
+  stateRequestChannel,
+} from './hud.ts'
 import { outputTail } from './output.ts'
 import {
   BackgroundCommandError,
@@ -20,6 +28,7 @@ import {
   parseCommandRequest,
   toolParameters,
   ToolOutputSchema,
+  type CommandCompletion,
   type CommandRequest,
   type CommandSnapshot,
   type ToolOutput,
@@ -40,12 +49,48 @@ export interface BackgroundCommandsExtensionOptions {
   canDeliverCompletion?(): boolean
 }
 
-function terminalText(value: string): Component {
-  const text = new Text(value, 0, 0)
+function terminalText(value: string, paddingX = 0): Component {
+  const text = new Text(value, paddingX, 0)
   return {
     invalidate: () => text.invalidate(),
     render: (width) => text.render(width).map((line) => truncateToWidth(line, width, '')),
   }
+}
+
+function completionComponent(header: string, body: string, paddingX: number): Component {
+  const parts = [terminalText(header, paddingX)]
+  if (body.length > 0) parts.push(terminalText(body, paddingX + 2))
+  return {
+    invalidate: () => {
+      for (const part of parts) part.invalidate()
+    },
+    render: (width) => parts.flatMap((part) => part.render(width)),
+  }
+}
+
+interface OutcomeStyle {
+  readonly glyph: string
+  readonly tone: ThemeColor
+}
+
+function outcomeStyle(status: CommandCompletion['snapshot']['status']): OutcomeStyle {
+  switch (status) {
+    case 'completed':
+      return { glyph: '✓', tone: 'success' }
+    case 'error':
+      return { glyph: '✗', tone: 'error' }
+    case 'stopped':
+      return { glyph: '■', tone: 'warning' }
+  }
+}
+
+function elapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return seconds % 60 > 0 ? `${minutes}m${seconds % 60}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return minutes % 60 > 0 ? `${hours}h${minutes % 60}m` : `${hours}h`
 }
 
 function describe(snapshot: CommandSnapshot): string {
@@ -106,13 +151,18 @@ export function createBackgroundCommandsExtension(
     let preflight = false
     let navigating = false
     let compactedTimer: ReturnType<typeof setTimeout> | undefined
+    const hud = new HudBridge(pi)
 
+    const currentState = () =>
+      commandsState(unsubscribeChanges === undefined ? [] : (service?.list() ?? []))
     const refreshStatus = () => {
-      const active = service?.list().filter((snapshot) => !isTerminal(snapshot)).length ?? 0
+      const state = currentState()
+      const active = state.running + state.stopping
       context?.ui.setStatus(
         statusKey,
         active === 0 ? undefined : `${active} background command${active === 1 ? '' : 's'}`,
       )
+      hud.publish(state)
     }
     const attach = (ctx: ExtensionContext) => {
       context = ctx
@@ -169,6 +219,7 @@ export function createBackgroundCommandsExtension(
       unsubscribeChanges?.()
       unsubscribeChanges = undefined
       context?.ui.setStatus(statusKey, undefined)
+      hud.publish(currentState())
       context = undefined
       if (options.service === undefined) {
         const previous = service
@@ -193,6 +244,9 @@ export function createBackgroundCommandsExtension(
       if (!Value.Check(AskStateSchema, data)) return
       questionPending = data.pending > 0 || data.paused
       flush()
+    })
+    const unsubscribeStateRequest = pi.events.on(stateRequestChannel, () => {
+      hud.publish(currentState())
     })
 
     pi.registerTool({
@@ -227,36 +281,46 @@ export function createBackgroundCommandsExtension(
           structuredContent: result,
         }
       },
-      renderCall(args, theme) {
+      renderCall(args, theme, context) {
+        hud.report(railCallReport(context.toolCallId, args))
         const label = args.name ?? args.id ?? ''
         return terminalText(
           `${theme.fg('toolTitle', theme.bold('background'))} ${stripTerminalSequences(args.action)} ${stripTerminalSequences(label)}`,
         )
       },
-      renderResult(result, { expanded }, theme) {
+      renderResult(result, { expanded }, theme, context) {
         const content = result.content
           .filter((part) => part.type === 'text')
           .map((part) => part.text)
           .join('\n')
+        const details = Value.Check(ToolOutputSchema, result.details) ? result.details : undefined
+        hud.report(
+          railResultReport(
+            context.toolCallId,
+            context.args,
+            details,
+            context.isError ? content : undefined,
+          ),
+        )
         const text = expanded ? content : outputTail(content, 4096, 4).text
         return terminalText(theme.fg('toolOutput', stripTerminalSequences(text)))
       },
     })
-    pi.registerMessageRenderer(completionMessageType, (message, { expanded }, theme) => {
+    pi.registerMessageRenderer(completionMessageType, (message, { expanded, outputPad }, theme) => {
       if (!Value.Check(CompletionSchema, message.details)) return undefined
       const details = message.details
       const exit = details.exitCode === null ? '' : `, exit ${details.exitCode}`
-      const lines = [`${details.name}: ${details.status}${exit} [${details.id}]`]
-      if (details.errorMessage !== undefined) lines.push(details.errorMessage)
+      const { glyph, tone } = outcomeStyle(details.status)
+      const summary = `${details.status}${exit} · ${elapsed(details.finishedAt - details.startedAt)}`
+      const header = `${theme.fg(tone, glyph)} ${theme.fg('toolTitle', theme.bold(stripTerminalSequences(details.name)))} ${theme.fg('muted', summary)}`
+      const lines: string[] = []
+      if (expanded) lines.push(theme.fg('dim', stripTerminalSequences(details.id)))
+      if (details.errorMessage !== undefined)
+        lines.push(theme.fg('error', stripTerminalSequences(details.errorMessage)))
       const output = expanded ? details.output.text : outputTail(details.output.text, 1024, 4).text
-      if (output.length > 0) lines.push(output)
-      if (details.output.truncated) lines.push('[Truncated log excerpt]')
-      return terminalText(
-        theme.fg(
-          details.status === 'error' ? 'error' : 'toolOutput',
-          stripTerminalSequences(lines.join('\n')),
-        ),
-      )
+      if (output.length > 0) lines.push(theme.fg('toolOutput', stripTerminalSequences(output)))
+      if (details.output.truncated) lines.push(theme.fg('muted', '[Truncated log excerpt]'))
+      return completionComponent(header, lines.join('\n'), Math.max(0, outputPad))
     })
     pi.on('session_start', async (_event, ctx) => {
       await detach()
@@ -267,6 +331,7 @@ export function createBackgroundCommandsExtension(
       preflight = false
       navigating = false
       attach(ctx)
+      hud.announce()
       pi.events.emit('ask:state:request', {})
     })
     pi.on('session_before_switch', beforeNavigation)
@@ -308,6 +373,7 @@ export function createBackgroundCommandsExtension(
     pi.on('session_shutdown', async () => {
       closed = true
       unsubscribeAsk()
+      unsubscribeStateRequest()
       await detach()
     })
   }

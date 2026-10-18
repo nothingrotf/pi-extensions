@@ -3,8 +3,10 @@ import { stripVTControlCharacters } from 'node:util'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
+import { decodeBackgroundState, idleBackgroundCommands } from '../src/background-commands.ts'
 import { emptyGitStatus } from '../src/git.ts'
 import {
+  backgroundSegment,
   branchSegment,
   effortColor,
   goalStatusKey,
@@ -36,6 +38,7 @@ function state(overrides: Partial<HudState> = {}): HudState {
         { label: 'wk', usedPercent: 92, resetsIn: '1d19h' },
       ],
     },
+    background: idleBackgroundCommands(),
     ...overrides,
   }
 }
@@ -74,6 +77,42 @@ describe('compact HUD', () => {
     expect(branchSegment({ fg: (token, text) => `<${token}>${text}</${token}>` }, git)).toBe(
       '<warning>⎇ main*</warning>',
     )
+  })
+
+  test('renders active background commands after goal and loop statuses', () => {
+    const statuses = new Map([
+      ['pi-loop', 'loop: active'],
+      ['background-commands', '3 background commands'],
+    ])
+    const [line = ''] = renderHud(
+      theme,
+      state({ background: { running: 2, stopping: 1 } }),
+      statuses,
+      220,
+    )
+    expect(line).toContain('↻ loop: active · ⚙ 2 bg, 1 stopping')
+    expect(line).not.toContain('3 background commands')
+    const [idle = ''] = renderHud(theme, state(), statuses, 220)
+    expect(idle).not.toContain('⚙')
+  })
+
+  test('colors background commands by their lifecycle', () => {
+    const tagged: HudTheme = { fg: (token, text) => `<${token}>${text}</${token}>` }
+    expect(backgroundSegment(tagged, { running: 1, stopping: 0 })).toBe('<accent>⚙ 1 bg</accent>')
+    expect(backgroundSegment(tagged, { running: 0, stopping: 2 })).toBe(
+      '<warning>⚙ 2 stopping</warning>',
+    )
+    expect(backgroundSegment(tagged, idleBackgroundCommands())).toBe('')
+  })
+
+  test('accepts only versioned background command states', () => {
+    expect(decodeBackgroundState({ version: 1, running: 1, stopping: 0 })).toEqual({
+      running: 1,
+      stopping: 0,
+    })
+    expect(decodeBackgroundState({ version: 2, running: 1, stopping: 0 })).toBeUndefined()
+    expect(decodeBackgroundState({ version: 1, running: -1, stopping: 0 })).toBeUndefined()
+    expect(decodeBackgroundState({ version: 1, running: 1.5, stopping: 0 })).toBeUndefined()
   })
 
   test('omits other tools and places fast mode after effort', () => {

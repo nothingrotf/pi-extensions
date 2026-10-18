@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
+import { stripVTControlCharacters } from 'node:util'
 
-import type { Context } from '@earendil-works/pi-ai'
+import type { Context, TextContent } from '@earendil-works/pi-ai'
 import { getAgentDir, initTheme } from '@earendil-works/pi-coding-agent'
 import { visibleWidth } from '@earendil-works/pi-tui'
 import { Value } from 'typebox/value'
@@ -379,6 +380,64 @@ describe('real Pi session integration', () => {
     expect(fixture.completions()).toEqual([])
   })
 
+  it('publishes HUD state and rail reports through the event bus', async () => {
+    const fixture = await sessionFixture()
+    initTheme('dark')
+    const api = fixture.api()
+    const states: unknown[] = []
+    api.events.on('background-commands:state', (data) => {
+      states.push(data)
+    })
+    api.events.emit('background-commands:state:request', {})
+    expect(states).toEqual([{ version: 1, running: 0, stopping: 0 }])
+    const command = start(fixture.service, {
+      command: nodeCommand('setTimeout(() => {}, 100)'),
+      name: 'Tick',
+    })
+    expect(states.at(-1)).toEqual({ version: 1, running: 1, stopping: 0 })
+    await waitForCommand(fixture.service, command)
+    expect(states.at(-1)).toEqual({ version: 1, running: 0, stopping: 0 })
+
+    const tool = fixture.session.extensionRunner.getToolDefinition('background_command')
+    if (tool?.renderCall === undefined || tool.renderResult === undefined)
+      throw new Error('Missing background command renderers')
+    const actions: unknown[] = []
+    api.events.on('hud:rail-action', (data) => {
+      actions.push(data)
+    })
+    const args = { action: 'list' }
+    const context = {
+      args,
+      toolCallId: 'rail-call',
+      invalidate: () => undefined,
+      lastComponent: undefined,
+      state: {},
+      cwd: fixture.directory,
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      durationMs: undefined,
+      outputPad: 0,
+    }
+    const content: TextContent[] = [{ type: 'text', text: 'Tick: completed, exit 0' }]
+    const result = {
+      content,
+      details: { action: 'list', commands: fixture.service.list() },
+    }
+    tool.renderCall(args, fixture.theme(), context)
+    expect(actions).toEqual([])
+    api.events.emit('hud:rail-enabled', { enabled: true })
+    tool.renderCall(args, fixture.theme(), context)
+    tool.renderResult(result, { expanded: false, isPartial: false }, fixture.theme(), context)
+    expect(actions).toMatchObject([
+      { toolCallId: 'rail-call', status: 'pending', runningLabel: 'Listing', iconKey: 'shell' },
+      { toolCallId: 'rail-call', status: 'ok', doneLabel: 'Listed', summary: '1 finished' },
+    ])
+  })
+
   it('renders compact and expanded terminal content within narrow widths', async () => {
     const fixture = await sessionFixture()
     initTheme('dark')
@@ -401,5 +460,13 @@ describe('real Pi session integration', () => {
       }
       expect(component.render(80).join('\n')).toContain('harmless')
     }
+    const padded = renderer(message, { expanded: false, outputPad: 1 }, fixture.theme())
+    if (padded === undefined) throw new Error('Renderer rejected a valid completion')
+    const [header = '', body = ''] = padded.render(80).map((line) => stripVTControlCharacters(line))
+    expect(header).toMatch(/^ ✓ wide 😀 中 completed, exit 0 · \d+s/u)
+    expect(header).not.toContain(command.id)
+    expect(body.trimEnd()).toBe('   harmless')
+    const expanded = renderer(message, { expanded: true, outputPad: 1 }, fixture.theme())
+    expect(expanded?.render(80).join('\n')).toContain(command.id)
   })
 })

@@ -7,6 +7,12 @@ import {
 } from '@earendil-works/pi-coding-agent'
 
 import { AnimationClock } from './animation-clock.ts'
+import {
+  backgroundStateChannel,
+  backgroundStateRequestChannel,
+  decodeBackgroundState,
+  idleBackgroundCommands,
+} from './background-commands.ts'
 import { paletteFromTheme } from './colors.ts'
 import { sweepEditors } from './editor-border.ts'
 import { buildCacheLabel, contextSummary } from './format.ts'
@@ -73,6 +79,7 @@ import { installThinkingSpacerFix, type ThinkingSpacerFix } from './thinking-spa
 import { registerTimestamps, type LiveHeader, type LiveUsage } from './timestamp.ts'
 import { frameTranscriptLine, speakerBodyIndent } from './transcript-geometry.ts'
 import { installTranscriptLayoutFix, type TranscriptLayoutFix } from './transcript-layout.ts'
+import { observeTranscript, type TranscriptSubscription } from './transcript-observer.ts'
 import {
   fetchUsageForProvider,
   parseRateLimitEvent,
@@ -150,6 +157,7 @@ export default function hud(pi: ExtensionAPI): void {
     contextPercent: null,
     cacheLabel: '',
     usage: null,
+    background: idleBackgroundCommands(),
   }
   let active = false
   let generation = 0
@@ -251,6 +259,7 @@ export default function hud(pi: ExtensionAPI): void {
   let transcriptLayoutFix: TranscriptLayoutFix | undefined
   let nativeStatusFix: NativeStatusFix | undefined
   let dimEditorBorder: (() => void) | undefined
+  let editorBorderSubscription: TranscriptSubscription | undefined
 
   const applyThinkingLabel = (ctx: ExtensionContext) => {
     ctx.ui.setHiddenThinkingLabel(thinkingQuiet() ? '' : undefined)
@@ -323,6 +332,13 @@ export default function hud(pi: ExtensionAPI): void {
   })
 
   const render = () => requestRender?.()
+
+  pi.events.on(backgroundStateChannel, (data) => {
+    const background = decodeBackgroundState(data)
+    if (background === undefined) return
+    state.background = background
+    render()
+  })
 
   const syncFocusReporting = () => {
     if (sound.soundFocusMode === 'always') {
@@ -410,10 +426,14 @@ export default function hud(pi: ExtensionAPI): void {
     working.setMessage(undefined)
     state.git = emptyGitStatus()
     state.usage = null
+    state.background = idleBackgroundCommands()
+    pi.events.emit(backgroundStateRequestChannel, {})
     if (!ctx.hasUI || ctx.mode !== 'tui') {
       footerOwned = false
       requestRender = undefined
       dimEditorBorder = undefined
+      editorBorderSubscription?.dispose()
+      editorBorderSubscription = undefined
       spacerFix?.dispose()
       spacerFix = undefined
       speakerSpacingFix?.dispose()
@@ -471,6 +491,7 @@ export default function hud(pi: ExtensionAPI): void {
       requestRender = () => tui.requestRender()
       dimEditorBorder = () => sweepEditors(tui, theme, () => agentWorking)
       dimEditorBorder()
+      editorBorderSubscription = observeTranscript(tui, 40, dimEditorBorder)
       const unsubscribe = footerData.onBranchChange(() => {
         gitRefresh?.request()
       })
@@ -481,6 +502,8 @@ export default function hud(pi: ExtensionAPI): void {
           footerOwned = false
           requestRender = undefined
           dimEditorBorder = undefined
+          editorBorderSubscription?.dispose()
+          editorBorderSubscription = undefined
           spacerFix?.dispose()
           spacerFix = undefined
           speakerSpacingFix?.dispose()

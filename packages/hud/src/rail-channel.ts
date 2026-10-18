@@ -76,6 +76,7 @@ export type RailActionReport = {
 const iconByToolName = new Map<string, IconKey>([
   ['AskQuestion', 'ask'],
   ['Task', 'agent'],
+  ['background_command', 'shell'],
   ['fetch_content', 'web'],
   ['session_history', 'todo'],
   ['todo_read', 'todo'],

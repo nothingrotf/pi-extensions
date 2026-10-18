@@ -1,5 +1,5 @@
 import { SessionManager } from '@earendil-works/pi-coding-agent'
-import { Container, stripTerminalSequences } from '@earendil-works/pi-tui'
+import { Container, Editor, stripTerminalSequences } from '@earendil-works/pi-tui'
 import { describe, expect, test } from 'vite-plus/test'
 
 import hud from '../src/index.ts'
@@ -135,6 +135,7 @@ function harness(sessionManager = SessionManager.inMemory(), model) {
     commandNames: () => [...commands.keys()],
     emit,
     emitEvent: (channel, data) => eventHandlers.get(channel)?.(data),
+    listen: (channel, handler) => eventHandlers.set(channel, handler),
     mount,
     renderCount: () => renders,
     async runCommand(name, args) {
@@ -151,6 +152,41 @@ function harness(sessionManager = SessionManager.inMemory(), model) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
 
 describe('HUD lifecycle', () => {
+  test('hides the lower rule when an editor mounts after the footer', async () => {
+    const instance = harness()
+    await instance.emit('session_start')
+    const root = new Container()
+    const editors = new Container()
+    root.addChild(editors)
+    const footer = instance.mount(root)
+    try {
+      root.requestRender()
+      const editor = new Editor(
+        { terminal: { rows: 24 }, requestRender() {} },
+        {
+          borderColor: (text) => text,
+          selectList: {
+            selectedPrefix: (text) => text,
+            selectedText: (text) => text,
+            description: (text) => text,
+            scrollInfo: (text) => text,
+            noMatch: (text) => text,
+          },
+        },
+      )
+      editor.setText('chat')
+      editors.addChild(editor)
+      root.requestRender()
+
+      const lines = editor.render(40)
+      expect(lines[0]).toBe('─'.repeat(40))
+      expect(lines[1]).toContain('chat')
+      expect(lines.at(-1)).toBe('')
+    } finally {
+      footer.dispose()
+    }
+  })
+
   test.each(['mcp', 'mcpScript', 'mcp__linear'])(
     '%s stays in actions while arguments stream',
     async (toolName) => {
@@ -512,6 +548,32 @@ describe('HUD lifecycle', () => {
     expect(restored.transcript()).toContain('Indexed')
     await restored.emit('session_shutdown')
     await instance.emit('session_shutdown')
+  })
+
+  test('shows background commands and resets them for a new session', async () => {
+    const instance = harness()
+    let requests = 0
+    instance.listen('background-commands:state:request', () => {
+      requests += 1
+    })
+    await instance.emit('session_start')
+    expect(requests).toBe(1)
+    const footer = instance.mount()
+    try {
+      expect(footer.render(180).join('')).not.toContain('⚙')
+      instance.emitEvent('background-commands:state', { version: 1, running: 2, stopping: 1 })
+      expect(footer.render(180).join('')).toContain('⚙ 2 bg, 1 stopping')
+      instance.emitEvent('background-commands:state', { version: 2, running: 5, stopping: 0 })
+      expect(footer.render(180).join('')).toContain('⚙ 2 bg, 1 stopping')
+      instance.emitEvent('background-commands:state', { version: 1, running: 0, stopping: 0 })
+      expect(footer.render(180).join('')).not.toContain('⚙')
+      instance.emitEvent('background-commands:state', { version: 1, running: 1, stopping: 0 })
+      await instance.emit('session_start')
+      expect(requests).toBe(2)
+      expect(instance.mount().render(180).join('')).not.toContain('⚙')
+    } finally {
+      await instance.emit('session_shutdown')
+    }
   })
 
   test('disposing an old footer twice does not disable its replacement', async () => {

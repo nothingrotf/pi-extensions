@@ -9,6 +9,7 @@ The left side shows:
 - the Git branch with a glyph and dirty marker, such as `⎇ main*`
 - the model, effort, and Fast status
 - goal and loop statuses
+- active background commands from `@nothingrotf/background-commands`, such as `⚙ 2 bg, 1 stopping`
 
 The right side shows context use, session cache percentage, and provider quota windows.
 Model labels use the model ID with lowercase effort and Fast labels, such as `gpt-6-astra:xhigh [fast]`.
@@ -18,6 +19,8 @@ For the `openai` provider with Sign in with ChatGPT, OpenAI documents no quota e
 The HUD reads the Codex rate-limit headers and `codex.rate_limits` stream events from each OpenAI response instead.
 The windows stay hidden until a response includes these values.
 Fast Mode uses the status from `@nothingrotf/fast-mode`. Unavailable Fast Mode stays hidden.
+Background commands use the versioned `background-commands:state` event instead of the footer status text.
+The HUD requests the current state at session start and hides the segment when no command is active.
 The footer shows `Fast not applied` when the OpenAI API processes the last Fast request at a standard tier.
 The session cache percentage divides cache-read tokens by all input tokens on the current branch, including cache writes. It stays hidden until response usage is available.
 
@@ -133,6 +136,8 @@ It draws `bash`, `edit`, `find`, `ls`, and `write` through `pi.registerToolRende
 Durations come from the execution time that Pi records. Sessions recorded before Pi 1.1 show durations estimated from timestamps.
 Calls from the native tools, from `@nothingrotf/tgrep`, or from `@nothingrotf/filetools` use the fallback action rail with their own icons, labels, and path details.
 Those packages can load in any order without competing tool registrations.
+`@nothingrotf/background-commands` reports its own rail rows through `hud:rail-action`.
+Calls nested in `codemode` fall back to the generic label with the shell icon.
 
 ```
 7 actions ▾

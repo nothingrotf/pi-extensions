@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui'
 
+import type { BackgroundCommandsState } from './background-commands.ts'
 import { formatCwd, sanitizeScalar } from './format.ts'
 import type { GitStatus } from './git.ts'
 import type { UsageSnapshot, UsageWindow } from './usage.ts'
@@ -38,6 +39,7 @@ export type HudState = {
   contextPercent: number | null
   cacheLabel: string
   usage: UsageSnapshot | null
+  background: BackgroundCommandsState
 }
 
 export const goalStatusKey = 'pi-goal'
@@ -140,6 +142,17 @@ export function loopSegment(theme: HudTheme, statuses: ReadonlyMap<string, strin
   return color(theme, paused ? 'warning' : 'accent', `${paused ? '⏸' : '↻'} ${text}`)
 }
 
+export function backgroundSegment(theme: HudTheme, background: BackgroundCommandsState): string {
+  const parts = [
+    background.running > 0 ? `${background.running} bg` : '',
+    background.stopping > 0 ? `${background.stopping} stopping` : '',
+  ].filter(Boolean)
+  if (parts.length === 0) {
+    return ''
+  }
+  return color(theme, background.running > 0 ? 'accent' : 'warning', `⚙ ${parts.join(', ')}`)
+}
+
 export function usageSegment(theme: HudTheme, usage: UsageSnapshot | null): string {
   if (!usage?.windows.length) {
     return ''
@@ -178,6 +191,7 @@ export function renderHud(
   const identity = modelSegment(theme, state)
   const goal = goalSegment(theme, statuses)
   const loop = loopSegment(theme, statuses)
+  const background = backgroundSegment(theme, state.background)
   const contextToken = state.contextPercent === null ? 'dim' : loadColor(state.contextPercent)
   const context = color(theme, contextToken, sanitizeScalar(state.contextLabel))
   const usage = usageSegment(theme, state.usage)
@@ -188,7 +202,7 @@ export function renderHud(
   const effortLabel = sanitizeScalar(state.effortLabel)
   const effort = identity && effortLabel ? color(theme, 'text', `:${effortLabel}`) : ''
   const model = `${identity}${effort}${fast ? ` ${fast}` : ''}`
-  const left = [workspace, branch, model, goal, loop].filter(Boolean).join(separator)
+  const left = [workspace, branch, model, goal, loop, background].filter(Boolean).join(separator)
   const right = [context, cache, usage].filter(Boolean).join(separator)
   return [row(theme, width, left, right)]
 }

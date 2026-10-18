@@ -64,7 +64,23 @@ A failed synchronous delivery remains pending until a later flush.
 Pi acceptance is not a guarantee of an eventual provider response.
 
 The footer shows the number of active commands.
-Expand tool results or completion messages to inspect more output.
+Completion messages show a status glyph, the name, the exit code, and the run time.
+Expand tool results or completion messages to inspect more output and the command ID.
+
+## HUD integration
+
+The package works with `@nothingrotf/hud` without a dependency in either direction.
+
+- The HUD footer shows active commands, such as `⚙ 2 bg, 1 stopping`.
+- The HUD action rail shows each call as a shell row, such as `Launched Sleeper · in background`.
+- A launch row states that the command runs in the background. It does not report command success.
+
+The footer contract uses the Pi event bus:
+
+- `background-commands:state` carries `{ version: 1, running, stopping }` after each lifecycle change.
+- `background-commands:state:request` asks the extension to emit the current state again.
+
+Session navigation and shutdown emit a zero state. Output chunks do not emit state events.
 
 ## Execution and ownership
 
