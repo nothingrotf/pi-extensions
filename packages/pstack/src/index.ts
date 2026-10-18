@@ -77,7 +77,19 @@ export default async function pstack(
   }
   pi.on('before_agent_start', async (event) => {
     await refreshPolicy()
-    return { systemPrompt: `${event.systemPrompt}\n\n${policyPrompt}` }
+    return {
+      systemPrompt: [
+        event.systemPrompt,
+        '# Pstack activation',
+        'Pstack is opt-in, not the default workflow.',
+        'Only activate it when the user invokes poteto-mode or explicitly requests a pstack workflow.',
+        'Ordinary coding requests, task complexity, and available tools do not authorize activation.',
+        'Mentioning pstack in logs, examples, or a bug report is not an activation request.',
+        'Without activation, do not open pstack deliveries or select pstack capability profiles.',
+        'The model policy below configures authorized pstack Tasks only. It does not require delegation, managed delivery, or a review pipeline.',
+        policyPrompt,
+      ].join('\n\n'),
+    }
   })
   pi.on('tool_call', async (event) => {
     if (event.toolName === 'Task') await refreshPolicy()

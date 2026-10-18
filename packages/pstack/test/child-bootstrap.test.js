@@ -20,6 +20,35 @@ import {
 
 describe('pstack SDK child bootstrap', () => {
   it.each([true, false])(
+    'scopes root policy to explicit pstack activation in either load order (%s)',
+    async (first) => {
+      const h = await harness(first, new Map(), 'how explorer: pstack-test/configured:off')
+      try {
+        const prompt = h.inventories.find((entry) => entry.action === 'seed:parent').prompt
+        expect(prompt).toContain('Pstack is opt-in, not the default workflow.')
+        expect(prompt).toContain(
+          'Only activate it when the user invokes poteto-mode or explicitly requests a pstack workflow.',
+        )
+        expect(prompt).toContain(
+          'Ordinary coding requests, task complexity, and available tools do not authorize activation.',
+        )
+        expect(prompt).toContain(
+          'Mentioning pstack in logs, examples, or a bug report is not an activation request.',
+        )
+        expect(prompt).toContain(
+          'Without activation, do not open pstack deliveries or select pstack capability profiles.',
+        )
+        expect(prompt.indexOf('# Pstack activation')).toBeLessThan(
+          prompt.indexOf('# Pstack runtime model policy'),
+        )
+        expect(h.runtime.listSnapshots()).toEqual([])
+      } finally {
+        await h.close()
+      }
+    },
+  )
+
+  it.each([true, false])(
     'applies configured omitted-model policy through runtime (%s)',
     async (first) => {
       const h = await harness(

@@ -22,6 +22,14 @@ pi install npm:@nothingrotf/pstack
 
 Restart Pi after installation.
 
+## Activation
+
+Pstack is opt-in. Invoke `/skill:poteto-mode` or explicitly request a pstack workflow to activate it.
+Ordinary coding requests do not activate managed delivery or pstack delegation.
+Installation, model configuration, and references to pstack in logs or bug reports do not authorize activation.
+The root prompt states this boundary before the model policy. Delivery tool descriptions repeat it.
+The extension enforces model selection and delivery contracts, but activation remains a model instruction rather than a runtime authorization gate.
+
 ## Resources
 
 The package provides 52 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
