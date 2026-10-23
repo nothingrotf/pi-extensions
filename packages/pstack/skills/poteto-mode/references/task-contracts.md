@@ -33,6 +33,12 @@ For different-family reviews, choose a configured entry from another family than
 
 The extension refreshes the policy before each root prompt and root `Task` call without reload. New dispatches use the latest published policy. Resume preserves the stored model even when the policy changes.
 
+Choose effort from the configured role policy, not the apparent importance of its title.
+Before proposing higher effort, identify the unresolved reasoning failure and rule out missing context, unavailable tools, and environment failures.
+Keep the active role when escalating implementation, review, or verification; never relabel that work as `hardest tasks` to bypass policy.
+If the role permits no suitable selector, request a policy update instead of silently increasing effort.
+A changed selector requires a fresh agent with the retained brief, artifact, harness, and evidence.
+
 Task batches preflight every entry before starting children. An invalid role, unavailable selected model, omitted distinct panel choice, or missing managed issue binding rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
 
 Prefer the structured `delivery` binding over an `issue: <id>` prompt line.
@@ -49,6 +55,10 @@ A role never grants permissions. The runtime never infers it from a model or pro
 Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `runtime verification`, shell access, and in-place execution in the issue workspace or manual isolation without one. Static review alone uses `code review` with read-only tools. Give code corrections and missing proof to a fresh agent with consolidated scope, per the poteto-mode Subagents section. In an issue workspace, resume the recorded implementation owner for code corrections instead. Resume only when the new work strictly needs state that lives in the agent and is costly to move. Use managed report repair for malformed reports backed by retained proof, without another Task or workspace. A changed role, model family, capability set, or artifact access always requires a fresh agent. Carry the saved brief, harness, and evidence into each fresh agent. Never weaken resume validation.
 
 Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to single Task calls, not graph nodes. The graph scheduler owns node execution.
+Codemode can dispatch a single Task only with explicit `run_in_background: true`, subject to the same role, model, and delivery checks.
+Return the Agent ID to the coordinator. Call foreground Tasks, batch graphs, and `TaskControl wait` directly, outside scripts.
+Non-wait `TaskControl` actions retain their existing scope and acceptance requirements.
+If a script fails after earlier calls execute, inspect the retained results instead of replaying the entire script.
 
 ## Capabilities
 
@@ -129,7 +139,15 @@ Do not push a synthetic snapshot history as a product branch. Foreground destina
 
 ## Runtime verifier
 
+For optional OS containment, select `capability_profile: "pstack-sandbox"` instead of `pstack-leaf`.
+Managed delivery can request the same profile with `pstack_deliver` input `review: { sandbox: true }`.
+Both shell commands and gates then deny network and writes outside the effective workspace and private temporary storage.
+An unavailable backend blocks execution. Never retry with an unsandboxed profile without authorization.
+This does not confine reads, trusted extension code, or the model-provider connection.
+
 A runtime verifier needs shell access but must never integrate incidental files.
+Apply the cumulative correctness requirements in the [Delivery contract](delivery-contract.md) to every verification round.
+Include prior requirements in the verification plan, not only the latest change or the implementer's chosen tests.
 In an issue workspace, omit `isolation`. Preflight runs the verifier in place, and a changed candidate tree rejects its verdict.
 Without an issue workspace, enforce this with `integration: "manual"`.
 
@@ -137,7 +155,7 @@ Without an issue workspace, enforce this with `integration: "manual"`.
 {
   "description": "Verify the exact accepted artifact",
   "delivery": { "kind": "managed", "issue": "<open issue id>" },
-  "prompt": "Run the scoped runtime checks in the effective workspace. Do not modify product code. Return evidence and findings.",
+  "prompt": "Verify cumulative correctness under the Delivery contract. Check new behavior, prior requirements, and relevant negative and boundary cases. Reuse only valid exact-candidate receipts. Do not modify product code. Return evidence, failure origins, and coverage blockers.",
   "subagent_type": "poteto-agent",
   "role": "runtime verification",
   "capability_profile": "pstack-leaf",

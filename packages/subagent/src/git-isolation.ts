@@ -98,8 +98,20 @@ async function run(cwd: string, command: readonly string[], input?: string): Pro
   })
 }
 
+const inertGitOptions = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
+const attributeFreeCommands = new Set(['add', 'diff', 'ls-files', 'status', 'write-tree'])
+
+function inertGitArguments(args: readonly string[]): string[] {
+  const command =
+    args[0] === 'diff' ? ['diff', '--no-ext-diff', '--no-textconv', ...args.slice(1)] : args
+  const attributes = attributeFreeCommands.has(args[0] ?? '')
+    ? ['--attr-source=4b825dc642cb6eb9a060e54bf8d69288fbee4904']
+    : []
+  return [...attributes, ...inertGitOptions, ...command]
+}
+
 export async function git(cwd: string, args: readonly string[], input?: string): Promise<string> {
-  return (await run(cwd, ['git', ...args], input)).stdout
+  return (await run(cwd, ['git', ...inertGitArguments(args)], input)).stdout
 }
 
 export async function gitWithIndex(
@@ -107,7 +119,8 @@ export async function gitWithIndex(
   indexPath: string,
   args: readonly string[],
 ): Promise<string> {
-  return (await run(cwd, ['env', `GIT_INDEX_FILE=${indexPath}`, 'git', ...args])).stdout
+  return (await run(cwd, ['env', `GIT_INDEX_FILE=${indexPath}`, 'git', ...inertGitArguments(args)]))
+    .stdout
 }
 
 export async function commitTree(
@@ -963,13 +976,20 @@ async function captureSnapshotRepository(options: {
 
 export async function captureWorkspaceIdentity(
   cwd: string,
+  expectedPaths?: readonly string[],
 ): Promise<WorkspaceIdentity | undefined> {
   const root = await repositoryRoot(cwd)
   if (root === undefined) return undefined
+  const layout = await nestedRepositoryLayout(root)
+  if (
+    expectedPaths !== undefined &&
+    JSON.stringify(['', ...layout.isolated].sort()) !== JSON.stringify([...expectedPaths].sort())
+  )
+    throw new Error('The workspace nested repository boundary changed before capture.')
   const artifactRoot = join(await commonDirectory(root), 'pi-subagent', 'artifacts', 'workspace')
   const primary = await captureSnapshotRepository({ artifactRoot, relativePath: '', root })
   const repositories = [primary.snapshot]
-  for (const relativePath of (await nestedRepositoryLayout(root)).isolated) {
+  for (const relativePath of layout.isolated) {
     const nestedRoot = await repositoryRoot(join(root, relativePath))
     if (nestedRoot === undefined)
       throw new Error(`The nested repository ${relativePath} is unavailable.`)
@@ -998,8 +1018,9 @@ export async function captureWorkspaceIdentity(
 
 export async function captureWorkspaceSnapshot(
   cwd: string,
+  expectedPaths?: readonly string[],
 ): Promise<WorkspaceSnapshot | undefined> {
-  return (await captureWorkspaceIdentity(cwd))?.snapshot
+  return (await captureWorkspaceIdentity(cwd, expectedPaths))?.snapshot
 }
 
 export async function workspaceTree(cwd: string): Promise<string | undefined> {

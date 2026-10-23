@@ -14,6 +14,10 @@ import {
   renderPstackModelPolicy,
   type PstackModelPolicyOptions,
 } from './model-policy.ts'
+import {
+  createSandboxBashTools,
+  verificationSandboxExtension,
+} from './verification-sandbox-tools.ts'
 
 const AgentMetadataSchema = Type.Object(
   {
@@ -122,6 +126,14 @@ export default async function pstack(
           tools: createGateTools(),
           version: '1',
         },
+        {
+          createTools: () => [...createSandboxBashTools(), ...createGateTools(true)],
+          extensions: [verificationSandboxExtension],
+          id: 'pstack-sandbox',
+          overrides: ['bash'],
+          tools: [...createSandboxBashTools(), ...createGateTools(true)],
+          version: '1',
+        },
       ],
       sourceId,
     })
@@ -137,6 +149,12 @@ export default async function pstack(
           id: 'pstack-leaf',
           optionalRegistrations: ['filetools', 'tgrep'],
           registrations: ['pstack-planning', 'pstack-gates'],
+        },
+        {
+          defaultTools: ['codemode'],
+          id: 'pstack-sandbox',
+          optionalRegistrations: ['filetools', 'tgrep'],
+          registrations: ['pstack-planning', 'pstack-sandbox'],
         },
         {
           defaultTools: ['codemode'],

@@ -395,7 +395,7 @@ function validateToolContract(
 }
 
 const KNOWN_MUTABLE_TOOLS = new Set(['bash', 'powershell', 'edit', 'write'])
-const OVERRIDABLE_TOOLS = new Set(['read', 'grep', 'find', 'ls'])
+const OVERRIDABLE_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'bash'])
 const PRIVATE_TOOLS = new Set([
   'Task',
   'TaskControl',

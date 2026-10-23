@@ -91,6 +91,28 @@ describe('role tool requirements', () => {
 })
 
 describe('capability profiles', () => {
+  it('permits an explicit shell replacement without granting read-only shell access', () => {
+    const registry = new CapabilityRegistry()
+    const registration = {
+      extensions: [],
+      id: 'sandbox-shell',
+      overrides: ['bash'],
+      tools: [tool('bash')],
+      version: '1',
+    }
+    registry.registerCapability(registration)
+    registry.registerProfile({ id: 'sandbox-shell', registrations: ['sandbox-shell'] })
+    expect(registry.resolve('sandbox-shell').tools).toEqual(['bash'])
+    expect(registry.resolve('sandbox-shell', true).tools).toEqual([])
+    expect(() =>
+      registry.registerCapability({
+        ...registration,
+        id: 'invalid-readonly-shell',
+        readonlyTools: ['bash'],
+      }),
+    ).toThrow('cannot be marked read-only')
+  })
+
   it.each([
     Type.String(),
     Type.Array(Type.String()),

@@ -54,6 +54,12 @@ describe('pstack extension', () => {
           },
           {
             defaultTools: ['codemode'],
+            id: 'pstack-sandbox',
+            optionalRegistrations: ['filetools', 'tgrep'],
+            registrations: ['pstack-planning', 'pstack-sandbox'],
+          },
+          {
+            defaultTools: ['codemode'],
             id: 'pstack-nested',
             nested: { maxDepth: 3 },
             optionalRegistrations: ['filetools', 'tgrep'],

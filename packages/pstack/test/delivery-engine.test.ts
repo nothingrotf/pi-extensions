@@ -88,6 +88,29 @@ function scripted(script: Script) {
 const instruction = 'Follow the step.'
 
 describe('delivery engine', () => {
+  it('opts only runtime verification into the sandbox profile', async () => {
+    const run = scripted({
+      steps: [
+        { step: 'implement', instruction },
+        { step: 'review', roles: ['code review', 'runtime verification'], instruction },
+        { step: 'publish', instruction },
+      ],
+    })
+    const result = await runDeliveryEngine(
+      { ...input, review: { ...input.review, sandbox: true } },
+      run.host,
+      run.summarize,
+    )
+    expect(result.stop).toBe('accepted')
+    expect(run.dispatched[0]).toMatchObject({ capability_profile: 'pstack-leaf' })
+    expect(run.dispatched[1]).toMatchObject({
+      tasks: [
+        { role: 'code review', capability_profile: 'pstack-leaf', readonly: true },
+        { role: 'runtime verification', capability_profile: 'pstack-sandbox', readonly: false },
+      ],
+    })
+  })
+
   it('runs workspace, owner, record, paired review, correction, and acceptance in order', async () => {
     const run = scripted({
       steps: [

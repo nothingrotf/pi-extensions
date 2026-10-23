@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import {
+  copyFile,
   mkdir,
   open,
   readdir,
@@ -19,6 +20,8 @@ import { defineTool } from '@earendil-works/pi-coding-agent'
 import { captureWorkspaceSnapshot } from '@nothingrotf/subagent'
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
+
+import { prepareSandboxLaunch, SANDBOX_POLICY } from './verification-sandbox.ts'
 
 export const GATE_TOOL = 'pstack_gate'
 const DEFAULT_TIMEOUT_SECONDS = 30 * 60
@@ -93,6 +96,7 @@ export interface GateRequest {
   command: string
   cwd: string
   fresh?: boolean
+  sandbox?: boolean
   signal?: AbortSignal | undefined
 }
 
@@ -132,7 +136,12 @@ function git(cwd: string, args: readonly string[]): Promise<string> {
   })
 }
 
-export async function gateIdentity(cwd: string, command: string): Promise<GateIdentity> {
+export async function gateIdentity(
+  cwd: string,
+  command: string,
+  sandbox = false,
+  expectedPaths?: readonly string[],
+): Promise<GateIdentity> {
   let root: string
   let common: string
   try {
@@ -141,14 +150,23 @@ export async function gateIdentity(cwd: string, command: string): Promise<GateId
   } catch {
     throw new Error(`${GATE_TOOL} needs a Git worktree, but ${cwd} is not inside one.`)
   }
-  const snapshot = await captureWorkspaceSnapshot(root)
+  const snapshot = await captureWorkspaceSnapshot(root, expectedPaths)
   if (snapshot === undefined) throw new Error(`${GATE_TOOL} could not capture the tree of ${root}.`)
   const trees = snapshot.repositories.map((repository) => ({
     path: repository.relativePath || '.',
     tree: repository.tree,
   }))
   const relativeCwd = relative(root, await realpath(cwd)) || '.'
-  const key = sha256(JSON.stringify({ version: 1, command, cwd: relativeCwd, root, trees }))
+  const key = sha256(
+    JSON.stringify({
+      version: 1,
+      command,
+      cwd: relativeCwd,
+      root,
+      trees,
+      sandbox: sandbox ? SANDBOX_POLICY : null,
+    }),
+  )
   return {
     cwd: relativeCwd,
     key,
@@ -242,43 +260,53 @@ async function execute(
   cwd: string,
   log: string,
   signal: AbortSignal | undefined,
+  sandbox: boolean,
 ): Promise<Execution> {
-  const output = await open(log, 'w')
-  const started = Date.now()
+  const launch = sandbox ? await prepareSandboxLaunch(command, cwd) : undefined
   try {
-    return await new Promise<Execution>((resolveExecution, reject) => {
-      const child = spawn('bash', ['-c', command], {
-        cwd,
-        detached: true,
-        env: { ...process.env, PSTACK_GATE: '1' },
-        stdio: ['ignore', output.fd, output.fd],
-      })
-      let status: Execution['status'] = 'completed'
-      const stop = (reason: Execution['status']) => {
-        status = reason
-        killGroup(child.pid)
-      }
-      const timer = setTimeout(() => stop('timed-out'), gateTimeoutMs())
-      const abort = () => stop('aborted')
-      if (signal?.aborted === true) abort()
-      else signal?.addEventListener('abort', abort, { once: true })
-      child.on('error', (error) => {
-        clearTimeout(timer)
-        signal?.removeEventListener('abort', abort)
-        reject(error)
-      })
-      child.on('exit', (code) => {
-        clearTimeout(timer)
-        signal?.removeEventListener('abort', abort)
-        resolveExecution({
-          durationMs: Date.now() - started,
-          exitCode: code ?? undefined,
-          status,
+    const executionLog = launch === undefined ? log : join(launch.scratch, 'gate.log')
+    const output = await open(executionLog, 'w')
+    const started = Date.now()
+    try {
+      signal?.throwIfAborted()
+      return await new Promise<Execution>((resolveExecution, reject) => {
+        const child = spawn(launch?.executable ?? 'bash', launch?.args ?? ['-c', command], {
+          cwd: launch?.cwd ?? cwd,
+          detached: true,
+          env: { ...(launch?.env ?? process.env), PSTACK_GATE: '1' },
+          stdio: ['ignore', output.fd, output.fd],
+        })
+        let status: Execution['status'] = 'completed'
+        const stop = (reason: Execution['status']) => {
+          status = reason
+          killGroup(child.pid)
+        }
+        const timer = setTimeout(() => stop('timed-out'), gateTimeoutMs())
+        const abort = () => stop('aborted')
+        if (signal?.aborted === true) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+        child.on('error', (error) => {
+          clearTimeout(timer)
+          signal?.removeEventListener('abort', abort)
+          reject(error)
+        })
+        child.on('exit', (code) => {
+          if (sandbox) killGroup(child.pid)
+          clearTimeout(timer)
+          signal?.removeEventListener('abort', abort)
+          resolveExecution({
+            durationMs: Date.now() - started,
+            exitCode: code ?? undefined,
+            status,
+          })
         })
       })
-    })
+    } finally {
+      await output.close()
+      if (sandbox) await copyFile(executionLog, log)
+    }
   } finally {
-    await output.close()
+    await launch?.dispose()
   }
 }
 
@@ -313,11 +341,24 @@ async function runFresh(
   try {
     await mkdir(identity.store, { recursive: true })
     const log = join(identity.store, `${identity.key}.${Date.now()}.log`)
-    const execution = await execute(request.command, request.cwd, log, signal)
+    const execution = await execute(
+      request.command,
+      request.cwd,
+      log,
+      signal,
+      request.sandbox === true,
+    )
     if (execution.status === 'aborted') throw new Error(`${GATE_TOOL} was aborted.`)
     const finishedAt = Date.now()
     const logSha256 = await fileSha256(log)
-    const after = await gateIdentity(request.cwd, request.command)
+    const after = await gateIdentity(
+      request.cwd,
+      request.command,
+      request.sandbox === true,
+      request.sandbox === true
+        ? identity.trees.map((entry) => (entry.path === '.' ? '' : entry.path))
+        : undefined,
+    )
     const reusable = after.key === identity.key
     const passed = execution.status === 'completed' && execution.exitCode === 0
     let status: GateOutcome['status'] = 'timed-out'
@@ -399,7 +440,7 @@ function participate(shared: SharedRun, signal: AbortSignal | undefined): Promis
 
 export async function runGate(request: GateRequest): Promise<GateOutcome> {
   request.signal?.throwIfAborted()
-  const identity = await gateIdentity(request.cwd, request.command)
+  const identity = await gateIdentity(request.cwd, request.command, request.sandbox === true)
   if (request.fresh !== true) {
     const pass = await readPass(identity)
     if (pass !== undefined) {
@@ -473,7 +514,7 @@ export function formatGateOutcome(command: string, outcome: GateOutcome): string
   return lines.join('\n')
 }
 
-export function createGateTools() {
+export function createGateTools(sandbox = false) {
   return [
     defineTool({
       name: GATE_TOOL,
@@ -493,6 +534,7 @@ export function createGateTools() {
           command: params.command,
           cwd: ctx.cwd,
           fresh: params.fresh === true,
+          sandbox,
           signal,
         })
         const text = formatGateOutcome(params.command, outcome)

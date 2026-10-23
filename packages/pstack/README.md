@@ -216,6 +216,7 @@ Omitted runtime-verification isolation defaults to `manual`. Explicit `apply`, `
 Managed reviewer and verifier resumes inherit their recorded directory and isolation when omitted.
 Repository writers use relative paths in the effective child workspace.
 An isolated worktree separates Git state but is not an OS sandbox.
+Use the optional `pstack-sandbox` profile for OS-sandboxed runtime verification.
 Never bypass it through an absolute source-checkout path or push its synthetic history as a product branch.
 
 Read [Task contracts](skills/poteto-mode/references/task-contracts.md) for executable dispatch examples and coordinator decisions.
@@ -224,6 +225,40 @@ After updating, reload Pi before new dispatches. Before adding the three new rol
 Existing child contracts do not gain tools automatically.
 If a retained capability contract changed, start a fresh child from its saved brief and evidence instead of weakening resume validation.
 Older records without a role remain unlabeled rather than receiving a guessed role.
+
+## Verification sandbox
+
+Select `capability_profile: "pstack-sandbox"` for a Task with `role: "runtime verification"` and `readonly: false`.
+The existing verifier isolation contract still requires a private worktree or the dedicated issue worktree.
+The profile does not permit nested delegation.
+
+For managed delivery, pass `review: { sandbox: true }` to `pstack_deliver`.
+Only the runtime verifier receives the sandbox profile. Owners and static reviewers keep their existing profiles.
+Sandboxing remains opt-in. A requested sandbox fails closed when the host cannot enforce it; no command runs unsandboxed automatically.
+
+The command backend uses macOS Seatbelt through `/usr/bin/sandbox-exec`, or Bubblewrap on Linux.
+Install `bwrap` separately on Linux and enable the user namespaces that it requires.
+Both `bash` and `pstack_gate` deny network and writes outside the effective workspace and a private temporary directory.
+Git metadata remains read-only. Direct mutation tools and other execution tools are blocked, including calls through codemode.
+Commands retain shell syntax, so `bun run test`, `bun run check`, and `vp test run` need no command whitelist.
+Dependencies must already exist. Shared dependency symlinks remain read-only when their targets are outside the workspace.
+Test caches and generated files must stay within the private workspace or `$TMPDIR`.
+Temporary files are removed after execution, failure, or cancellation.
+Sandbox and ordinary gate receipts use separate cache identities.
+
+The backend inherits only basic path, locale, home, terminal, CI, and Node environment settings.
+It redirects temporary and package cache paths into the private temporary directory.
+Other environment variables, including credential variables and shell startup overrides, are not inherited.
+Project checks that need additional environment configuration must supply it explicitly inside their authorized workspace.
+
+This contains command execution, not the Pi process, model-provider requests, or trusted extension code.
+Read access is not confined, so readable credential files remain accessible.
+Seatbelt does not provide resource quotas or prevent all same-user process signals.
+Timeouts stop the ordinary process group, but commands that deliberately escape that group are outside that cleanup guarantee.
+macOS `sandbox-exec` is deprecated, and Linux support depends on the host's Bubblewrap and namespace policy.
+
+Run `PSTACK_SANDBOX_REQUIRED=1 bun run test packages/pstack/test/verification-sandbox.test.js` to require real sandbox coverage.
+Without that flag, unsupported hosts report the backend limitation and skip the containment tests.
 
 ## Delivery throughput
 

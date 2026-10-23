@@ -45,6 +45,12 @@ export const DeliveryEngineInputSchema = Type.Object(
       {
         codeModel: Type.Optional(model),
         runtimeModel: Type.Optional(model),
+        sandbox: Type.Optional(
+          Type.Boolean({
+            description:
+              'Require an OS sandbox for runtime-verification commands. Unsupported hosts fail closed. The owner and static reviewer keep their existing profiles.',
+          }),
+        ),
         brief: Type.Optional(
           Type.String({
             minLength: 1,
@@ -190,7 +196,7 @@ function reviewTask(input: DeliveryEngineInput, role: ReviewRole): EngineTaskFie
   const runtime = role === 'runtime verification'
   const prompt = reviewPrompt(role, input.review.brief)
   const node: EngineTaskFields = {
-    capability_profile: 'pstack-leaf',
+    capability_profile: runtime && input.review.sandbox === true ? 'pstack-sandbox' : 'pstack-leaf',
     delivery: { issue: input.issue, kind: 'managed' },
     description: runtime ? `Verify ${input.issue}` : `Review ${input.issue}`,
     prompt,

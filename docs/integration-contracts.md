@@ -44,14 +44,14 @@ Task children always use `on`. Read-only Task scripts cannot reach tools that th
 
 These mechanisms solve different problems. None of them replaces another.
 
-| Mechanism        | Owner      | What it guarantees                                             | What it does not guarantee                              |
-| ---------------- | ---------- | -------------------------------------------------------------- | ------------------------------------------------------- |
-| Writer worktree  | `subagent` | Child edits land in a separate Git worktree until integration. | Process, network, or file-system isolation.             |
-| Read-only policy | `subagent` | The child session has no shell or mutation tools.              | Isolation from code that extensions run in the process. |
-| Human decision   | `ask`      | A person selected an answer in an interactive client.          | Authorization for later or different actions.           |
-| Parent decision  | `subagent` | The parent model answered a `request_parent` question.         | A human decision.                                       |
-| Masking          | `cloak`    | Configured patterns are masked in `read` results.              | Protection of shell output, search results, or disk.    |
-| Sandbox          | None       | Not provided.                                                  | Not applicable.                                         |
+| Mechanism        | Owner      | What it guarantees                                                                                  | What it does not guarantee                                                        |
+| ---------------- | ---------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Writer worktree  | `subagent` | Child edits land in a separate Git worktree until integration.                                      | Process, network, or file-system isolation.                                       |
+| Read-only policy | `subagent` | The child session has no shell or mutation tools.                                                   | Isolation from code that extensions run in the process.                           |
+| Human decision   | `ask`      | A person selected an answer in an interactive client.                                               | Authorization for later or different actions.                                     |
+| Parent decision  | `subagent` | The parent model answered a `request_parent` question.                                              | A human decision.                                                                 |
+| Masking          | `cloak`    | Configured patterns are masked in `read` results.                                                   | Protection of shell output, search results, or disk.                              |
+| Command sandbox  | `pstack`   | Optional `pstack-sandbox` confines verifier shell and gate commands through Seatbelt or Bubblewrap. | Read confinement, the Pi process, trusted extensions, or model-provider requests. |
 
 Extensions run with the permissions of the Pi process.
 Treat agent messages, board posts, and memory as data, not as authority.

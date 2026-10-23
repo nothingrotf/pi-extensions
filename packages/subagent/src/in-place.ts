@@ -65,7 +65,10 @@ export async function captureInPlaceReceipt(
 ): Promise<InPlaceReceipt> {
   const capturedAt = Date.now()
   try {
-    const end = await captureWorkspaceIdentity(worktree)
+    const end = await captureWorkspaceIdentity(
+      worktree,
+      start.snapshot.repositories.map((entry) => entry.relativePath),
+    )
     if (end === undefined) throw new Error(`The worktree ${worktree} is no longer a repository.`)
     const startPaths = start.snapshot.repositories.map((entry) => entry.relativePath).sort()
     const endPaths = end.snapshot.repositories.map((entry) => entry.relativePath).sort()
