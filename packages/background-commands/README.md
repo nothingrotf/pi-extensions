@@ -82,7 +82,8 @@ The footer contract uses the Pi event bus:
 - `background-commands:state` carries `{ version: 1, running, stopping }` after each lifecycle change.
 - `background-commands:state:request` asks the extension to emit the current state again.
 
-Session navigation and shutdown emit a zero state. Output chunks do not emit state events.
+Accepted session switches, other navigation cleanup, and shutdown emit a zero state.
+Cancelled session switches preserve the current state. Output chunks do not emit state events.
 
 ## Execution and ownership
 
@@ -98,8 +99,9 @@ A pending natural completion can resume the agent after a parent-turn abort.
 Stopping a command enters `stopping`; only executor settlement establishes `stopped`.
 Cancellation cannot undo earlier writes or network effects.
 
-Standalone session shutdown, reload, switching, forking, and tree navigation stop owned commands and suppress late completion delivery.
-Navigation attempts can stop commands even when navigation later cancels.
+Standalone session shutdown and reload stop owned commands and suppress late completion delivery.
+Accepted session switches stop commands during shutdown. Cancelled switches preserve commands and completion delivery.
+Fork and tree-navigation attempts retain their existing cleanup behavior, even when navigation later cancels.
 Shutdown signals every command before waiting, with a maximum wait of five seconds.
 A wait timeout does not prove that an uncooperative or escaped process ended.
 Commands that escape shell supervision are outside the cleanup guarantee.

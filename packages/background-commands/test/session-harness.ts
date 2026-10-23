@@ -14,6 +14,7 @@ import {
   createCodemodeExtension,
   DefaultResourceLoader,
   type ExtensionAPI,
+  type ExtensionFactory,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -39,6 +40,7 @@ export function toolCall(name: string, args: ToolCall['arguments']): ToolCall {
 export async function sessionFixture(
   plan: Plan = () => [{ type: 'text', text: 'Done' }],
   ownership: 'standalone' | 'injected' = 'injected',
+  extensionAfter?: ExtensionFactory,
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'pi-background-session-'))
   const agentDir = join(directory, 'agent')
@@ -135,6 +137,7 @@ export async function sessionFixture(
         ? createBackgroundCommandsExtension({ service })
         : createBackgroundCommandsExtension(),
       createCodemodeExtension({ mode: 'on', models: false }),
+      ...(extensionAfter === undefined ? [] : [extensionAfter]),
     ],
   })
   await loader.reload()

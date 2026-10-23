@@ -337,7 +337,6 @@ export function createBackgroundCommandsExtension(
       hud.announce()
       pi.events.emit('ask:state:request', {})
     })
-    pi.on('session_before_switch', beforeNavigation)
     pi.on('session_before_fork', beforeNavigation)
     pi.on('session_before_tree', beforeNavigation)
     pi.on('session_tree', (_event, ctx) => {

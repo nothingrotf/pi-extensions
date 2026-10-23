@@ -407,7 +407,37 @@ describe('real Pi session integration', () => {
     },
   )
 
-  it('stops standalone commands before session navigation', async () => {
+  it('preserves standalone commands when a later extension cancels navigation', async () => {
+    const fixture = await sessionFixture(
+      (request) =>
+        request === 1
+          ? [
+              toolCall('background_command', {
+                action: 'start',
+                command: nodeCommand('setInterval(() => {}, 1000)'),
+              }),
+            ]
+          : request === 3
+            ? [toolCall('background_command', { action: 'list' })]
+            : [{ type: 'text', text: 'Done' }],
+      'standalone',
+      (pi) => {
+        pi.on('session_before_switch', () => ({ cancel: true }))
+      },
+    )
+    await fixture.session.prompt('Start before cancelled navigation')
+    const navigation = await fixture.session.extensionRunner.emit({
+      type: 'session_before_switch',
+      reason: 'new',
+    })
+    expect(navigation).toMatchObject({ cancel: true })
+    await fixture.session.prompt('Inspect after cancelled navigation')
+    const result = fixture.session.messages.findLast((message) => message.role === 'toolResult')
+    expect(result).toMatchObject({ details: { action: 'list', commands: [{ status: 'running' }] } })
+    expect(fixture.completions()).toEqual([])
+  })
+
+  it('stops standalone commands when approved navigation shuts down the session', async () => {
     const fixture = await sessionFixture(
       (request) =>
         request === 1
@@ -422,11 +452,14 @@ describe('real Pi session integration', () => {
             : [{ type: 'text', text: 'Done' }],
       'standalone',
     )
+    const states: unknown[] = []
+    fixture.api().events.on('background-commands:state', (state) => states.push(state))
     await fixture.session.prompt('Start before navigation')
+    expect(states.at(-1)).toMatchObject({ running: 1 })
     await fixture.session.extensionRunner.emit({ type: 'session_before_switch', reason: 'new' })
-    await fixture.session.prompt('Inspect after cancelled navigation')
-    const result = fixture.session.messages.findLast((message) => message.role === 'toolResult')
-    expect(result).toMatchObject({ details: { action: 'list', commands: [] } })
+    expect(states.at(-1)).toMatchObject({ running: 1 })
+    await fixture.session.extensionRunner.emit({ type: 'session_shutdown', reason: 'new' })
+    expect(states.at(-1)).toMatchObject({ running: 0 })
     expect(fixture.completions()).toEqual([])
   })
 
