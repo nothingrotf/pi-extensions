@@ -33,6 +33,7 @@ import type {
 } from './runtime.ts'
 import { EvidenceSectionSchema, type EvidenceSection } from './schema.ts'
 import { type AgentRow, TaskResult } from './task-render.ts'
+import { registerHybridTaskTool, taskControlToolGuidelines } from './tool-contracts.ts'
 import { toolInputUnion } from './tool-schema.ts'
 
 const MAX_LIST_RESULTS = 20
@@ -1156,7 +1157,7 @@ export function renderTaskControlResult(
 }
 
 export const taskControlDescription =
-  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. Operational responses are bounded summaries. evidence retrieves paginated output or verification evidence for an exact Agent ID and attempt. inbox shows bounded notification delivery previews. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, a child requests a decision, a timeout, or an abort. Call wait as the only tool call. Never pair it with shell sleep, because a parallel call delays decision replies past their 5-minute deadline. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
+  'Inspect, steer, cancel, join, or wait on existing Tasks without resume. Codemode may call non-wait actions; call wait directly, outside scripts. Operational responses are bounded summaries. evidence retrieves paginated output or verification evidence for an exact Agent ID and attempt. inbox shows bounded notification delivery previews. acknowledge resolves a notice; reply answers a request_parent decision by request_id. Acknowledge and reply require identifiers returned by inbox. wait blocks until a job settles, a child requests a decision, a timeout, or an abort. Call wait as the only tool call. Never pair it with shell sleep, because a parallel call delays decision replies past their 5-minute deadline. jobs does not wait. Steer only queues text. Cancel prevents later integration only for isolated writers.'
 
 export function registerTaskControl(
   pi: ExtensionAPI,
@@ -1173,35 +1174,39 @@ export function registerTaskControl(
     snapshots: () => runtime.listSnapshots(),
     steer: (handle, message) => host.steer(handle, message),
   }
-  pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
-    description: taskControlDescription,
-    execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
-      runtime.ensureContext(ctx)
-      const details = await executeTaskControl(
-        Value.Decode(TaskControlInputSchema, rawInput),
-        ctx,
-        runtime,
-        scope,
-        { events: pi.events, onUpdate, signal },
-      )
-      return { content: [{ text: serializeTaskControl(details), type: 'text' }], details }
+  registerHybridTaskTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>(
+    pi,
+    {
+      description: taskControlDescription,
+      execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
+        runtime.ensureContext(ctx)
+        const details = await executeTaskControl(
+          Value.Decode(TaskControlInputSchema, rawInput),
+          ctx,
+          runtime,
+          scope,
+          { events: pi.events, onUpdate, signal },
+        )
+        return { content: [{ text: serializeTaskControl(details), type: 'text' }], details }
+      },
+      executionMode: 'parallel',
+      exposure: 'direct',
+      promptGuidelines: taskControlToolGuidelines,
+      label: 'Task Control',
+      name: 'TaskControl',
+      parameters: TaskControlInputSchema,
+      renderCall: (args, theme, context) =>
+        renderTaskControlCall(args, theme, context.state, labelFor),
+      renderResult: (result, options, theme, context) =>
+        renderTaskControlResult(
+          result.details,
+          result.content.find((item) => item.type === 'text')?.text ?? '',
+          options,
+          theme,
+          context.state,
+          labelFor,
+          context.args,
+        ),
     },
-    executionMode: 'parallel',
-    exposure: 'model-only',
-    label: 'Task Control',
-    name: 'TaskControl',
-    parameters: TaskControlInputSchema,
-    renderCall: (args, theme, context) =>
-      renderTaskControlCall(args, theme, context.state, labelFor),
-    renderResult: (result, options, theme, context) =>
-      renderTaskControlResult(
-        result.details,
-        result.content.find((item) => item.type === 'text')?.text ?? '',
-        options,
-        theme,
-        context.state,
-        labelFor,
-        context.args,
-      ),
-  })
+  )
 }

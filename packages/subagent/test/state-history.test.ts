@@ -12,7 +12,7 @@ import {
   type RuntimeState,
   type WorkspaceRecord,
 } from '../src/schema.ts'
-import { latestState, stateHistory, StateStore } from '../src/state.ts'
+import { latestState, stateHistory, StateStore, taskTranscriptHistory } from '../src/state.ts'
 
 function record(ownerSessionId: string, index: number): RunRecord {
   return {
@@ -75,6 +75,54 @@ function sessionPath(session: SessionManager): string {
 }
 
 describe('StateStore history', () => {
+  it('retains transcript ownership through pruning, checkpoints, compaction, and reopen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'subagent-transcript-history-'))
+    try {
+      const session = startSession(dir, 'sessions')
+      const owner = session.getSessionId()
+      const store = storeFor(session)
+      store.restore({ sessionManager: session })
+      for (let index = 0; index < 257; index += 1) {
+        store.add({ ...record(owner, index), output: 'small' })
+      }
+      expect(store.get('agent-0')).toBeUndefined()
+      const before = session.getBranch().length
+      for (let index = 0; index < 128; index += 1) store.addRootStore(`/tmp/root-${index}`)
+      expect(session.getBranch().slice(before)).toContainEqual(
+        expect.objectContaining({
+          type: 'custom',
+          customType: 'pi-subagent-state',
+          data: expect.objectContaining({ version: 6 }),
+        }),
+      )
+      session.appendCompaction('Keep coordinator metadata.', null, 1)
+      const reopened = SessionManager.open(sessionPath(session))
+      const branch = reopened.getBranch()
+      expect(latestState(branch, owner)?.records).toHaveLength(256)
+      expect(latestState(branch, owner)?.records.some((entry) => entry.agentId === 'agent-0')).toBe(
+        false,
+      )
+      const transcripts = taskTranscriptHistory(branch, owner)
+      expect(transcripts).toHaveLength(257)
+      expect(transcripts).toContainEqual({ agentId: 'agent-0', sessionFile: '/tmp/agent-0.jsonl' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('filters transcript history by both journal owner and record owner', () => {
+    const session = SessionManager.inMemory()
+    const owner = session.getSessionId()
+    session.appendCustomEntry(
+      'pi-subagent-state',
+      snapshot(owner, [record(owner, 0), record('foreign', 1)]),
+    )
+    session.appendCustomEntry('pi-subagent-state', snapshot('foreign', [record(owner, 2)]))
+    expect(taskTranscriptHistory(session.getBranch(), owner)).toEqual([
+      { agentId: 'agent-0', sessionFile: '/tmp/agent-0.jsonl' },
+    ])
+  })
+
   it(
     'rolls back failed appends and pruning before later mutations can persist ghost records',
     { timeout: 60_000 },
@@ -260,6 +308,9 @@ describe('StateStore history', () => {
     expect(() => storeFor(disconnected).restore({ sessionManager: disconnected })).toThrow(
       'The persisted subagent state journal is disconnected.',
     )
+    expect(() => taskTranscriptHistory(disconnected.getBranch(), session.getSessionId())).toThrow(
+      'The persisted subagent state journal is disconnected.',
+    )
     session.appendCustomEntry('pi-subagent-state', {
       ownerSessionId: session.getSessionId(),
       previous: delta.id,
@@ -269,6 +320,11 @@ describe('StateStore history', () => {
     expect(() => store.restore({ sessionManager: session })).toThrow(
       'The persisted subagent state is invalid.',
     )
+    const before = structuredClone(session.getBranch())
+    expect(() => taskTranscriptHistory(session.getBranch(), session.getSessionId())).toThrow(
+      'The persisted subagent state is invalid.',
+    )
+    expect(session.getBranch()).toEqual(before)
   })
 
   it('still rejects corruption in superseded and foreign snapshots', () => {
@@ -281,6 +337,9 @@ describe('StateStore history', () => {
       })
       session.appendCustomEntry('pi-subagent-state', snapshot(session.getSessionId(), []))
       expect(() => storeFor(session).restore({ sessionManager: session })).toThrow(
+        'The persisted subagent state is invalid.',
+      )
+      expect(() => taskTranscriptHistory(session.getBranch(), session.getSessionId())).toThrow(
         'The persisted subagent state is invalid.',
       )
     }

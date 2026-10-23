@@ -394,6 +394,32 @@ export function latestState(
   return readLatestState(branch, ownerSessionId)?.state
 }
 
+export function taskTranscriptHistory(
+  branch: readonly SessionEntry[],
+  ownerSessionId: string,
+): Array<Pick<RunRecord, 'agentId' | 'sessionFile'>> {
+  const transcripts = new Map<string, string>()
+  const remember = (records: readonly JournalRecord[]) => {
+    for (const record of records) {
+      if (record.ownerSessionId === ownerSessionId)
+        transcripts.set(record.sessionFile, record.agentId)
+    }
+  }
+  readHistory(branch, ownerSessionId, {
+    delta: (data) => {
+      const delta = readDelta(data)
+      if (delta.ownerSessionId === ownerSessionId) remember(delta.records)
+      return delta
+    },
+    snapshot: (data) => {
+      const snapshot = readSnapshot(data)
+      if (snapshot?.state.ownerSessionId === ownerSessionId) remember(snapshot.state.records)
+      return snapshot
+    },
+  })
+  return [...transcripts].map(([sessionFile, agentId]) => ({ agentId, sessionFile }))
+}
+
 export function stateHistory(
   branch: readonly SessionEntry[],
   ownerSessionId: string,

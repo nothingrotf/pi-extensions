@@ -835,7 +835,7 @@ describe('subagent Task integration: registered agents and preflight', () => {
           .filter((tool) => tool.name === 'Task' || tool.name === 'TaskControl')
           .map((tool) => `${tool.name}:${tool.exposure}`)
           .sort(),
-      ).toEqual(['Task:model-only', 'TaskControl:model-only'])
+      ).toEqual(['Task:codemode', 'TaskControl:codemode'])
       expect(scripted).toContain('"orchestration":[]')
       expect(scripted).not.toContain('SECRET_PROBE_REACHED')
       const receipts = latestState(harness).records.at(-1)?.toolExecutionReceipts ?? []

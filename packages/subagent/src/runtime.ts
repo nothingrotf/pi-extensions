@@ -120,6 +120,12 @@ import type {
 import { decodeSingleTaskInput, SingleTaskInputSchema, TaskRoleSchema } from './schema.ts'
 import { StateStore } from './state.ts'
 import {
+  registerHybridTaskTool,
+  registerTaskToolContracts,
+  taskControlToolGuidelines,
+  taskToolGuidelines,
+} from './tool-contracts.ts'
+import {
   createRootWorkspaceContext,
   DescendantScope,
   joinEffectiveCwd,
@@ -1319,8 +1325,10 @@ export class SubagentRuntime {
     if (options.currentDepth >= options.maxDepth) return undefined
     return {
       factory: (pi) => {
-        pi.registerTool({
-          description: 'Run an approved nested subagent within the current root owner.',
+        registerHybridTaskTool(pi, {
+          description:
+            'Run an approved nested subagent within the current root owner. Codemode requires explicit run_in_background: true. Foreground Tasks require a direct call. Nested Task does not accept batch graphs.',
+          promptGuidelines: taskToolGuidelines,
           execute: async (_callId, rawInput, signal, _onUpdate, ctx) => {
             if (options.currentDepth >= options.maxDepth) {
               throw new Error(`The nested Task reached the maximum depth of ${options.maxDepth}.`)
@@ -1414,7 +1422,7 @@ export class SubagentRuntime {
               },
             }
           },
-          exposure: 'model-only',
+          exposure: 'direct',
           label: 'Task',
           name: 'Task',
           parameters: SingleTaskInputSchema,
@@ -1428,12 +1436,18 @@ export class SubagentRuntime {
   private scopeBoundTaskControlExtension(): InlineExtension {
     return {
       factory: (pi) => {
+        registerTaskToolContracts(pi, SingleTaskInputSchema)
         const labelFor = (agentId: string): string =>
           this.listSnapshots().find((snapshot) => snapshot.agentId === agentId)?.description ??
           agentId
-        pi.registerTool<typeof TaskControlInputSchema, TaskControlDetails, TaskControlRenderState>({
-          exposure: 'model-only',
+        registerHybridTaskTool<
+          typeof TaskControlInputSchema,
+          TaskControlDetails,
+          TaskControlRenderState
+        >(pi, {
+          exposure: 'direct',
           description: `${taskControlDescription} Access stays within this Task scope.`,
+          promptGuidelines: taskControlToolGuidelines,
           execute: async (_callId, rawInput, signal, onUpdate, ctx) => {
             const callerId = ctx.sessionManager.getSessionId()
             const caller = this.active.get(callerId)

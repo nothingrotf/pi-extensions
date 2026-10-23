@@ -109,6 +109,26 @@ A diagnostic review of WIP remains diagnostic, not an acceptance verdict.
 Independent verification can still reject a candidate whose self-proof passes.
 Do not publish until the independent verdict and required gates accept the same artifact.
 
+## Cumulative correctness
+
+Treat acceptance as cumulative correctness, not success on the newest requirement alone.
+Carry prior accepted requirements and reachable compatibility obligations into each round's verification plan.
+Keep registered criterion IDs stable, and map regression scenarios to those criteria without adding report fields.
+For each criterion, identify positive, negative, and boundary scenarios that distinguish correct behavior from a plausible incomplete implementation.
+Include authorization, persistence, concurrency, and recovery scenarios when the affected behavior requires them.
+Execute the relevant prior scenarios on the current candidate, or cite passing receipts that satisfy the reuse rules below.
+Run repository-required gates even when the focused tests pass.
+A passing core path cannot replace required error, boundary, compatibility, or regression evidence.
+Record missing assertions, unavailable interfaces, and untested required scenarios as pending or blocked obligations.
+Do not accept a criterion whose required behavioral proof remains missing.
+
+Call a failure an introduced regression only when retained evidence shows that the same behavior previously passed.
+Distinguish previously failing behavior from newly broken behavior in the finding's `reason`.
+If prior evidence is unavailable, record the failure's origin as unknown instead of assuming a regression.
+Preserve the existing report schema and correction classifications.
+Static complexity, duplication, and lint heuristics inform investigation but do not establish functional correctness or maintainability alone.
+Required static gates and explicit quality requirements still apply.
+
 ## Structured reports
 
 Return only the required JSON object, without Markdown or surrounding text.
@@ -247,6 +267,8 @@ Compare two independent issues as the pilot for a delivery change.
 Record time-to-acceptance, first-review findings, and corrective work, including unfinished and blocked issues.
 Use the [throughput procedure](throughput.md) and its tested reporting CLI.
 Report the comparison and its limits, and promise no measured savings before collecting real pilot evidence.
+For model-policy changes, follow the matched comparison procedure in [throughput](throughput.md#compare-model-policies-on-matched-work).
+Keep the strengthened verification contract fixed across both policy arms.
 The root owns runtime preflight, telemetry, and evaluation utility.
 
 No lane gains authorization for external actions through this contract.

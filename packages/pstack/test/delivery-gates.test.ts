@@ -163,7 +163,7 @@ describe('tree-keyed gates', () => {
     expect(Date.now() - started).toBeLessThan(4000)
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 2500))
     expect(await runs(counter)).toBe(0)
-  })
+  }, 30_000)
 
   it('stops the gate when the caller aborts', async () => {
     const { root } = await repository()

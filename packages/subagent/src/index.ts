@@ -1,3 +1,6 @@
+import { realpath } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -34,6 +37,7 @@ import {
   type SubagentRuntime,
 } from './runtime.ts'
 import { decodeBatchTaskInput, decodeSingleTaskInput, TaskInputSchema } from './schema.ts'
+import { taskTranscriptHistory } from './state.ts'
 import {
   plainText,
   rowFromBatchItem,
@@ -45,6 +49,11 @@ import {
   type TaskRenderState,
   TaskResult,
 } from './task-render.ts'
+import {
+  registerHybridTaskTool,
+  registerTaskToolContracts,
+  taskToolGuidelines,
+} from './tool-contracts.ts'
 import { SubagentTui } from './ui.ts'
 
 export const SUBAGENT_DISCOVERY_EVENT = '@nothingrotf/subagent/discover-agents'
@@ -240,12 +249,44 @@ export function railTaskDetail(
   return [identity, args.description ?? args.subagent_type ?? ''].filter(Boolean).join(' · ')
 }
 
+async function ownedTaskTranscript(
+  runtime: SubagentRuntime,
+  target: string,
+  ctx: ExtensionContext,
+) {
+  const path = resolve(ctx.cwd, target)
+  const owner = ctx.sessionManager.getSessionId()
+  const snapshots = runtime
+    .listSnapshots()
+    .filter((snapshot) => runtime.getRecord(snapshot.agentId)?.ownerSessionId === owner)
+  const direct = snapshots.find((snapshot) => resolve(snapshot.sessionFile) === path)
+  if (direct !== undefined) return direct
+  const physicalTarget = await realpath(path).catch(() => undefined)
+  if (physicalTarget === undefined) return undefined
+  const paths = await Promise.all(
+    snapshots.map((snapshot) => realpath(snapshot.sessionFile).catch(() => undefined)),
+  )
+  const current = snapshots.find((_snapshot, index) => paths[index] === physicalTarget)
+  if (current !== undefined) return current
+  const history = taskTranscriptHistory(ctx.sessionManager.getBranch(), owner)
+  const historical = history.find((record) => resolve(record.sessionFile) === path)
+  if (historical !== undefined) return historical
+  const checked = new Set(snapshots.map((snapshot) => resolve(snapshot.sessionFile)))
+  for (const record of history) {
+    if (checked.has(resolve(record.sessionFile))) continue
+    if ((await realpath(record.sessionFile).catch(() => undefined)) === physicalTarget)
+      return record
+  }
+  return undefined
+}
+
 export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): SubagentRuntime {
   const host = acquireSubagentHost(pi, runTimeoutMs)
   const runtime = host.runtime
   const rail = new RailBridge(pi, ['Task'])
   if (host.registered) return runtime
   host.registered = true
+  registerTaskToolContracts(pi, TaskInputSchema)
   const tui = new SubagentTui(runtime)
   const agentRegistrations = new Map<string, () => void>()
   const capabilityProfileSources = new Set<string>()
@@ -311,8 +352,27 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
   pi.on('session_start', async (_event, ctx) => {
     if (await host.replaceSession(ctx)) tui.sessionStart(ctx)
   })
-  pi.on('session_before_switch', async (_event, ctx) => {
-    if (await host.stopSession(ctx, 'The parent session switched.')) tui.sessionShutdown(ctx)
+  pi.on('session_before_switch', async (event, ctx) => {
+    if (event.reason === 'resume' && event.targetSessionFile !== undefined) {
+      let task: Awaited<ReturnType<typeof ownedTaskTranscript>>
+      try {
+        task = await ownedTaskTranscript(runtime, event.targetSessionFile, ctx)
+      } catch {
+        ctx.ui.notify(
+          'Session switch cancelled: Task transcript ownership could not be verified. Inspect the coordinator session history before retrying.',
+          'warning',
+        )
+        return { cancel: true }
+      }
+      if (task !== undefined) {
+        ctx.ui.notify(
+          `Task ${task.agentId} belongs to this coordinator. Inspect it with /subagents peek. Continue it with Task resume from this coordinator. Direct session switching would discard its execution context.`,
+          'warning',
+        )
+        return { cancel: true }
+      }
+    }
+    return undefined
   })
   pi.on('session_before_fork', async (_event, ctx) => {
     if (await host.stopSession(ctx, 'The parent session forked.')) tui.sessionShutdown(ctx)
@@ -406,9 +466,9 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   registerTaskControl(pi, host, runtime)
 
-  pi.registerTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>({
+  registerHybridTaskTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>(pi, {
     description:
-      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label preserved on resume. A selected capability profile may require an exact role and provide its default model. Explicit model overrides take precedence over valid capability policy. Foreground is the default unless the selected agent defines background mode.',
+      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label preserved on resume. A selected capability profile may require an exact role and provide its default model. Explicit model overrides take precedence over valid capability policy. Foreground is the default unless the selected agent defines background mode. Codemode may dispatch a single Task only with explicit run_in_background: true. Call Task directly for foreground or batch execution. Batch graphs use { tasks: [{ id, description, prompt, subagent_type }] }; run_in_background is forbidden on graph nodes and the batch wrapper.',
     execute: async (callId, input, signal, onUpdate, ctx) => {
       const progress = new JobProgress(
         runtime,
@@ -428,7 +488,8 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       }
     },
     executionMode: 'parallel',
-    exposure: 'model-only',
+    exposure: 'direct',
+    promptGuidelines: taskToolGuidelines,
     label: 'Task',
     name: 'Task',
     parameters: TaskInputSchema,
@@ -587,6 +648,7 @@ async function executeTask(
         succeeded: batch.status === 'completed',
         total: batch.items.length,
       },
+      isError: batch.status !== 'completed',
     }
   }
   const decoded = decodeSingleTaskInput(input)
@@ -608,6 +670,7 @@ async function executeTask(
     return {
       content: [{ text: failedContent(result), type: 'text' }],
       details: failedDetails(result, runtime),
+      isError: true,
     }
   }
 

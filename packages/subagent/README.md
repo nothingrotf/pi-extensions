@@ -18,6 +18,15 @@ Task({
 })
 ```
 
+Direct session switching to an owned Task transcript is blocked before the coordinator stops its workers.
+Cancelled session switches preserve workers and their handles. Accepted switches clean up during session shutdown.
+The guard also checks validated active-branch history after bounded Task records expire, including after compaction and reopen.
+Historical lookup preserves journal integrity and owner checks without reconstructing execution permissions.
+If ownership history fails validation, the guard cancels switching and preserves the current session and its original evidence.
+Inspect a Task with `/subagents peek`, and continue it through `Task` with `resume`.
+Opening a worker transcript as an independent root session does not reconstruct its tools, workspace, or managed delivery ownership.
+Existing independently opened transcripts need recovery through their original coordinator.
+
 Continue the same child:
 
 ```ts
@@ -58,6 +67,8 @@ The run record stores the provider that the Task used. Resume keeps that provide
 It does not inherit the parent's global Fast Mode preference.
 
 Set `run_in_background` to `true` to return the Agent ID after session creation.
+This field belongs only to a single Task, never a `tasks[]` node or batch wrapper.
+The graph scheduler owns batch execution. Invalid argument errors include a corrective shape without executing the rejected call.
 
 The runtime automatically adds writer isolation to a mutable background Task. Its accepted result remains staged until a safe join barrier.
 
@@ -109,8 +120,19 @@ Read-only children keep `codemode`, and their scripts cannot reach removed mutat
 The session allowlist also excludes capability tools that register `codemode` or `deferred` exposure outside the Task contract.
 Nested calls produce tool receipts with `<script call id>/<n>` call IDs.
 
-`Task`, `TaskControl`, `request_parent`, `ask_parent`, and `receive_peers` use `model-only` exposure.
-A script cannot dispatch Tasks, wait on them, request decisions, or consume sibling messages that the model would not see.
+`Task` and `TaskControl` stay callable through codemode within their existing authorization and scope.
+A script can dispatch a single Task only with explicit `run_in_background: true`.
+Return its Agent ID to the coordinator, then call `TaskControl wait` directly as the only tool call.
+Foreground Tasks, batch graphs, and nested waits are rejected before execution, without allocating a child for the rejected dispatch.
+Earlier script calls are not undone; inspect their results before retrying.
+Non-wait control actions retain their normal scope, model policy, decision identifiers, and integration checks.
+Active tools remain declared for direct calls, including under `codemode.mode: "only"`.
+Deactivating either tool also blocks its script calls.
+Reload follows Pi's configured tool selection; exposure promotion preserves the active set that Pi supplies.
+Task failures retain their error status through codemode; a background start receipt proves dispatch, not completion or acceptance.
+
+`request_parent`, `ask_parent`, and `receive_peers` keep `model-only` exposure.
+A script cannot request decisions or consume sibling messages through those private tools.
 
 Private intercom tools enter after policy validation. A call cannot request or remove them.
 

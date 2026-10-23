@@ -99,6 +99,43 @@ The CLI reads the measurements file without changing it.
 Invalid evidence produces a nonzero exit code and no success report.
 The output includes acceptance time, correction time, first-pass acceptance, p90 time to acceptance, and accepted, blocked, and incomplete denominators. P90 uses the nearest-rank value: after sorting accepted delivery times, it selects the value at `ceil(0.90 * sample size)`. A zero-sample p90 is `null`, and every p90 includes its accepted-delivery sample size. It includes complexity-specific model groups, correction classifications, and session metrics. Version 2 also reports gate and scenario matches, data-source limits, and recommendations that preserve mandated reading. Version 3 additionally reports observed model usage cost and its coverage limits.
 
+## Compare model policies on matched work
+
+Keep a copy of the previous selector file before changing the active policy.
+Treat the revised policy as a hypothesis, not a measured improvement.
+Separate model-policy comparisons from workflow comparisons; the two-issue workflow pilot does not establish a model ranking.
+Keep the workflow, verification contract, task specification, starting tree, dependencies, and required scenarios fixed across policy arms.
+Use fresh workspaces and agent contexts for each run.
+Record every actual selector, including effort, fast mode, and any escalation.
+Pin reviewer and verifier selections explicitly when their configured pools contain distinct choices.
+
+Compare the complete old and new policies first when evaluating the overall delivery configuration.
+For attribution to a particular role, change only that role's selector in a separate comparison.
+Run at least three repetitions per task and policy arm before drawing a descriptive conclusion.
+Alternate policy order to reduce time-of-day and service-load effects.
+Retain all failed, blocked, interrupted, and unfinished runs in the denominator.
+Do not count checkpoints from the same evolving workspace as independent samples.
+
+Record these outcomes beside their immutable evidence:
+
+- Cumulative acceptance across every required scenario, not only the newest feature.
+- Introduced regressions, previously unmet requirements, and failures whose origin remains unknown.
+- Correction rounds, time to acceptance, and required checks that remain unavailable.
+- Review findings confirmed by executable evidence, plus defects discovered after acceptance.
+- Observed total usage cost, accounting coverage, and cost per accepted delivery when accounting is complete.
+
+Use the existing correction classifications and describe failure origins in the retained evidence.
+Keep later defect observations beside the original acceptance evidence instead of rewriting the historical verdict.
+State the observation window; no observed escaped defects does not establish that none exist.
+Use version 3 accounting for observed model costs, and never substitute unknown cost with zero.
+The throughput CLI intentionally withholds reduction estimates when compared model profiles differ.
+Report model-policy results separately rather than changing selector labels to bypass that guard.
+Report per-task outcomes and their uncertainty; three repetitions do not establish a universal winner.
+Do not claim savings from incomplete accounting or higher reliability from a single run.
+
+Schedule paid model comparisons only within explicit benchmark scope and budget.
+Policy editing alone does not authorize new delivery issues or external publication.
+
 ## Measurements format
 
 This example is synthetic format documentation, not pilot evidence:
