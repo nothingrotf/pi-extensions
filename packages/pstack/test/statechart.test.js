@@ -15,13 +15,17 @@ const scripts = join(
 
 describe('statechart skill scripts', () => {
   it('pass the bundled upstream suite', async () => {
-    const result = await exec(process.execPath, ['--test', 'test/statechart.test.mjs'], {
-      cwd: scripts,
-      maxBuffer: 16 * 1024 * 1024,
-      timeout: 600_000,
-    })
-    expect(result.stdout).toMatch(/^ℹ fail 0$/m)
-    expect(result.stdout).toMatch(/^ℹ pass [1-9]\d*$/m)
+    const result = await exec(
+      process.execPath,
+      ['--test', '--test-reporter=tap', 'test/statechart.test.mjs'],
+      {
+        cwd: scripts,
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 600_000,
+      },
+    )
+    expect(result.stdout).toMatch(/^# fail 0$/m)
+    expect(result.stdout).toMatch(/^# pass [1-9]\d*$/m)
   }, 610_000)
 
   it('prints usage without TLC', async () => {
