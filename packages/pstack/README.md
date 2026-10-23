@@ -32,7 +32,7 @@ The extension enforces model selection and delivery contracts, but activation re
 
 ## Resources
 
-The package provides 52 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 55 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -43,6 +43,7 @@ The package provides 52 upstream skills, four Pi compatibility skills, and the l
 - `control-cli`
 - `control-ui`
 - `correct`
+- `create-formal-verification-skill`
 - `create-skill`
 - `create-verification-skill`
 - `deslop`
@@ -51,6 +52,7 @@ The package provides 52 upstream skills, four Pi compatibility skills, and the l
 - `in-your-own-words`
 - `interrogate`
 - `ketchup`
+- `maintain-formal-verification-skill`
 - `maintain-verification-skill`
 - `no-comments`
 - `principle-attack-the-premise`
@@ -84,6 +86,7 @@ The package provides 52 upstream skills, four Pi compatibility skills, and the l
 - `setup-pstack`
 - `sharpen`
 - `show-me-your-work`
+- `statechart`
 - `swarm`
 - `tdd`
 - `teach`
@@ -192,6 +195,24 @@ The Pi port adapts or omits these parts:
 - `ketchup` still draws charts with an available tool instead of `/visualize`.
 - `worktree-audit.sh` keeps its `gh` pull request lookup, so the Origin lookup has no counterpart.
 - `poteto-help` and the version bumps have no local counterpart.
+
+These upstream changes through [#779](https://github.com/cursor/plugins/pull/779) at `4ec7ffa173eaa70d3d9467a627baf0954645a353` are also synchronized:
+
+- [#692](https://github.com/cursor/plugins/pull/692) and [#708](https://github.com/cursor/plugins/pull/708) make `ketchup` list every item that waits on the user, with what the user needs to decide it from the reply alone. The reply grows with the number of items and never drops one to meet a word count.
+- [#700](https://github.com/cursor/plugins/pull/700) makes `typescript-best-practices` create a brand with a verifying type guard instead of `as`.
+- [#709](https://github.com/cursor/plugins/pull/709) and [#721](https://github.com/cursor/plugins/pull/721) add `create-formal-verification-skill`, with TLA+ as the default and a fallback when no verifier runs on the language.
+- [#716](https://github.com/cursor/plugins/pull/716) adds `maintain-formal-verification-skill`.
+- [#715](https://github.com/cursor/plugins/pull/715) makes `setup-pstack` offer a formal verification skill once.
+- [#712](https://github.com/cursor/plugins/pull/712) and [#729](https://github.com/cursor/plugins/pull/729) restore the original `sharpen` prompt. It returns only the rewritten prompt and does not do the task.
+- [#741](https://github.com/cursor/plugins/pull/741), [#776](https://github.com/cursor/plugins/pull/776), and [#779](https://github.com/cursor/plugins/pull/779) add `statechart`. It draws what a user sees as a Mermaid statechart checked by a TLA+ model, with each bug as a numbered path.
+
+The Pi port adapts or omits these parts:
+
+- `ketchup` still draws charts with an available tool instead of `/visualize`, and reads each `Task` state with `TaskControl`.
+- `setup-pstack` invokes `create-formal-verification-skill` through its canonical installed path.
+- The `statechart` scripts keep their upstream `node:test` suite. The package test runs it, and TLC cases skip when `TLA2TOOLS` and Java are absent.
+- [#702](https://github.com/cursor/plugins/pull/702) names each skill after its folder. The local skills already use those names.
+- The Claude Code plugin from [#637](https://github.com/cursor/plugins/pull/637) and [#705](https://github.com/cursor/plugins/pull/705), the docs check from [#704](https://github.com/cursor/plugins/pull/704), `make-bot-ui`, `poteto-help`, the guide, and the version bumps have no local counterpart.
 
 ## Task roles and workspace contracts
 

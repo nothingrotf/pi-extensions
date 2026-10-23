@@ -101,9 +101,12 @@ describe('poteto-mode', () => {
   it('keeps upstream manual skills hidden from automatic model invocation', () => {
     for (const name of [
       'how',
+      'create-formal-verification-skill',
       'in-your-own-words',
       'ketchup',
+      'maintain-formal-verification-skill',
       'sharpen',
+      'statechart',
       'typescript-best-practices',
       'unslop',
       'why',

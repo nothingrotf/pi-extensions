@@ -11,6 +11,7 @@ export default defineConfig({
     trailingComma: 'all',
   },
   lint: {
+    ignorePatterns: ['packages/pstack/skills/statechart/scripts/**'],
     jsPlugins: [
       { name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' },
       { name: 'anti-slop', specifier: './tools/oxlint/anti-slop-plugin.ts' },
@@ -60,7 +61,12 @@ export default defineConfig({
       'vp fmt --write --no-error-on-unmatched-pattern',
   },
   test: {
-    exclude: ['**/node_modules/**', '**/.git/**', '**/.verification/**'],
+    exclude: [
+      '**/node_modules/**',
+      '**/.git/**',
+      '**/.verification/**',
+      'packages/pstack/skills/**',
+    ],
   },
   run: {
     cache: {
