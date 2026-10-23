@@ -32,6 +32,45 @@ describe('prose markdown links', () => {
     )
   })
 
+  test.each([
+    ['/tmp/afresp-access-review/desktop.png', 'file:///tmp/afresp-access-review/desktop.png'],
+    ['./shots/access.png', 'file:///session/project/shots/access.png'],
+    ['../shots/access%20panel.png', 'file:///session/shots/access%20panel.png'],
+  ])('renders image destination %s as an openable file URL', (href, expected) => {
+    setCapabilities({ hyperlinks: true, images: null, trueColor: true })
+    const prose = new ProseMarkdown(`![Lista de acessos](${href})`, {
+      cwd: () => '/session/project',
+      resolve: () => undefined,
+      revision: () => 0,
+      streaming: () => false,
+    })
+
+    const lines = prose.render(200)
+
+    expect(lines.join('')).toContain(osc8(expected))
+    expect(plain(lines)).toEqual([`Lista de acessos (${expected})`])
+  })
+
+  test('keeps image destinations visible without terminal hyperlinks', () => {
+    setCapabilities({ hyperlinks: false, images: null, trueColor: true })
+    const lines = renderProseMarkdown('![Preview](/tmp/access.png)', 100)
+
+    expect(plain(lines)).toEqual(['Preview (file:///tmp/access.png)'])
+    expect(lines.join('')).not.toContain('\x1b]8;')
+  })
+
+  test('normalizes named local links without rewriting remote or fragment links', () => {
+    setCapabilities({ hyperlinks: true, images: null, trueColor: true })
+    const lines = renderProseMarkdown(
+      '[Open](/tmp/access.png) [Web](https://example.com) [Section](#section)',
+      200,
+    )
+
+    expect(lines.join('')).toContain(osc8('file:///tmp/access.png'))
+    expect(lines.join('')).toContain(osc8('https://example.com'))
+    expect(lines.join('')).toContain(osc8('#section'))
+  })
+
   test('keeps the destination visible without terminal hyperlinks', () => {
     setCapabilities({ hyperlinks: false, images: null, trueColor: true })
     const lines = renderProseMarkdown('See [Docs](https://example.com/docs).', 80)
@@ -437,6 +476,20 @@ describe('streaming stabilization', () => {
 })
 
 describe('prose markdown component', () => {
+  test('resolves local images again when the session working directory changes', () => {
+    let cwd = '/first'
+    const component = new ProseMarkdown('![Preview](shots/access.png)', {
+      cwd: () => cwd,
+      resolve: () => undefined,
+      revision: () => 0,
+      streaming: () => false,
+    })
+
+    expect(component.render(100).join('')).toContain(osc8('file:///first/shots/access.png'))
+    cwd = '/second'
+    expect(component.render(100).join('')).toContain(osc8('file:///second/shots/access.png'))
+  })
+
   test('re-renders when the file index revision or streaming state changes', () => {
     let revision = 0
     let streaming = true

@@ -82,6 +82,8 @@ Assistant messages render Markdown with these rules:
 - Link labels use the brand accent color, and the destination follows in dim text, such as `Docs (https://example.com)`.
 - The destination stays visible with or without terminal hyperlink support. Both parts stay clickable when OSC 8 is available.
 - Autolinks and file links do not repeat their destination.
+- Markdown image labels include their destination so it remains visible without terminal hyperlink support.
+- Local Markdown image and link destinations become absolute `file://` URLs, relative to the session working directory.
 - Bare project paths and single-backtick paths become `file://` links after the path exists on disk. Line and column suffixes stay visible in the label.
 - Headings hide their `#` markers. Level one and two use the primary color. Deeper levels use the secondary color.
 - Code blocks use a brand-colored left border instead of fences. Highlighting uses the active Pi syntax theme when the language is known.

@@ -11,7 +11,7 @@ import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { defaultHudPalette, type HudPalette } from './colors.ts'
-import { type FileResolver, linkifyMarkdown } from './prose-links.ts'
+import { type FileResolver, fileUrl, linkifyMarkdown, unescapePath } from './prose-links.ts'
 import { renderMermaid } from './prose-mermaid.ts'
 import { stabilizeMarkdown } from './prose-stream.ts'
 import {
@@ -154,8 +154,16 @@ function chunk(text: string, style: ProseStyle, link?: string): ProseChunk {
   return link === undefined ? { style, text } : { link, style, text }
 }
 
-function linkDestinationVisible(label: string, href: string): boolean {
-  if (href.startsWith('file:')) return false
+function resolveMarkdownUrl(href: string, cwd: string): string {
+  if (href.length === 0 || /^(?:[a-z][\w+.-]*:|\/\/|#)/iu.test(href)) return href
+  const path = unescapePath(href)
+  const home = path.startsWith('~/')
+  const base = fileUrl(home ? '~' : '.', cwd)
+  return new URL(home ? path.slice(2) : path, base.endsWith('/') ? base : `${base}/`).href
+}
+
+function linkDestinationVisible(label: string, href: string, image: boolean): boolean {
+  if (href.startsWith('file:') && !image) return false
   const bare = href.startsWith('mailto:') ? href.slice(7) : href
   return label !== href && label !== bare
 }
@@ -164,6 +172,7 @@ export function renderInline(
   tokens: readonly Token[],
   style: ProseStyle,
   styles: ProseStyleTable = proseStyles(),
+  cwd: string = process.cwd(),
 ): ProseChunk[] {
   const chunks: ProseChunk[] = []
   for (const token of tokens) {
@@ -171,7 +180,7 @@ export function renderInline(
       case 'text':
       case 'paragraph': {
         const nested = childTokens(token)
-        if (nested.length > 0) chunks.push(...renderInline(nested, style, styles))
+        if (nested.length > 0) chunks.push(...renderInline(nested, style, styles, cwd))
         else chunks.push(chunk(textOf(token), style))
         break
       }
@@ -179,13 +188,19 @@ export function renderInline(
         chunks.push(chunk(textOf(token), style))
         break
       case 'strong':
-        chunks.push(...renderInline(childTokens(token), mergeStyle(style, styles.strong), styles))
+        chunks.push(
+          ...renderInline(childTokens(token), mergeStyle(style, styles.strong), styles, cwd),
+        )
         break
       case 'em':
-        chunks.push(...renderInline(childTokens(token), mergeStyle(style, styles.emphasis), styles))
+        chunks.push(
+          ...renderInline(childTokens(token), mergeStyle(style, styles.emphasis), styles, cwd),
+        )
         break
       case 'del':
-        chunks.push(...renderInline(childTokens(token), mergeStyle(style, styles.deleted), styles))
+        chunks.push(
+          ...renderInline(childTokens(token), mergeStyle(style, styles.deleted), styles, cwd),
+        )
         break
       case 'codespan':
         chunks.push(chunk(textOf(token), mergeStyle(style, styles.code)))
@@ -193,17 +208,18 @@ export function renderInline(
       case 'link':
       case 'image': {
         if (!isLink(token)) break
+        const href = resolveMarkdownUrl(token.href, cwd)
         const labelStyle = mergeStyle(style, styles.linkLabel)
         const label =
           token.type === 'image'
-            ? [chunk(token.text.length === 0 ? 'image' : token.text, labelStyle, token.href)]
-            : renderInline(childTokens(token), labelStyle, styles).map((part) => ({
+            ? [chunk(token.text.length === 0 ? 'image' : token.text, labelStyle, href)]
+            : renderInline(childTokens(token), labelStyle, styles, cwd).map((part) => ({
                 ...part,
-                link: token.href,
+                link: href,
               }))
         chunks.push(...label)
-        if (token.type === 'link' && linkDestinationVisible(token.text, token.href)) {
-          chunks.push(chunk(` (${token.href})`, mergeStyle(style, styles.linkUrl), token.href))
+        if (linkDestinationVisible(token.text, href, token.type === 'image')) {
+          chunks.push(chunk(` (${href})`, mergeStyle(style, styles.linkUrl), href))
         }
         break
       }
@@ -249,7 +265,12 @@ function prefixed(lines: readonly string[], first: string, rest: string): string
   return lines.map((line, index) => `${index === 0 ? first : rest}${line}`)
 }
 
-type BlockContext = { base: ProseStyle; highlight?: ProseHighlighter; styles: ProseStyleTable }
+type BlockContext = {
+  base: ProseStyle
+  cwd: string
+  highlight?: ProseHighlighter
+  styles: ProseStyleTable
+}
 
 function trailingGap(next: string | undefined, ...quiet: string[]): string[] {
   return next !== undefined && next !== 'space' && !quiet.includes(next) ? [''] : []
@@ -336,8 +357,9 @@ function cellLines(
   width: number,
   style: ProseStyle,
   styles: ProseStyleTable,
+  cwd: string,
 ): string[] {
-  const serialized = serializeChunks(renderInline(cell.tokens, style, styles))
+  const serialized = serializeChunks(renderInline(cell.tokens, style, styles, cwd))
   return serialized.length === 0 ? [''] : wrapTextWithAnsi(serialized, Math.max(1, width))
 }
 
@@ -353,7 +375,7 @@ function columnWidths(token: Tokens.Table, available: number, context: BlockCont
   const minimum = Array.from({ length: columns }, () => 1)
   const measure = (cells: readonly Tokens.TableCell[], style: ProseStyle) => {
     cells.forEach((cell, index) => {
-      const text = serializeChunks(renderInline(cell.tokens, style, context.styles))
+      const text = serializeChunks(renderInline(cell.tokens, style, context.styles, context.cwd))
       natural[index] = Math.max(natural[index] ?? 0, visibleWidth(text))
       minimum[index] = Math.max(minimum[index] ?? 1, longestWord(text, 30))
     })
@@ -409,7 +431,7 @@ function renderTable(token: Tokens.Table, width: number, context: BlockContext):
   const row = (cells: readonly Tokens.TableCell[], style: ProseStyle): string[] => {
     const rendered = widths.map((value, index) => {
       const cell = cells[index]
-      return cell === undefined ? [''] : cellLines(cell, value, style, context.styles)
+      return cell === undefined ? [''] : cellLines(cell, value, style, context.styles, context.cwd)
     })
     const height = Math.max(1, ...rendered.map((lines) => lines.length))
     const out: string[] = []
@@ -443,18 +465,21 @@ export function renderBlock(
       if (!isHeading(token)) return []
       const style = token.depth <= 2 ? context.styles.heading : context.styles.subheading
       const lines = wrapChunks(
-        renderInline(token.tokens, mergeStyle(context.base, style), context.styles),
+        renderInline(token.tokens, mergeStyle(context.base, style), context.styles, context.cwd),
         width,
       )
       return [...lines, ...trailingGap(next)]
     }
     case 'paragraph':
       return [
-        ...wrapChunks(renderInline(childTokens(token), context.base, context.styles), width),
+        ...wrapChunks(
+          renderInline(childTokens(token), context.base, context.styles, context.cwd),
+          width,
+        ),
         ...trailingGap(next, 'list'),
       ]
     case 'text':
-      return wrapChunks(renderInline([token], context.base, context.styles), width)
+      return wrapChunks(renderInline([token], context.base, context.styles, context.cwd), width)
     case 'code':
       return isCode(token) ? [...renderCode(token, width, context), ...trailingGap(next)] : []
     case 'list':
@@ -512,12 +537,13 @@ export function renderProseMarkdown(
   width: number,
   highlight?: ProseHighlighter,
   palette: HudPalette = defaultHudPalette,
+  cwd: string = process.cwd(),
 ): string[] {
   const text = markdown.replaceAll('\t', '   ')
   if (text.trim().length === 0) return []
   const tokens = parser.lexer(text)
   const styles = proseStyles(palette)
-  const context: BlockContext = { base: styles.text, styles }
+  const context: BlockContext = { base: styles.text, cwd, styles }
   if (highlight !== undefined) context.highlight = highlight
   const lines = renderBlocks(tokens, Math.max(1, width), context)
   while (lines.length > 0 && lines.at(-1) === '') lines.pop()
@@ -541,15 +567,16 @@ export class ProseMarkdown implements Component {
   render(width: number): string[] {
     const streaming = this.options.streaming()
     const palette = this.options.palette?.() ?? defaultHudPalette
-    const key = `${width}\u0000${streaming ? 1 : 0}\u0000${this.options.revision()}\u0000${this.text}`
+    const cwd = this.options.cwd()
+    const key = `${width}\u0000${streaming ? 1 : 0}\u0000${this.options.revision()}\u0000${cwd}\u0000${this.text}`
     if (this.cacheKey === key && this.cachePalette === palette) return this.cacheLines
     const stabilized = streaming ? stabilizeMarkdown(this.text) : this.text
     const linked = linkifyMarkdown(stabilized, {
-      cwd: this.options.cwd(),
+      cwd,
       resolve: this.options.resolve,
       streaming,
     })
-    const lines = renderProseMarkdown(linked, width, this.options.highlight, palette)
+    const lines = renderProseMarkdown(linked, width, this.options.highlight, palette, cwd)
     this.cacheKey = key
     this.cachePalette = palette
     this.cacheLines = lines
