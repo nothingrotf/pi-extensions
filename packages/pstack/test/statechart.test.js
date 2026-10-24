@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -20,6 +22,7 @@ describe('statechart skill scripts', () => {
       ['--test', '--test-reporter=tap', 'test/statechart.test.mjs'],
       {
         cwd: scripts,
+        env: { ...process.env, TMPDIR: realpathSync(tmpdir()) },
         maxBuffer: 16 * 1024 * 1024,
         timeout: 600_000,
       },

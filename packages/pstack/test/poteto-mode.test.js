@@ -104,6 +104,7 @@ describe('poteto-mode', () => {
       'create-formal-verification-skill',
       'in-your-own-words',
       'ketchup',
+      'ketchup-video',
       'maintain-formal-verification-skill',
       'sharpen',
       'statechart',
@@ -223,6 +224,36 @@ describe('poteto-mode', () => {
       )
       expect(prose.status).toBe(1)
       expect(prose.stderr.match(/mid-sentence colon/g)).toHaveLength(1)
+    } finally {
+      rmSync(path, { force: true })
+    }
+  })
+
+  it('matches inline code spans by delimiter length in plan checks', () => {
+    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
+    const plan = playbook.split('````markdown\n')[1].split('\n````')[0]
+    const path = join(tmpdir(), `poteto-plan-span-${process.pid}.md`)
+    const check = (line) => {
+      writeFileSync(path, `${plan}\n\n${line}\n`)
+      return run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
+    }
+    try {
+      for (const count of [2, 3, 4]) {
+        const delimiter = '`'.repeat(count)
+        const inside = check(
+          `Use ${delimiter}echo \`x\`: \u201cquoted\u201d \u2014 example${delimiter}.`,
+        )
+        expect({ count, stderr: inside.stderr, status: inside.status }).toEqual({
+          count,
+          stderr: '',
+          status: 0,
+        })
+      }
+      for (const line of ['Use ``echo `x`: y``. Bad: prose.', 'Use ``unclosed: bad` here.']) {
+        const outside = check(line)
+        expect(outside.status).toBe(1)
+        expect(outside.stderr).toContain('mid-sentence colon')
+      }
     } finally {
       rmSync(path, { force: true })
     }

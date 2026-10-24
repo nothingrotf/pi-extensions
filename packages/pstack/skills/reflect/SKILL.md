@@ -49,6 +49,8 @@ Present the synthesizer's full Accepted, Rejected, and Backlog output and wait f
 
 File Backlog items only when an available tracker and its mutation policy permit the action. If no tracker exists, report the items without mutation.
 
+Never edit a skill inside an installed npm or git package, such as one under `~/.pi/agent/npm/`. A package update replaces those files. Before approval, show its destination, `.agents/skills/<skill>/` or `~/.agents/skills/<skill>/`. After approval, copy the skill folder there and edit the copy. Pi keeps the first skill it discovers for a name, so confirm that it loads the copy or report the collision. Never open a PR or push.
+
 Follow each approved row's Routing exactly:
 
 - For a trivial existing-skill edit, the parent edits it directly.
@@ -56,7 +58,7 @@ Follow each approved row's Routing exactly:
 - For `tune description: <skill path>`, follow the description and verification phases in `create-skill`.
 - For `new skill via create-skill: <kebab-name>`, follow the complete `create-skill` workflow.
 
-Use package skills or project `.pi/skills/` and `.agents/skills/` paths. If a skill validator exists, run it on every touched skill.
+Edit package skills only in a local package source. Otherwise, use project `.pi/skills/` and `.agents/skills/` paths. If a skill validator exists, run it on every touched skill.
 
 ## 5. Summarize for the user
 

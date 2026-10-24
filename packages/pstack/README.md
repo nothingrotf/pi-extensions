@@ -32,7 +32,7 @@ The extension enforces model selection and delivery contracts, but activation re
 
 ## Resources
 
-The package provides 55 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 56 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -52,6 +52,7 @@ The package provides 55 upstream skills, four Pi compatibility skills, and the l
 - `in-your-own-words`
 - `interrogate`
 - `ketchup`
+- `ketchup-video`
 - `maintain-formal-verification-skill`
 - `maintain-verification-skill`
 - `no-comments`
@@ -213,6 +214,26 @@ The Pi port adapts or omits these parts:
 - The `statechart` scripts keep their upstream `node:test` suite. The package test runs it, and TLC cases skip when `TLA2TOOLS` and Java are absent.
 - [#702](https://github.com/cursor/plugins/pull/702) names each skill after its folder. The local skills already use those names.
 - The Claude Code plugin from [#637](https://github.com/cursor/plugins/pull/637) and [#705](https://github.com/cursor/plugins/pull/705), the docs check from [#704](https://github.com/cursor/plugins/pull/704), `make-bot-ui`, `poteto-help`, the guide, and the version bumps have no local counterpart.
+
+These upstream changes through [#807](https://github.com/cursor/plugins/pull/807) at `e73df471cd4bd918367e99f3dd9c51bd53ddf5f0` are also synchronized:
+
+- [#791](https://github.com/cursor/plugins/pull/791) updates `statechart` for any system that moves between states. It renders PNGs with Pele and resvg, installs TLC and Java with mise when `TLA2TOOLS` is unset, and removes the bundled `OutputFolder` model.
+- [#794](https://github.com/cursor/plugins/pull/794) makes generated TLA+ verification skills read each model-check result with `statechart`.
+- [#797](https://github.com/cursor/plugins/pull/797) adds `ketchup-video`. It shows the `ketchup` catch-up as a short silent video of slides, with the waiting calls as text under it.
+- [#800](https://github.com/cursor/plugins/pull/800) makes `reflect` copy an installed skill to a user or project skill directory and edit the copy. It never opens a PR or pushes.
+- [#801](https://github.com/cursor/plugins/pull/801) and [#802](https://github.com/cursor/plugins/pull/802) make the bundled `watch-pr` distinguish fork heads during stack discovery and cap polling sleeps at the deadline.
+- [#803](https://github.com/cursor/plugins/pull/803) makes `check-plan.mjs` match inline code spans by delimiter length.
+- [#804](https://github.com/cursor/plugins/pull/804) makes the bundled `orch` prefer the open pull request of a branch over closed or merged ones.
+- [#807](https://github.com/cursor/plugins/pull/807) makes the `swarm` report ask for a result table.
+
+The Pi port adapts or omits these parts:
+
+- The `orch` and `watch-pr` bundles are built with `bun build --target bun --minify --packages external` from the upstream sources without the dependency bootstrap.
+- `reflect` targets the Pi and Agent Skills directories instead of `plugins/cache/` and `.cursor/skills/`. It reports a name collision when Pi keeps the package skill.
+- The `statechart` suite installs Pele and resvg with npm into the user cache on its first run. It skips PNG cases when that install fails and TLC cases when neither `TLA2TOOLS` nor mise can supply TLC.
+- The `swarm` Phase A numbering from [#807](https://github.com/cursor/plugins/pull/807) already holds locally.
+- [#805](https://github.com/cursor/plugins/pull/805) has no local counterpart because the local `worktree-audit.sh` does not read transcript times.
+- The Claude Code auto-update note from [#806](https://github.com/cursor/plugins/pull/806), `poteto-help`, the guide, and the version bumps have no local counterpart.
 
 ## Task roles and workspace contracts
 
