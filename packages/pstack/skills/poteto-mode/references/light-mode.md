@@ -1,7 +1,7 @@
 # Light mode
 
 Light mode cuts the fan-out around a change and keeps every gate that decides whether code lands.
-Use it when the operator asks for `light` mode, a smaller budget, or a faster pass.
+Light mode applies to managed delivery. Use it when the operator asks for `light` mode, a smaller budget, or a faster pass within managed delivery.
 The default mode is `full`. Record the active mode in the checkpoint, and change it only on an operator request or an escalation below.
 
 ## What stays

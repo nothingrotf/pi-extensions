@@ -26,13 +26,14 @@ Restart Pi after installation.
 
 Pstack is opt-in. Invoke `/skill:poteto-mode` or explicitly request a pstack workflow to activate it.
 Ordinary coding requests do not activate managed delivery or pstack delegation.
+Managed delivery is a separate opt-in. A `/poteto-mode` run uses the default flow unless the operator explicitly requests managed delivery.
 Installation, model configuration, and references to pstack in logs or bug reports do not authorize activation.
 The root prompt states this boundary before the model policy. Delivery tool descriptions repeat it.
 The extension enforces model selection and delivery contracts, but activation remains a model instruction rather than a runtime authorization gate.
 
 ## Resources
 
-The package provides 56 upstream skills, four Pi compatibility skills, and the local `pr` skill. Publication uses `pr` for every PR body. `make-bot-ui` remains outside the project by explicit decision.
+The package provides 56 upstream skills, four Pi compatibility skills, and the local `pr` skill. Every PR body uses `pr`. `make-bot-ui` remains outside the project by explicit decision.
 
 - `architect`
 - `arena`
@@ -241,14 +242,14 @@ Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, 
 The runner preserves this label beside the model without inferring it from the model name.
 With a pstack capability profile, the role enforces the configured model choices. It never grants capabilities.
 
-The extension reads `~/.agents/rules/pstack-models.md` at startup, before each root prompt, and before root `Task` calls. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. Policy edits do not require reload. Pi does not interpret `alwaysApply`; the extension applies this policy directly without asking the model to read the file. Set `PSTACK_MODEL_POLICY` to a file path to read another policy, for example in a benchmark arm.
+The extension reads `~/.agents/rules/pstack-models.md` at startup, before each root prompt, and before root `Task` calls. It publishes the parsed policy through `pstack-planning` and renders it into root and nested context. Policy edits do not require reload. Pi does not interpret `alwaysApply`; the extension applies this policy directly without asking the model to read the file. Set `PSTACK_MODEL_POLICY` to a file path to read another policy, for example in a benchmark arm. Lines that start with `#` and Markdown comments (`<!-- ... -->`) are ignored.
 
 Configured selectors are mandatory, including effort and fast mode. An explicit `Task.model` outside the configured choices fails before execution.
 Selectors for the `openai` and `openai-codex` providers match each other for the same model, effort, and fast mode. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
 
-Delivery roles separate technical acceptance from prose. `code review` and `runtime verification` are selector pools for one scoped reviewer or verifier. `publication` is a scalar role for destination Git and PR operations. `judgment and prose` remains for prose and evidence synthesis.
+The default flow uses the upstream roles. A second opinion selects one entry of `arena cross-judge pool` from another model family. Verification uses `swarm workers`. The branch owner publishes its own PR. `judgment and prose` remains for prose and evidence synthesis.
 
-Absent review and verification roles inherit `arena cross-judge pool`, then `judgment and prose`. Absent `publication` inherits `judgment and prose`. Explicit settings override these compatibility defaults. Missing files and otherwise absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
+`code review`, `runtime verification`, and `publication` exist only for managed delivery, and `/setup-pstack` does not write them. When they are absent, review and verification use `arena cross-judge pool`, then `judgment and prose`, and `publication` uses `judgment and prose`. Explicit settings override these compatibility defaults. Missing files and otherwise absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
 
 Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
@@ -270,7 +271,7 @@ Older records without a role remain unlabeled rather than receiving a guessed ro
 
 ## Verification sandbox
 
-Select `capability_profile: "pstack-sandbox"` for a Task with `role: "runtime verification"` and `readonly: false`.
+Select `capability_profile: "pstack-sandbox"` for a mutable verifier Task with `readonly: false`. In managed delivery, that verifier uses `role: "runtime verification"`.
 The existing verifier isolation contract still requires a private worktree or the dedicated issue worktree.
 The profile does not permit nested delegation.
 
@@ -302,9 +303,23 @@ macOS `sandbox-exec` is deprecated, and Linux support depends on the host's Bubb
 Run `PSTACK_SANDBOX_REQUIRED=1 bun run test packages/pstack/test/verification-sandbox.test.js` to require real sandbox coverage.
 Without that flag, unsupported hosts report the backend limitation and skip the containment tests.
 
-## Delivery throughput
+## Default delivery
 
-Bounded work uses an accepted design, one implementer role, and one independent reviewer.
+`/poteto-mode` follows the upstream flow by default.
+The coordinator owns the design, the review, and the verdict. One `poteto-agent` owner per issue builds the change in place in a linked worktree on its own branch, then commits, pushes, and opens the PR.
+The owner proves each unit with focused checks and runs the repository-required gates once on the finished head. It never runs a full suite for a WIP report. A slow suite that CI already runs stays in CI unless the brief names a local reason.
+The coordinator reads the diff, gets one `arena cross-judge pool` second opinion from another model family, and verifies load-bearing behavior on the matching surface. A fresh owner takes each correction.
+Autopilot-full and Autopilot-stack follow their upstream playbooks with these owners. Shipping keeps its independent per-PR verdict before landing.
+
+An `issue:` line in a Task prompt binds the Task to managed delivery only when that issue is open in the ledger.
+
+## Managed delivery
+
+Managed delivery adds the delivery ledger, recorded gates, the delivery engine, and a mandatory independent reviewer loop. Use it only on an explicit operator request. The managed autopilots live in [managed autopilot](skills/poteto-mode/references/managed-autopilot.md).
+
+A runtime verifier that reports `candidate` with every criterion proven and no open blocking finding is recorded as `accepted`, so the engine does not send a passing candidate back to its owner.
+
+Bounded managed work uses an accepted design, one implementer role, and one independent reviewer.
 Each round, including every correction, goes to a fresh agent with consolidated scope. In an issue workspace, the implementation owner resumes for each correction instead, and reviewers stay fresh.
 Assign the implementer before reproduction or discovery, not after a separate investigation handoff.
 Run `how` and `why` in that owner's session by default. Delegate only independent slices or explicitly required perspectives.
@@ -509,7 +524,7 @@ Mutable pstack Tasks receive `pstack_gate` through the `pstack-gates` registrati
 - A pass for an unchanged key returns at once without running the command. `fresh: true` forces a run. Failures and timeouts are never reused.
 - A run that changes the tree is reported but not reused.
 - Concurrent calls for one key share one run. A caller that aborts leaves the run to the others, and the run stops only when every caller aborts. `fresh: true` never joins a run in flight. Set `PSTACK_GATE_CONCURRENCY` to change the number of gates that run at once. The default is a quarter of the CPU count, with a minimum of one.
-- A gate stops after 30 minutes. Set `PSTACK_GATE_TIMEOUT_SECONDS` to change the limit. A timeout or an abort kills the whole process group.
+- A gate stops after 30 minutes of awake time. Time while the machine sleeps does not count. Set `PSTACK_GATE_TIMEOUT_SECONDS` to change the limit. A timeout or an abort kills the whole process group.
 - Records and logs live in `<git common dir>/pstack/gates`. The tool keeps the newest 256 records and 512 logs.
 - Each call is a tool receipt, and the delivery ledger counts it as command evidence.
 

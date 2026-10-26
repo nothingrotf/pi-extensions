@@ -197,9 +197,10 @@ describe('pstack model policy parser', () => {
       'how explorer: unconfigured; agent default then parent; skill owns count',
     )
     expect(rendered).not.toContain('inherit-parent (unconfigured')
-    expect(rendered).toContain(
-      'code review and runtime verification inherit arena cross-judge pool, then judgment and prose',
-    )
+    expect(rendered).toContain('use one entry of arena cross-judge pool')
+    expect(rendered).toContain('The implementation owner commits, pushes, and opens its own PR.')
+    for (const role of ['code review', 'runtime verification', 'publication'])
+      expect(rendered).not.toContain(`${role}: `)
   })
 
   it('ignores metadata and comments rather than injecting raw policy text', () => {
@@ -213,6 +214,32 @@ describe('pstack model policy parser', () => {
     expect(rendered).not.toContain('RAW_COMMENT_SENTINEL')
     const invalid = renderPstackModelPolicy(parsePstackModelPolicy('RAW_INVALID_SENTINEL'))
     expect(invalid).not.toContain('RAW_INVALID_SENTINEL')
+  })
+
+  it('skips Markdown comments on one line or across lines', () => {
+    const parsed = parsePstackModelPolicy(
+      [
+        '---',
+        'description: models',
+        '---',
+        `how explorer: ${scalar}`,
+        '<!--code review: not a selector-->',
+        '<!--',
+        'publication: not a selector',
+        '-->',
+        `swarm workers: ${scalar}`,
+      ].join('\n'),
+    )
+    expect(parsed.status).toBe('valid')
+    if (parsed.status !== 'valid') throw new Error(parsed.error)
+    expect(parsed.roles.find((entry) => entry.role === 'swarm workers')?.selectors).toEqual([
+      scalar,
+    ])
+    expect(parsed.roles.find((entry) => entry.role === 'publication')?.selectors).toEqual([])
+    expect(parsePstackModelPolicy(`<!--\nhow explorer: ${scalar}\n`)).toEqual({
+      status: 'invalid',
+      error: 'pstack-models.md line 1 opens an unterminated comment.',
+    })
   })
 
   it('loads only the supplied local path and distinguishes missing from unreadable', async () => {

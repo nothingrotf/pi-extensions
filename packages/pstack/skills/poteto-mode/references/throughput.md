@@ -1,5 +1,6 @@
 # Delivery throughput and the two-issue pilot
 
+This pilot applies to managed delivery.
 Measure elapsed time until acceptance, not time until the first implementation finishes.
 A completed Task, captured patch, or draft PR does not prove acceptance.
 

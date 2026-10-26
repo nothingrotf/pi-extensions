@@ -1,6 +1,7 @@
 # Delivery operations
 
-Use this reference for long-running issue queues and correction cycles.
+Use this reference for managed delivery, which the operator must request explicitly.
+It covers long-running managed issue queues and correction cycles.
 The [delivery contract](delivery-contract.md) owns acceptance and authorization.
 The [Task contract](task-contracts.md) owns tool arguments, isolation, and model selection.
 
@@ -208,9 +209,9 @@ Never remove a resource that another session, the operator, or unpublished work 
 ## Managed dispatch binding
 
 Bind managed Tasks with `delivery: { kind: "managed", issue: "<open issue id>" }` before dispatch.
-For unrelated work, use `delivery: { kind: "independent" }` without inventing an issue.
+A Task without a binding runs outside the ledger and never counts toward acceptance.
 Legacy calls can use exactly one `issue: <id>` prompt line or the resumed owner's retained binding.
-This requirement covers implementation roles, `code review`, `runtime verification`, `publication`, and `hardest tasks` diagnosis.
+Bind every implementation, `code review`, `runtime verification`, `publication`, and `hardest tasks` diagnosis Task that must count for the issue.
 Conflicting, duplicate, unknown, and prose-only bindings fail closed.
 Resume preserves its existing delivery identity instead of switching issues or escaping managed acceptance.
 Never infer an issue from prose or choose the first ledger issue.

@@ -37,7 +37,7 @@ describe('Comment Sicko review guidance', () => {
   it('selects one report-only code reviewer without pool fanout', () => {
     const skill = read('../skills/no-comments/SKILL.md')
     expect(skill).toContain('launch exactly one independent reviewer')
-    expect(skill).toContain('`role`: `code review`')
+    expect(skill).toContain('`role`: `arena cross-judge pool`')
     expect(skill).toContain('`readonly`: `true`')
     expect(skill).toContain('The pool is availability, not fanout')
     expect(skill).toContain('Consolidation never authorizes the reviewer to edit product files')
@@ -61,19 +61,19 @@ describe('setup pstack role guidance', () => {
     expect(skill).toContain('Preserve the choices of active roles')
   })
 
-  it('documents new pools, scalar role, and compatibility fallback', () => {
+  it('keeps managed-delivery roles out of the default setup file', () => {
     const skill = read('../skills/setup-pstack/SKILL.md')
-    expect(skill).toContain('code review: inherit-parent')
-    expect(skill).toContain('runtime verification: inherit-parent')
-    expect(skill).toContain('publication: inherit-parent')
+    const example = skill.match(/```text\n(---[\s\S]*?)\n```/)?.[1] ?? ''
+    expect(example).toContain('arena cross-judge pool: inherit-parent')
+    expect(example).toContain('swarm workers: inherit-parent')
+    for (const role of ['code review', 'runtime verification', 'publication'])
+      expect(example).not.toContain(`${role}:`)
+    expect(skill).toContain('are managed-delivery roles')
+    expect(skill).toContain('so this skill does not write them')
+    expect(skill).toContain('Preserve existing lines for these roles on a rerun')
     expect(skill).toContain('Every list is an availability pool')
     expect(skill).toContain('List length never causes fanout')
-    expect(skill).toContain('`runtime verification` selects one verifier by the required family')
     expect(skill).toContain('`judgment and prose` is only for prose or evidence synthesis')
-    expect(skill).toContain('derives its pool from `arena cross-judge pool`')
-    expect(skill).toContain('derives its scalar selector from `judgment and prose`')
-    expect(skill).toContain('An explicit new-role entry always overrides its derived fallback')
-    expect(skill).toContain('Before adding new role names, reload older Pi sessions')
-    expect(skill).toContain('prepare the new policy separately and keep the legacy file active')
+    expect(skill).toContain('Markdown comments (`<!-- ... -->`) are ignored')
   })
 })

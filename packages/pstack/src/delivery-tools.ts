@@ -39,7 +39,7 @@ import {
   readDeliveryJournal,
 } from './delivery-journal.ts'
 import { type DeliveryNextStep, nextDeliveryStep } from './delivery-next.ts'
-import { isDeliveryRole, isImplementationRole } from './delivery-roles.ts'
+import { isImplementationRole } from './delivery-roles.ts'
 import {
   DeliveryReadSchema,
   DeliveryToolOutputSchema,
@@ -78,6 +78,7 @@ import {
   normalizeDeliveryReportProse,
   pruneFailedPassEvidence,
   parseDeliveryIssue,
+  promoteSettledRuntimeVerdict,
   recoverableDeliveryReview,
   recordDelivery,
   refreshDeliveryIntegration,
@@ -85,6 +86,7 @@ import {
   sameDeliveryTechnicalVerdict,
   summarizeDelivery,
 } from './delivery.ts'
+import { managedOnlyPstackRoles } from './model-policy.ts'
 
 type JsonValue = Exclude<AgentToolResult['structuredContent'], undefined>
 
@@ -1341,6 +1343,42 @@ function semanticReport(input: TerminalValidationInput): DeliveryReportDraft | u
   )
 }
 
+function settledTerminalReport(
+  input: TerminalValidationInput,
+  packet: TerminalDeliveryPacket,
+  report: DeliveryReport | undefined,
+  evidence: DeliveryEvidence[],
+): DeliveryReport | undefined {
+  if (report === undefined) return undefined
+  let artifact: DeliveryArtifact | undefined
+  try {
+    artifact = terminalArtifact(input, packet, report)
+  } catch {
+    return report
+  }
+  if (artifact === undefined) return report
+  const issue: DeliveryIssue = {
+    version: 1,
+    createdAt: 0,
+    criteria: packet.criteria,
+    issue: packet.issue,
+    ownerSessionId: packet.ownerSessionId,
+    runtimeRequired: packet.runtimeRequired,
+    submissions: [],
+  }
+  return promoteSettledRuntimeVerdict(issue, {
+    agentId: input.agentId,
+    artifact,
+    attempt: input.attempt,
+    evidence,
+    execution: 'completed',
+    integration: 'captured',
+    recordedAt: Date.now(),
+    report,
+    role: input.role ?? 'unassigned',
+  }).report
+}
+
 export function validateDeliveryTerminal(input: TerminalValidationInput): TerminalValidationResult {
   const packet = parseTerminalDeliveryPacket(input.prompt)
   if (packet === undefined) return { status: 'accepted' }
@@ -1416,8 +1454,9 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
   }
   const unique = [...new Set(diagnostics)]
   if (unique.length === 0) {
-    return normalized && report !== undefined
-      ? { normalizedOutput: JSON.stringify(report), status: 'accepted' }
+    const settled = settledTerminalReport(input, packet, report, evidenceEntries)
+    return (normalized || settled !== report) && settled !== undefined
+      ? { normalizedOutput: JSON.stringify(settled), status: 'accepted' }
       : { status: 'accepted' }
   }
   const failedAliases = evidenceEntries
@@ -1448,6 +1487,13 @@ export function validateDeliveryTerminal(input: TerminalValidationInput): Termin
   }
 }
 
+function assertUnboundRole(role: string | undefined): void {
+  if (role === undefined || !managedOnlyPstackRoles.has(role)) return
+  throw new DeliveryRejected(
+    `The ${role} role belongs to managed delivery and requires a managed issue binding. In the default flow, use one entry of arena cross-judge pool for a second opinion and swarm workers for verification. The implementation owner opens its own PR.`,
+  )
+}
+
 async function preflight(
   task: Static<typeof TaskViewSchema>,
   ctx: ExtensionContext,
@@ -1470,7 +1516,6 @@ async function preflight(
     resumed?.execution?.version === 5 ? resumed.execution.delivery : undefined
   const storedDeliveryContract = hasStoredDeliveryContract(resumed)
   const explicitDeliverySchema = isDeliveryOutputSchema(task.outputSchema)
-  const deliveryTask = isDeliveryRole(role, readonly)
   if (issueIds.length > 1)
     throw new DeliveryRejected('A managed Task requires exactly one issue field.')
   if (
@@ -1500,11 +1545,7 @@ async function preflight(
     ) {
       throw new DeliveryRejected('Managed resume cannot escape its retained issue binding.')
     }
-    if (issues.size > 0 && role === 'publication') {
-      throw new DeliveryRejected(
-        `Managed publication cannot opt out of its accepted issue checkpoint. Pass delivery: { kind: "managed", issue: <id> } for one of: ${[...issues.keys()].join(', ')}.`,
-      )
-    }
+    assertUnboundRole(role)
     return
   }
   const issueId =
@@ -1516,24 +1557,31 @@ async function preflight(
   if (issueId === undefined) {
     if (storedDeliveryContract)
       throw new DeliveryRejected('Managed resume requires the retained issue binding.')
-    if (issues.size > 0 && (deliveryTask || explicitDeliverySchema)) {
-      if (role === 'publication')
-        throw new DeliveryRejected(
-          'Managed publication requires an explicit issue binding and an accepted issue checkpoint.',
-        )
+    if (issues.size > 0 && explicitDeliverySchema) {
       throw new DeliveryRejected(
         'Managed delivery requires an issue binding through delivery.kind managed or one legacy issue field.',
       )
     }
+    assertUnboundRole(role)
     return
   }
   if (resumedIssue !== undefined && resumedIssue !== issueId) {
     throw new DeliveryRejected('Managed resume cannot change its retained issue binding.')
   }
-  task.delivery = { issue: issueId, kind: 'managed' }
   const issue = issues.get(issueId)
-  if (issue === undefined)
+  if (issue === undefined) {
+    if (
+      task.delivery?.kind !== 'managed' &&
+      retainedDelivery?.kind !== 'managed' &&
+      resumedIssue === undefined &&
+      !storedDeliveryContract
+    ) {
+      assertUnboundRole(role)
+      return
+    }
     throw new DeliveryRejected(`Open the managed issue before dispatch: ${issueId}`)
+  }
+  task.delivery = { issue: issueId, kind: 'managed' }
   const unrecordedTerminalRuns = records.filter(
     (record) =>
       record.status !== 'running' &&
@@ -1773,7 +1821,7 @@ function registerDeliveryEngine(pi: ExtensionAPI): void {
     label: 'Deliver',
     executionMode: 'parallel',
     description:
-      'Opt-in only: use when the user invokes poteto-mode or explicitly requests a pstack workflow. Run the managed delivery loop of one open issue in code until acceptance. The engine prepares the issue workspace, dispatches the implementation owner with the brief, records every attempt, dispatches static review and runtime verification together, resumes the owner with each rejection, and dispatches a diagnosis when the ledger requires one. It stops at acceptance (next.step publish), at a running background Task, at a rejected dispatch or protocol step, or at maxDispatches (default 8). Call it once per issue after pstack_delivery open. Call it for several issues in one turn to run them in parallel. Publication stays with the coordinator.',
+      'Opt-in only: use only when the operator explicitly requests managed delivery. A poteto-mode request alone does not authorize it. Run the managed delivery loop of one open issue in code until acceptance. The engine prepares the issue workspace, dispatches the implementation owner with the brief, records every attempt, dispatches static review and runtime verification together, resumes the owner with each rejection, and dispatches a diagnosis when the ledger requires one. It stops at acceptance (next.step publish), at a running background Task, at a rejected dispatch or protocol step, or at maxDispatches (default 8). Call it once per issue after pstack_delivery open. Call it for several issues in one turn to run them in parallel. Publication stays with the coordinator.',
     parameters: DeliveryEngineInputSchema,
     async execute(toolCallId, input, signal, onUpdate, ctx) {
       const checkpoint = () => {
@@ -1847,7 +1895,7 @@ export function registerDeliveryProtocol(pi: ExtensionAPI): void {
     label: 'Delivery',
     executionMode: 'sequential',
     description:
-      'Opt-in only: use when the user invokes poteto-mode or explicitly requests a pstack workflow. Open criteria, prepare the issue workspace, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Workspace: creates or returns one persistent Git worktree on branch pstack/<issue>, copies .worktreeinclude files, copies node_modules with copy-on-write clones when available, and runs .pstack/worktree-setup.sh once. Managed Tasks for that issue then default to its cwd, and writers run in place. Every checkpoint names next: the deterministic next pipeline step. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
+      'Opt-in only: use only when the operator explicitly requests managed delivery. A poteto-mode request alone does not authorize it. Open criteria, prepare the issue workspace, read a compact checkpoint, or record a terminal Task report using trusted artifacts and receipts. Workspace: creates or returns one persistent Git worktree on branch pstack/<issue>, copies .worktreeinclude files, copies node_modules with copy-on-write clones when available, and runs .pstack/worktree-setup.sh once. Managed Tasks for that issue then default to its cwd, and writers run in place. Every checkpoint names next: the deterministic next pipeline step. Read view: submissions or criteria pages retained data. Oversized submissions return a detail locator. View: submission with agentId and attempt returns exact JSON chunks using UTF-16 offset and limit. Concatenate content chunks before parsing. Output and details stay within 32 KiB. Execution completion never implies acceptance.',
     parameters: DeliveryToolSchema,
     outputSchema: DeliveryToolOutputSchema,
     async execute(_callId, input, _signal, _onUpdate, ctx) {

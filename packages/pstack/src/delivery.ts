@@ -492,6 +492,22 @@ function runtimeProof(submission: DeliverySubmission): boolean {
   )
 }
 
+export function promoteSettledRuntimeVerdict(
+  issue: DeliveryIssue,
+  submission: DeliverySubmission,
+): DeliverySubmission {
+  const report = currentDeliveryReport(submission)
+  if (
+    submission.role !== 'runtime verification' ||
+    submission.reportCorrections !== undefined ||
+    report.kind !== 'runtime-verification' ||
+    report.state !== 'candidate'
+  )
+    return submission
+  const promoted: DeliverySubmission = { ...submission, report: { ...report, state: 'accepted' } }
+  return complete(issue, promoted) && runtimeProof(promoted) ? promoted : submission
+}
+
 export interface DeliverySummary {
   state: 'wip' | 'candidate' | 'blocked' | 'accepted'
   artifact: DeliveryArtifact | undefined

@@ -17,8 +17,19 @@ function contracts(): unknown[] {
 
 describe('pstack executable Task contracts', () => {
   it('publishes valid explicit roles and isolated verifier policy', () => {
-    const examples = contracts()
-    expect(examples).toHaveLength(6)
+    const [ordinary, owner, resume, isolated, verifier, secondOpinion, review] = contracts()
+    const managed = [owner, resume, isolated, verifier, review]
+    expect(contracts()).toHaveLength(8)
+    expect(Value.Check(TaskInputSchema, ordinary), fileURLToPath(contractPath)).toBe(true)
+    expect(ordinary).toMatchObject({
+      capability_profile: 'pstack-leaf',
+      cwd: '<linked worktree path>',
+      isolation: { mode: 'in-place' },
+      role: 'feature',
+      subagent_type: 'poteto-agent',
+    })
+    expect(ordinary).not.toHaveProperty('delivery')
+    const examples = managed
     for (const example of examples.slice(0, 5)) {
       expect(Value.Check(TaskInputSchema, example), fileURLToPath(contractPath)).toBe(true)
     }
@@ -53,10 +64,18 @@ describe('pstack executable Task contracts', () => {
       role: 'code review',
       subagent_type: 'generalPurpose',
     })
+    expect(Value.Check(TaskInputSchema, secondOpinion), fileURLToPath(contractPath)).toBe(true)
+    expect(secondOpinion).toMatchObject({
+      capability_profile: 'pstack-leaf',
+      readonly: true,
+      role: 'arena cross-judge pool',
+      subagent_type: 'generalPurpose',
+    })
+    expect(secondOpinion).not.toHaveProperty('delivery')
   })
 
   it('publishes a typed completion wait instead of invalid polling arguments', () => {
-    const wait = contracts()[5]
+    const wait = contracts()[7]
     expect(Value.Check(TaskControlInputSchema, wait)).toBe(true)
     expect(wait).toEqual({
       action: 'wait',

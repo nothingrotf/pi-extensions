@@ -28,7 +28,7 @@ If unknown roles occur, report the errors and resolve them with the operator bef
 
 Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Every list is an availability pool. The dispatching skill owns its count and explicitly selects each required entry when choices differ, including `model: "inherit-parent"` for an inherited entry. List length never causes fanout or sets a skill's count. Prefer AskQuestion over free text.
 
-`code review` and `runtime verification` are selector pools. A code-review dispatch chooses one reviewer unless its skill explicitly requires multiple perspectives. A runtime-verification dispatch chooses one verifier from the required model family. `publication` is scalar. `judgment and prose` is only for prose or evidence synthesis, never code review, runtime verification, or publication. `arena cross-judge pool`, `arena runners`, `architect runners`, and `interrogate reviewers` are also availability pools whose skills own selection and count. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
+`judgment and prose` is only for prose or evidence synthesis, never code review or verification. The default flow takes a second opinion from `arena cross-judge pool` and verification from `swarm workers`. `arena cross-judge pool`, `arena runners`, `architect runners`, and `interrogate reviewers` are availability pools whose skills own selection and count. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
 
 ### 4. Validate
 
@@ -36,9 +36,7 @@ Every concrete selector must contain a detected `provider/model-id` and an effor
 
 ### 5. Write the rule
 
-Before adding new role names, reload older Pi sessions with the updated pstack extension. Confirm that their rendered runtime policy lists `code review`, `runtime verification`, and `publication`. An older loaded registry rejects these keys and blocks fresh pstack dispatches. If active sessions cannot reload yet, prepare the new policy separately and keep the legacy file active.
-
-Write `~/.agents/rules/pstack-models.md` with one line per role, using the labels below. Optional frontmatter is metadata only, never prompt content. Overwrite the whole file so re-runs stay idempotent. Shape:
+Write `~/.agents/rules/pstack-models.md` with one line per role, using the labels below. Optional frontmatter is metadata only, never prompt content. Lines that start with `#` and Markdown comments (`<!-- ... -->`) are ignored. Overwrite the whole file so re-runs stay idempotent. Shape:
 
 ```text
 ---
@@ -49,9 +47,6 @@ bug-fix: inherit-parent
 perf-issue: inherit-parent
 hillclimb: inherit-parent
 judgment and prose: inherit-parent
-code review: inherit-parent
-runtime verification: inherit-parent
-publication: inherit-parent
 hardest tasks: inherit-parent
 how explorer: inherit-parent
 how explainer: inherit-parent
@@ -76,9 +71,9 @@ Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating
 
 Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry or compatibility derivation allow explicit models before the agent default and parent fallback.
 
-A pool with distinct choices requires an explicit selection, never first-entry selection or hidden list-size fanout. Identical choices may omit the selector. Skills own all dispatch counts. `code review` always selects one reviewer except when a review skill explicitly owns a multi-perspective count. `runtime verification` selects one verifier by the required family. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
+A pool with distinct choices requires an explicit selection, never first-entry selection or hidden list-size fanout. Identical choices may omit the selector. Skills own all dispatch counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
 
-For compatibility with policies written before these roles existed, an omitted `code review` or `runtime verification` role derives its pool from `arena cross-judge pool`, then `judgment and prose` when that pool is absent, and an omitted `publication` role derives its scalar selector from `judgment and prose`. An explicit new-role entry always overrides its derived fallback. This fallback preserves old valid configuration until a setup rerun writes the new roles.
+`code review`, `runtime verification`, and `publication` are managed-delivery roles. Managed delivery runs only on an explicit operator request, so this skill does not write them. When they are absent, `code review` and `runtime verification` use the `arena cross-judge pool` choices, then `judgment and prose`, and `publication` uses `judgment and prose`. Add an explicit line only when managed delivery needs a different choice. Preserve existing lines for these roles on a rerun.
 
 The runtime preserves the role through execution and display. A role never grants capabilities or comes from a guessed model name.
 

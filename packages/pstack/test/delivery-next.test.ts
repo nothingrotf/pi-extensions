@@ -4,6 +4,7 @@ import { nextDeliveryStep } from '../src/delivery-next.ts'
 import { deliveryView } from '../src/delivery-views.ts'
 import {
   deliveryRepairIdentity,
+  promoteSettledRuntimeVerdict,
   type DeliveryIssue,
   type DeliverySubmission,
   recordDelivery,
@@ -111,6 +112,37 @@ describe('next delivery step', () => {
       step: 'workspace',
     })
     expect(nextDeliveryStep(opened, idle)).toMatchObject({ step: 'implement' })
+  })
+
+  it('accepts a settled runtime candidate instead of returning it to the owner', () => {
+    const first = save(opened, candidate('b'.repeat(40)))
+    const staticReview = review('code review', 'b'.repeat(40), 'accepted')
+    const runtimeReview = review('runtime verification', 'b'.repeat(40), 'accepted')
+    const staticCandidate = {
+      ...staticReview,
+      report: { ...staticReview.report, state: 'candidate' as const },
+    }
+    const runtimeCandidate = {
+      ...runtimeReview,
+      report: { ...runtimeReview.report, state: 'candidate' as const },
+    }
+    expect(nextDeliveryStep(save(first, staticCandidate, runtimeCandidate), idle)).toMatchObject({
+      step: 'correct',
+    })
+    const promoted = promoteSettledRuntimeVerdict(first, runtimeCandidate)
+    expect(promoted.report.state).toBe('accepted')
+    expect(nextDeliveryStep(save(first, staticCandidate, promoted), idle)).toMatchObject({
+      step: 'publish',
+    })
+    const pending = {
+      ...runtimeCandidate,
+      report: {
+        ...runtimeCandidate.report,
+        criteria: [{ id: 'works', result: 'pending' as const, evidence: ['command:1'] }],
+      },
+    }
+    expect(promoteSettledRuntimeVerdict(first, pending)).toBe(pending)
+    expect(promoteSettledRuntimeVerdict(first, staticCandidate)).toBe(staticCandidate)
   })
 
   it('reviews a candidate in parallel and resumes the owner for findings', () => {
