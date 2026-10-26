@@ -77,7 +77,7 @@ async function fixture(directory) {
   )
   await writeFile(
     join(directory, 'AGENTS.md'),
-    '# Local scope\n\nWork only in this disposable repository or its managed Task worktrees. Read installed pstack skills without editing them. Never access credentials or unrelated sessions. No network commands, publication, PR creation, pushes, merges, deployments, service mutations, or global configuration writes. No code comments or em dashes. Local commits and tests are permitted. Use Bun. When an unavailable tool or forbidden external step blocks a workflow, report BLOCKED with the exact reason. Never substitute self-review for mandatory independent review.\n',
+    '# Local scope\n\nWork only in this disposable repository or its Task worktrees. Read installed pstack skills without editing them. Never access credentials or unrelated sessions. No network commands, publication, PR creation, pushes, merges, deployments, service mutations, or global configuration writes. No code comments or em dashes. Local commits and tests are permitted. Use Bun. When an unavailable tool or forbidden external step blocks a workflow, report BLOCKED with the exact reason. Never substitute self-review for mandatory independent review.\n',
   )
   await execute('git', ['init', '--quiet'], { cwd: directory })
   await execute('git', ['add', '.'], { cwd: directory })

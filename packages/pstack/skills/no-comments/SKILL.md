@@ -22,7 +22,7 @@ Do not add exceptions or soften the burden of proof.
 
 If you are already an independently assigned reviewer, including a leaf reviewer, perform the rubric inline. Do not spawn another Task or invoke `/how`, `/why`, or `/architect`. Trace direct scoped evidence first with available read-only tools. If required evidence is unavailable, return a precise blocker to the root coordinator naming the claim, symbol, and missing source. Preserve the caller's read-only, no-write, and report-only constraints.
 
-During accepted delivery or publication, reuse the existing independent verdict when its artifact and evidence remain current. Apply the checklist inline without another reviewer Task. Do not treat this check as a new independent verdict. If evidence is missing or invalidated, return to the assigned independent reviewer.
+Before opening a PR, reuse the existing independent verdict when its diff and evidence remain current. Apply the checklist inline without another reviewer Task. Do not treat this check as a new independent verdict. If evidence is missing or invalidated, return to the assigned independent reviewer.
 
 For a standalone invocation, launch exactly one independent reviewer selected explicitly from the configured `arena cross-judge pool`:
 

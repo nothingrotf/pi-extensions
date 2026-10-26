@@ -18,7 +18,7 @@ Check the diff against main and remove AI-generated slop introduced in the branc
 ## Guardrails
 
 - In independent review, read-only, or report-only work, report findings without edits or another Task.
-- During accepted delivery, reuse current independent findings instead of creating a separate cleanup agent.
+- Before opening a PR, reuse current independent findings instead of creating a separate cleanup agent.
 - Keep behavior unchanged unless fixing a clear bug.
 - Prefer minimal, focused edits over broad rewrites.
 - Keep the final summary concise (1-3 sentences).

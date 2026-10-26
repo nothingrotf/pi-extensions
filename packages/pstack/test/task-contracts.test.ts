@@ -17,65 +17,41 @@ function contracts(): unknown[] {
 
 describe('pstack executable Task contracts', () => {
   it('publishes valid explicit roles and isolated verifier policy', () => {
-    const [ordinary, owner, resume, isolated, verifier, secondOpinion, review] = contracts()
-    const managed = [owner, resume, isolated, verifier, review]
-    expect(contracts()).toHaveLength(8)
-    expect(Value.Check(TaskInputSchema, ordinary), fileURLToPath(contractPath)).toBe(true)
-    expect(ordinary).toMatchObject({
+    const all = contracts()
+    expect(all).toHaveLength(5)
+    const [owner, isolated, verifier, secondOpinion] = all
+    for (const example of [owner, isolated, verifier, secondOpinion]) {
+      expect(Value.Check(TaskInputSchema, example), fileURLToPath(contractPath)).toBe(true)
+      expect(example).not.toHaveProperty('delivery')
+    }
+    expect(owner).toMatchObject({
       capability_profile: 'pstack-leaf',
       cwd: '<linked worktree path>',
       isolation: { mode: 'in-place' },
       role: 'feature',
       subagent_type: 'poteto-agent',
     })
-    expect(ordinary).not.toHaveProperty('delivery')
-    const examples = managed
-    for (const example of examples.slice(0, 5)) {
-      expect(Value.Check(TaskInputSchema, example), fileURLToPath(contractPath)).toBe(true)
-    }
-    for (const example of [examples[0], ...examples.slice(2, 5)]) {
-      expect(example).toMatchObject({ delivery: { kind: 'managed', issue: '<open issue id>' } })
-    }
-    expect(examples[0]).toMatchObject({ role: 'feature', subagent_type: 'poteto-agent' })
-    expect(examples[0]).not.toHaveProperty('isolation')
-    expect(examples[0]).not.toHaveProperty('cwd')
-    expect(examples[1]).toEqual({
-      description: expect.any(String),
-      prompt: expect.any(String),
-      resume: '<owner agent id>',
-      run_in_background: true,
-      subagent_type: 'poteto-agent',
-    })
-    expect(examples[2]).toMatchObject({
-      capability_profile: 'pstack-nested',
+    expect(isolated).toMatchObject({
       isolation: { integration: 'apply', mode: 'worktree' },
-      role: 'feature',
+      role: 'architect runners',
       subagent_type: 'poteto-agent',
     })
-    expect(examples[3]).toMatchObject({
+    expect(verifier).toMatchObject({
       isolation: { integration: 'manual', mode: 'worktree' },
       readonly: false,
-      role: 'runtime verification',
+      role: 'swarm workers',
       run_in_background: true,
     })
-    expect(examples[4]).toMatchObject({
-      capability_profile: 'pstack-leaf',
-      readonly: true,
-      role: 'code review',
-      subagent_type: 'generalPurpose',
-    })
-    expect(Value.Check(TaskInputSchema, secondOpinion), fileURLToPath(contractPath)).toBe(true)
     expect(secondOpinion).toMatchObject({
       capability_profile: 'pstack-leaf',
       readonly: true,
       role: 'arena cross-judge pool',
       subagent_type: 'generalPurpose',
     })
-    expect(secondOpinion).not.toHaveProperty('delivery')
   })
 
   it('publishes a typed completion wait instead of invalid polling arguments', () => {
-    const wait = contracts()[7]
+    const wait = contracts()[4]
     expect(Value.Check(TaskControlInputSchema, wait)).toBe(true)
     expect(wait).toEqual({
       action: 'wait',

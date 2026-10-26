@@ -4,8 +4,6 @@
 
 If the cleanup reveals a missing feature or a real bug, split it out and ship the structural change first against the pinned contract. A redesign is allowed, but name it and route to Feature. Large or cross-cutting structural work belongs to the **figure-it-out** skill. This playbook is the focused-to-medium change.
 
-This is the default flow. With an explicit managed delivery request, run the owner and review loop through `references/delivery-contract.md` instead.
-
 1. Pin the behavior contract first. Run the **how** skill in the owner's session to learn the contract, then write a characterization test, snapshot, or equivalence harness that captures current behavior before any structure moves. If the area has no coverage, write the pin before touching structure. Type check and lint are not a pin.
 2. Name the structure the code is missing per **principle-model-the-domain**. Boring code stays when the shape is already clear and local. The reshape must delete branches or invalid states, not add indirection.
 3. Name the target shape. State what the module layout, types, and call graph should be if built today (**principle-foundational-thinking**, **principle-redesign-from-first-principles**). Run the **architect** skill for parallel design exploration only when the target shape is genuinely new or contested in contracts, ownership, state, or security. Crossing a function is not a design trigger. An accepted target shape carries its grounding, so the move inherits it without rerunning `how` or `architect`.

@@ -75,9 +75,7 @@ const transcript = [
     toolName: 'bash',
   }),
   entry('2026-09-17T00:00:32.000Z', {
-    content: [
-      { text: 'Your terminal delivery report was rejected. Return only JSON.', type: 'text' },
-    ],
+    content: [{ text: 'Return only JSON.', type: 'text' }],
     role: 'user',
   }),
   entry('2026-09-17T00:00:40.000Z', {
@@ -101,7 +99,6 @@ describe('session metrics', () => {
     expect(metrics.cacheReadTokens).toBe(6_000)
     expect(metrics.costUsd).toBeCloseTo(0.75)
     expect(metrics.outputTokens).toBe(40)
-    expect(metrics.terminalRejections).toBe(1)
     expect(metrics.readResultChars).toBe('first file'.length + 'second'.length)
   })
 

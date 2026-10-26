@@ -96,20 +96,12 @@ describe('swarm', () => {
     expect(port).toContain('Keep every demonstrated defect, not only the first.')
   })
 
-  it('repairs report-only defects through the supported path without new execution', () => {
+  it('repairs report-only defects from retained receipts without new execution', () => {
     const port = skill()
-    expect(port).toContain('`pstack_delivery` with `action: "repair"`')
     expect(port).toContain('receipts intact')
     expect(port).toContain('without a new Task or model run')
     expect(port).toContain('Missing execution needs real proof, not repair.')
-    expect(port).toContain('Omit `outputSchema` and `schemaMode` in a managed delivery.')
-    expect(port).toContain('`delivery: { kind: "managed", issue: "<existing issue id>" }`')
-    expect(port).toContain(
-      '`code review` for static analysis or `runtime verification` for shell proof',
-    )
-    expect(port).toContain('Use only registered criterion IDs')
-    expect(port).toContain('review findings belong in `findings`, not `criteria`')
-    expect(port).toContain('DeliveryOutputSchema')
+    expect(port).not.toContain('delivery')
   })
 
   it('accepts observed and unavailable identities through the runtime using its documented schema', () => {

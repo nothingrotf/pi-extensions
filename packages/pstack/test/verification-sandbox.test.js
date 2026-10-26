@@ -10,7 +10,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 
-import { gateIdentity, runGate } from '../src/delivery-gates.ts'
+import { gateIdentity, runGate } from '../src/gates.ts'
 import { detectVerificationSandbox, prepareSandboxLaunch } from '../src/verification-sandbox.ts'
 import { harness, initializeRepository } from './sdk-harness.js'
 
@@ -291,11 +291,11 @@ describe.skipIf(!available)('real verification command sandbox', () => {
         input: {
           description: 'Sandbox verifier',
           prompt: 'read:sandbox',
-          role: 'runtime verification',
+          role: 'swarm workers',
           capability_profile: 'pstack-sandbox',
           subagent_type: 'generalPurpose',
           readonly: false,
-          delivery: { kind: 'independent' },
+          isolation: { mode: 'worktree', integration: 'manual' },
           tools: ['read', 'bash', 'pstack_gate', 'write', 'codemode'],
           run_in_background: false,
         },

@@ -101,20 +101,18 @@ Distinguish observations, inferences, and unresolved questions.
 
 Use progress updates for partial work instead of ending an actionable task with a status-only report.
 Keep an acceptance matrix with executed evidence for every criterion.
-Return incomplete work as WIP with its exact remaining obligations, never as a verification candidate.
+Return incomplete work as WIP with its exact remaining obligations, never as finished work.
 An edit mismatch is recoverable and does not justify abandoning actionable work.
 
 Before editing in a fresh or resumed attempt, verify the current workspace identity and any retained continuation receipt.
 A resumed conversation does not preserve previous processes, dependencies, or incidental harness files.
-Use `delivery-operations.md` for reconstruction or runtime setup that the retained evidence does not already resolve.
 Never write through an absolute source-checkout path or recover WIP by resetting unrelated files.
 
 ## Verification and boundaries
 
-Read `delivery-contract.md` for managed delivery criteria, independent acceptance, and evidence invalidation.
 Run an executable probe before broad implementation, not after it.
 Reach the first executed command within the first few turns, even when the probe only reproduces the current failure.
-An implementation candidate requires at least one successful command receipt from its own attempt, so unexecuted work cannot become a candidate.
+A finished report requires at least one successful command receipt from its own attempt, so unexecuted work cannot pass as done.
 Before broad implementation, retain a minimal connected probe across the affected runtime boundaries.
 Use the real entry point, authorization, application role, persistence, and readback when applicable.
 A new feature starts with a minimal vertical slice, not a complete implementation before its first integrated probe.
@@ -132,8 +130,7 @@ Read a retained log instead of rerunning an unchanged passing gate to obtain a d
 Preserve reproduction evidence and test meaningful behavior, including adjacent regression risks.
 An implementation cannot accept itself. Independent reviewers never wrote the candidate under review.
 A runtime verifier requires shell access and manual isolation. Never integrate its incidental output.
-In the default flow, commit, push your own branch, and open the PR only when your brief assigns it.
-In managed delivery, publication stays separately scoped, foreground, and authorized after acceptance.
+Commit, push your own branch, and open the PR only when your brief assigns it.
 Do not merge, deploy, publish, or message external systems outside the explicit assignment.
 
 Use `request_parent` for scope, permission, product, and preference decisions.
@@ -145,5 +142,4 @@ Then end your turn and report the open decision with its options and your recomm
 Write concise, evidenced reports. Use the required structured output when the execution contract supplies one.
 Match every evidence reference to its actual receipt, including failed commands in the numbering.
 Do not cite a failed command as proof of a passing criterion.
-For a report-only correction, preserve the proof and use managed repair rather than another implementation attempt.
 Do not add code comments or use em dashes.

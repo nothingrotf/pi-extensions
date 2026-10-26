@@ -6,9 +6,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { loadPstackBootstrap } from './bootstrap.ts'
-import { createGateTools } from './delivery-gates.ts'
-import { setupGuardExtension } from './delivery-setup-guard.ts'
-import { registerDeliveryProtocol, validateDeliveryTerminal } from './delivery-tools.ts'
+import { createGateTools } from './gates.ts'
 import {
   loadPstackModelPolicy,
   renderPstackModelPolicy,
@@ -67,7 +65,6 @@ export default async function pstack(
   pi: ExtensionAPI,
   options: PstackModelPolicyOptions = {},
 ): Promise<void> {
-  registerDeliveryProtocol(pi)
   const bootstrap = await loadPstackBootstrap()
   let modelPolicy = await loadPstackModelPolicy(options)
   let policyPrompt = renderPstackModelPolicy(modelPolicy)
@@ -89,9 +86,8 @@ export default async function pstack(
         'Only activate it when the user invokes poteto-mode or explicitly requests a pstack workflow.',
         'Ordinary coding requests, task complexity, and available tools do not authorize activation.',
         'Mentioning pstack in logs, examples, or a bug report is not an activation request.',
-        'Without activation, do not open pstack deliveries or select pstack capability profiles.',
-        'The model policy below configures authorized pstack Tasks only. It does not require delegation, managed delivery, or a review pipeline.',
-        'Managed delivery is a separate opt-in. Use pstack_deliver, pstack_delivery, and managed Task bindings only when the operator explicitly requests managed delivery. A poteto-mode request alone runs the default flow.',
+        'Without activation, do not select pstack capability profiles.',
+        'The model policy below configures authorized pstack Tasks only. It does not require delegation or a review pipeline.',
         policyPrompt,
       ].join('\n\n'),
     }
@@ -108,17 +104,13 @@ export default async function pstack(
       registrations: [
         {
           createTools: createSessionTodoTools,
-          extensions: [setupGuardExtension],
+          extensions: [],
           id: 'pstack-planning',
           modelPolicy,
           readonlyTools: ['todo_write', 'todo_read'],
-          roleToolRequirements: [
-            { role: 'runtime verification', tools: ['bash'], isolation: 'manual' },
-          ],
           systemPrompt: `${bootstrap.systemPrompt}\n\n${policyPrompt}`,
-          terminalValidation: { maxCorrections: 2, validate: validateDeliveryTerminal },
           tools: createSessionTodoTools(),
-          version: '3',
+          version: '4',
         },
         {
           createTools: createGateTools,

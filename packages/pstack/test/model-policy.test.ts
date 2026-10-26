@@ -38,7 +38,7 @@ describe('pstack model policy parser', () => {
     ])
   })
 
-  it('separates review pools and scalar publication from prose', () => {
+  it('accepts retired managed-delivery roles without publishing them', () => {
     const policy = parsePstackModelPolicy(
       [
         `judgment and prose: ${scalar}`,
@@ -48,86 +48,15 @@ describe('pstack model policy parser', () => {
       ].join('\n'),
     )
     expect(policy.status).toBe('valid')
-    expect(selectCapabilityModel([policy], 'code review', 'provider/reviewer:medium')).toBe(
-      'provider/reviewer:medium',
-    )
-    expect(selectCapabilityModel([policy], 'runtime verification', 'provider/runtime:high')).toBe(
-      'provider/runtime:high',
-    )
-    expect(selectCapabilityModel([policy], 'publication', undefined)).toBe('provider/publisher:low')
-    expect(selectCapabilityModel([policy], 'judgment and prose', undefined)).toBe(scalar)
-    expect(() => selectCapabilityModel([policy], 'code review', undefined)).toThrow(
-      'distinct choices',
-    )
-    expect(() => selectCapabilityModel([policy], 'code review', 'provider/publisher:low')).toThrow(
-      'configured selectors',
-    )
-    expect(parsePstackModelPolicy('publication: auto, inherit-parent').status).toBe('invalid')
-  })
-
-  it('derives new delivery roles from existing approved choices without editing legacy files', () => {
-    const policy = parsePstackModelPolicy(
-      [
-        `judgment and prose: ${scalar}`,
-        'arena cross-judge pool: provider/reviewer:medium, provider/alternate:low',
-      ].join('\n'),
-    )
-    expect(policy.status).toBe('valid')
     if (policy.status !== 'valid') throw new Error(policy.error)
-    for (const role of ['code review', 'runtime verification']) {
-      expect(policy.roles.find((entry) => entry.role === role)?.selectors).toEqual([
-        'provider/reviewer:medium',
-        'provider/alternate:low',
-      ])
-      expect(selectCapabilityModel([policy], role, 'provider/alternate:low')).toBe(
-        'provider/alternate:low',
-      )
-      expect(() => selectCapabilityModel([policy], role, undefined)).toThrow('distinct choices')
-      expect(() => selectCapabilityModel([policy], role, scalar)).toThrow('configured selectors')
-    }
-    expect(selectCapabilityModel([policy], 'publication', undefined)).toBe(scalar)
-    expect(selectCapabilityModel([policy], 'judgment and prose', undefined)).toBe(scalar)
-    const review = policy.roles.find((entry) => entry.role === 'code review')
-    expect(review?.selectors).not.toBe(
-      policy.roles.find((entry) => entry.role === 'runtime verification')?.selectors,
-    )
-    expect(review?.selectors).not.toBe(
-      policy.roles.find((entry) => entry.role === 'arena cross-judge pool')?.selectors,
-    )
-  })
-
-  it.each([false, true])(
-    'lets explicit delivery settings override legacy defaults regardless of order (%s)',
-    (reverse) => {
-      const lines = [
-        `judgment and prose: ${scalar}`,
-        'arena cross-judge pool: provider/reviewer:medium, provider/alternate:low',
-        'code review: inherit-parent',
-        'runtime verification: provider/runtime:low',
-        'publication: provider/publisher:off',
-      ]
-      const policy = parsePstackModelPolicy((reverse ? lines.reverse() : lines).join('\n'))
-      expect(selectCapabilityModel([policy], 'code review', undefined)).toBe('inherit-parent')
-      expect(selectCapabilityModel([policy], 'runtime verification', undefined)).toBe(
-        'provider/runtime:low',
-      )
-      expect(selectCapabilityModel([policy], 'publication', undefined)).toBe(
-        'provider/publisher:off',
-      )
-    },
-  )
-
-  it('keeps delivery fallback bounded when only prose or no models are configured', () => {
+    expect(policy.roles).toHaveLength(pstackRoles.length)
     for (const role of ['code review', 'runtime verification', 'publication']) {
-      expect(
-        selectCapabilityModel(
-          [parsePstackModelPolicy(`judgment and prose: ${scalar}`)],
-          role,
-          undefined,
-        ),
-      ).toBe(scalar)
-      expect(selectCapabilityModel([parsePstackModelPolicy('')], role, undefined)).toBeUndefined()
+      expect(policy.roles.some((entry) => entry.role === role)).toBe(false)
+      expect(() => selectCapabilityModel([policy], role, undefined)).toThrow(
+        'Unknown model policy role',
+      )
     }
+    expect(selectCapabilityModel([policy], 'judgment and prose', undefined)).toBe(scalar)
   })
 
   it('permits a different review family without relaxing scalar implementation policy', () => {
@@ -138,17 +67,16 @@ describe('pstack model policy parser', () => {
       [
         `feature: ${implementation}`,
         `judgment and prose: ${implementation}`,
-        `code review: ${reviewer}, ${alternate}`,
-        `runtime verification: ${reviewer}, ${alternate}`,
+        `arena cross-judge pool: ${reviewer}, ${alternate}`,
       ].join('\n'),
     )
-    for (const role of ['code review', 'runtime verification']) {
-      expect(selectCapabilityModel([policy], role, reviewer)).toBe(reviewer)
-      expect(selectCapabilityModel([policy], role, alternate)).toBe(alternate)
-      expect(() => selectCapabilityModel([policy], role, 'unconfigured/reviewer:high')).toThrow(
-        'configured selectors',
-      )
-    }
+    const role = 'arena cross-judge pool'
+    expect(selectCapabilityModel([policy], role, reviewer)).toBe(reviewer)
+    expect(selectCapabilityModel([policy], role, alternate)).toBe(alternate)
+    expect(() => selectCapabilityModel([policy], role, undefined)).toThrow('distinct choices')
+    expect(() => selectCapabilityModel([policy], role, 'unconfigured/reviewer:high')).toThrow(
+      'configured selectors',
+    )
     expect(selectCapabilityModel([policy], 'feature', undefined)).toBe(implementation)
     expect(() => selectCapabilityModel([policy], 'judgment and prose', reviewer)).toThrow(
       'configured selectors',
@@ -223,9 +151,9 @@ describe('pstack model policy parser', () => {
         'description: models',
         '---',
         `how explorer: ${scalar}`,
-        '<!--code review: not a selector-->',
+        '<!--feature: not a selector-->',
         '<!--',
-        'publication: not a selector',
+        'hillclimb: not a selector',
         '-->',
         `swarm workers: ${scalar}`,
       ].join('\n'),
@@ -235,7 +163,7 @@ describe('pstack model policy parser', () => {
     expect(parsed.roles.find((entry) => entry.role === 'swarm workers')?.selectors).toEqual([
       scalar,
     ])
-    expect(parsed.roles.find((entry) => entry.role === 'publication')?.selectors).toEqual([])
+    expect(parsed.roles.find((entry) => entry.role === 'hillclimb')?.selectors).toEqual([])
     expect(parsePstackModelPolicy(`<!--\nhow explorer: ${scalar}\n`)).toEqual({
       status: 'invalid',
       error: 'pstack-models.md line 1 opens an unterminated comment.',

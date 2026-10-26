@@ -277,7 +277,7 @@ export function policyInput(overrides = {}) {
     role: 'how explorer',
     capability_profile: 'pstack-leaf',
     subagent_type: 'generalPurpose',
-    readonly: overrides.role !== 'runtime verification',
+    readonly: true,
     run_in_background: false,
     ...overrides,
   }

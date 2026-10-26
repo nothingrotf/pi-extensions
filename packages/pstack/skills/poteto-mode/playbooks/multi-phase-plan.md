@@ -41,7 +41,6 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] On her go, arm the audit tick as `/loop 1h` with the tick prompt below through the installed `loop` skill. Add an event watcher when one exists, with the 1-hour heartbeat as its fallback. Never leave the cadence to memory.
 - [ ] Use this tick prompt, verbatim. "Read the compact checkpoint and changed evidence. Audit the operation against the execution contract. Judge lane progress by side effects. Diagnose stalled corrections before replacement. Cancel a stuck writer before redispatch. Update the checkpoint. Send a status message only for changed verdicts, queue states, operator gates, and blockers not already reported. If none changed, produce no reply text. Record which changes the operator status covered in the checkpoint. Always append the tick's row to the decision log named in that checkpoint."
 - [ ] Use `TaskControl.wait` when no independent work remains. Handle completion without waiting for the audit tick.
-- [ ] Follow `../references/delivery-operations.md` for reconstruction, runtime preflight, checkpoints, and stalled corrections.
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.
 
 ### Spawn owners
@@ -67,7 +66,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] A full swarm runs once, at the merge-ready head SHA. Another full swarm runs only for new behavior, a redesign, or a large new diff. A rebase, a merge-conflict resolution, or a minor fix gets one independent verifier at the new head. Run each full swarm per the bundled `../swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. One audit lane that reads the diff and the receipts and distrusts the PR body.
 - [ ] Clean only when every required lane is `PASS`. Return findings to the owner with the affected evidence.
-- [ ] For a changed head, invalidate affected evidence through `../references/delivery-contract.md` and issue a complete current verdict.
+- [ ] For a changed head, invalidate the evidence that the change affects and issue a complete current verdict.
 - [ ] Reuse unaffected passing evidence only with explicit identity and applicability records. Preserve repository-required final gates.
 - [ ] <The merge or append rule from the execution playbook, with the patch-id rule from `playbooks/shipping.md`.>
 

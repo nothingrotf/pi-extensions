@@ -2,16 +2,10 @@
 
 Read this contract before dispatching pstack work. Preserve it across single calls, graph nodes, and resumes.
 
-## Delivery binding
+## Task input
 
-The default flow needs no delivery binding. Pass scope, design, evidence, and acceptance context inside `prompt`, never as invented Task input fields.
-An `issue:` prompt line binds a Task only when that issue is open in the managed ledger.
-
-Managed delivery is an explicit operator opt-in. For it, read the [Delivery contract](delivery-contract.md) for per-issue context, phases, lanes, and ownership.
-Bind managed work with `delivery: { kind: "managed", issue: "<open issue id>" }`.
-A Task without a binding or a matching `issue:` line runs outside the delivery ledger, even while managed issues stay open.
-`delivery: { kind: "independent" }` states that choice explicitly.
-The structured binding applies to single calls and graph nodes. Resume preserves the original binding.
+Pass scope, design, evidence, and acceptance context inside `prompt`, never as invented Task input fields.
+A brief can name its ticket in an `issue:` line. That line is context for the worker and binds nothing.
 
 ## Identity and model selection
 
@@ -19,9 +13,7 @@ Set `Task.role` to the role whose model policy selected this worker. Keep `subag
 
 Use the labels from `setup-pstack`, including `feature`, `refactoring`, `how explorer`, and `why synthesizer`. Split grouped configuration labels into the active role.
 
-In the default flow, use one entry of `arena cross-judge pool` for an independent second opinion and `swarm workers` for verification. The branch owner commits, pushes, and opens its own PR. In managed delivery, use `code review` for independent technical review, `runtime verification` for executable acceptance evidence, and `publication` for destination Git and PR operations. Reserve `judgment and prose` for prose and evidence synthesis. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
-
-Only those five implementation roles can own implementation submissions and candidate artifacts. Architecture, diagnosis, review, verification, publication, synthesis, and investigation roles cannot replace that owner. Record a failed supporting report as non-owning WIP without converting it into another implementation attempt.
+Use one entry of `arena cross-judge pool` for an independent second opinion and `swarm workers` for verification. The branch owner commits, pushes, and opens its own PR. Reserve `judgment and prose` for prose and evidence synthesis. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
 
 Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
@@ -29,7 +21,7 @@ The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a par
 
 For a panel or pool with distinct choices, pass the selected entry explicitly, including `model: "inherit-parent"` or `model: "auto"` for an inherited entry. Never silently use the first entry. Identical choices may omit `model`. The skill determines counts; the runtime never creates a panel or fans out.
 
-In managed delivery, absent delivery roles inherit existing choices for compatibility. `code review` and `runtime verification` inherit `arena cross-judge pool`, then `judgment and prose`. `publication` inherits `judgment and prose`. Explicit role settings override these defaults. Missing files and otherwise unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
+Missing files and unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
 
 For different-family reviews, choose a configured entry from another family than the implementation model. Independent context alone does not provide model-family diversity. If no permitted model meets the requirement, return `BLOCKED` and request a policy update. Review and verification pools supply availability, not fanout. Select one reviewer for bounded work. Unconfigured roles allow explicit models before the agent default and parent fallback. Unavailable models and unsupported effort or fast settings fail selection.
 
@@ -41,23 +33,14 @@ Keep the active role when escalating implementation, review, or verification; ne
 If the role permits no suitable selector, request a policy update instead of silently increasing effort.
 A changed selector requires a fresh agent with the retained brief, artifact, harness, and evidence.
 
-Task batches preflight every entry before starting children. An invalid role, unavailable selected model, omitted distinct panel choice, or missing managed issue binding rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
-
-Prefer the structured `delivery` binding over an `issue: <id>` prompt line.
-Legacy calls can retain one exact issue line or an existing managed resume binding.
-This rule covers implementations, `code review`, `runtime verification`, `publication`, and `hardest tasks` diagnoses.
-Keep legacy prompt bindings consistent with structured bindings.
-Do not infer an issue from prose or choose the first ledger entry.
-Read-only investigations outside these roles and sessions without a ledger remain unaffected.
-Managed implementations, reviews, and diagnoses receive the exact delivery schema, current criteria, and recorded receipt instructions.
-Publication instead requires an accepted checkpoint and explicit foreground execution.
+Task batches preflight every entry before starting children. An invalid role, unavailable selected model, or omitted distinct panel choice rejects the whole batch with zero child starts. Correct the invalid entry or submit a separate valid batch.
 
 A role never grants permissions. The runtime never infers it from a model or prompt.
 
-Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. In the default flow, a combined static and runtime reviewer starts with `swarm workers`, shell access, and manual isolation. Static review alone uses one entry of `arena cross-judge pool` with read-only tools. In managed delivery, a combined reviewer starts with `runtime verification`, shell access, and in-place execution in the issue workspace or manual isolation without one. Managed static review alone uses `code review` with read-only tools. Give code corrections and missing proof to a fresh agent with consolidated scope, per the poteto-mode Subagents section. In an issue workspace, resume the recorded implementation owner for code corrections instead. Resume only when the new work strictly needs state that lives in the agent and is costly to move. Use managed report repair for malformed reports backed by retained proof, without another Task or workspace. A changed role, model family, capability set, or artifact access always requires a fresh agent. Carry the saved brief, harness, and evidence into each fresh agent. Never weaken resume validation.
+Preserve the role on resume. Plan the reviewer contract for the expected acceptance surface before its first dispatch. A combined static and runtime reviewer starts with `swarm workers`, shell access, and manual isolation. Static review alone uses one entry of `arena cross-judge pool` with read-only tools. Give code corrections and missing proof to a fresh agent with consolidated scope, per the poteto-mode Subagents section. Resume only when the new work strictly needs state that lives in the agent and is costly to move. A changed role, model family, capability set, or artifact access always requires a fresh agent. Carry the saved brief, harness, and evidence into each fresh agent. Never weaken resume validation.
 
 Use the node schema for entries in `Task.tasks`. `run_in_background` belongs to single Task calls, not graph nodes. The graph scheduler owns node execution.
-Codemode can dispatch a single Task only with explicit `run_in_background: true`, subject to the same role, model, and delivery checks.
+Codemode can dispatch a single Task only with explicit `run_in_background: true`, subject to the same role and model checks.
 Return the Agent ID to the coordinator. Call foreground Tasks, batch graphs, and `TaskControl wait` directly, outside scripts.
 Non-wait `TaskControl` actions retain their existing scope and acceptance requirements.
 If a script fails after earlier calls execute, inspect the retained results instead of replaying the entire script.
@@ -85,11 +68,10 @@ Reuse unchanged readings within the same session when policy permits. Preserve e
 
 ## Repository writer
 
-Create the destination branch in the coordinator workspace before dispatch. Use `cwd` to select the destination, not to bypass isolation.
-Reuse one destination worktree per issue across rounds, and release it after publication. Follow Local footprint in [Delivery operations](delivery-operations.md).
-
-In the default flow, create a linked worktree on the issue branch, such as `git worktree add -b <branch> <path> <base>`, and prepare its dependencies per the repository's setup.
+Create a linked worktree on the issue branch before dispatch, such as `git worktree add -b <branch> <path> <base>`. Prepare its dependencies per the repository's setup.
 Create the worktree in one tool call and dispatch the owner in a later call. A Task in the same parallel batch can start before the worktree exists.
+Reuse that worktree across correction rounds. After the PR lands or closes, release it with `scripts/release-worktree.sh <path>` from the poteto-mode skill.
+
 Dispatch the owner in place there. A mutable Task with its `cwd` in a linked worktree outside the session repository runs in place by default.
 It commits, pushes its own branch, and opens its PR per Opening a PR. Its writes stay in the worktree without a join.
 An isolated worktree has no remotes, so never assign push or PR work to a Task that runs there:
@@ -108,45 +90,20 @@ An isolated worktree has no remotes, so never assign push or PR work to a Task t
 ```
 
 One in-place writer holds a worktree at a time. A correction goes to a fresh owner in the same worktree after the previous owner settles.
-
-For a managed issue, create that worktree with `pstack_delivery` and `action: "workspace"`. Then omit `cwd` and `isolation` from its Tasks. Preflight fills in the worktree and `isolation: { mode: "in-place" }` for writers:
-
-```json
-{
-  "description": "Implement the scoped feature",
-  "delivery": { "kind": "managed", "issue": "<open issue id>" },
-  "prompt": "Read the repository brief. Implement and verify the feature in the effective workspace. Return the diff and evidence.",
-  "subagent_type": "poteto-agent",
-  "role": "feature",
-  "capability_profile": "pstack-leaf",
-  "run_in_background": true
-}
-```
-
-For a correction, record the attempt, then resume the same owner with the verdict and the open findings:
-
-```json
-{
-  "description": "Correct the scoped feature",
-  "resume": "<owner agent id>",
-  "subagent_type": "poteto-agent",
-  "prompt": "Correct these findings from the independent verdict: <findings>. Rerun the affected checks and return a new report.",
-  "run_in_background": true
-}
-```
-
 An in-place writer cannot stop with zero writes. Cancel keeps its partial edits in the worktree for the next round.
 
-Without an issue workspace, use worktree isolation:
+## Isolated writer
+
+A writer that does not publish, such as an arena candidate, can run in a private worktree:
 
 ```json
 {
-  "description": "Implement the scoped feature",
-  "delivery": { "kind": "managed", "issue": "<open issue id>" },
-  "prompt": "Read the repository brief. Implement and verify the feature in the effective workspace. Return the diff and evidence.",
+  "description": "Sketch one candidate design",
+  "prompt": "Read the brief. Build the candidate in the effective workspace. Return the diff and evidence.",
   "subagent_type": "poteto-agent",
-  "role": "feature",
-  "capability_profile": "pstack-nested",
+  "role": "architect runners",
+  "model": "<one configured entry>",
+  "capability_profile": "pstack-leaf",
   "run_in_background": true,
   "isolation": { "mode": "worktree", "integration": "apply" }
 }
@@ -156,52 +113,42 @@ Use relative product paths inside the effective child workspace. Treat absolute 
 
 Never change into the source checkout to edit, commit, or push. A worktree separates Git state but is not an OS sandbox.
 
-Inspect the terminal receipt and diff before `TaskControl join`. The runtime releases a staged writer's execution tree after capture, so read its result through the patch or result commit. After acceptance, delegate any required destination commit, push, or stack operation separately.
+Inspect the terminal receipt and diff before `TaskControl join`. The runtime releases a staged writer's execution tree after capture, so read its result through the patch or result commit.
 
-Do not push a synthetic snapshot history as a product branch. Foreground destination operations require explicit scope and completed verification.
+Do not push a synthetic snapshot history as a product branch.
 
 ## Runtime verifier
 
-In the default flow, a runtime verifier uses `swarm workers` with shell access and `isolation: { mode: "worktree", integration: "manual" }`. Pass that isolation explicitly. In managed delivery, the verifier uses `runtime verification`, as in the example below.
-
-For optional OS containment, select `capability_profile: "pstack-sandbox"` instead of `pstack-leaf`.
-Managed delivery can request the same profile with `pstack_deliver` input `review: { sandbox: true }`.
-Both shell commands and gates then deny network and writes outside the effective workspace and private temporary storage.
-An unavailable backend blocks execution. Never retry with an unsandboxed profile without authorization.
-This does not confine reads, trusted extension code, or the model-provider connection.
-
-A runtime verifier needs shell access but must never integrate incidental files.
-Apply the cumulative correctness requirements in the [Delivery contract](delivery-contract.md) to every verification round.
+A runtime verifier uses `swarm workers` with shell access. It must never integrate incidental files, so pass `isolation: { mode: "worktree", integration: "manual" }` explicitly.
+Point its `cwd` at the worktree for the exact head under test.
 Include prior requirements in the verification plan, not only the latest change or the implementer's chosen tests.
-In an issue workspace, omit `isolation`. Preflight runs the verifier in place, and a changed candidate tree rejects its verdict.
-Without an issue workspace, enforce this with `integration: "manual"`.
 
 ```json
 {
-  "description": "Verify the exact accepted artifact",
-  "delivery": { "kind": "managed", "issue": "<open issue id>" },
-  "prompt": "Verify cumulative correctness under the Delivery contract. Check new behavior, prior requirements, and relevant negative and boundary cases. Reuse only valid exact-candidate receipts. Do not modify product code. Return evidence, failure origins, and coverage blockers.",
+  "description": "Verify the exact head",
+  "prompt": "Verify the change on the real surface. Check new behavior, prior requirements, and relevant negative and boundary cases. Do not modify product code. Return PASS, PASS+NOTES, or FAIL with evidence.",
   "subagent_type": "poteto-agent",
-  "role": "runtime verification",
+  "role": "swarm workers",
   "capability_profile": "pstack-leaf",
   "readonly": false,
   "run_in_background": true,
+  "cwd": "<worktree path at the exact head>",
   "isolation": { "mode": "worktree", "integration": "manual" }
 }
 ```
 
-For a distinct selector pool, add `model` with one permitted entry from the current runtime policy to each review example. Select another model family when independent cross-family review is required.
+For optional OS containment, select `capability_profile: "pstack-sandbox"` instead of `pstack-leaf`.
+Both shell commands and gates then deny network and writes outside the effective workspace and private temporary storage.
+An unavailable backend blocks execution. Never retry with an unsandboxed profile without authorization.
+This does not confine reads, trusted extension code, or the model-provider connection.
 
 The runtime retains artifacts and rejects `join` for manual isolation. External reports may use an explicitly authorized path.
-For runtime verification, omitted isolation or integration defaults to `manual`.
-Explicit `apply`, `branch`, and read-only execution fail before dispatch.
-Managed review and verifier resumes inherit their recorded directory and isolation when omitted. Resume cannot change those policies.
 
 Use a disposable exact-head clone when verification requires pristine Git provenance. Never rewrite the source checkout or its dependencies.
 
 ## Second opinion
 
-In the default flow, a second opinion is the same review against a different model. Use one read-only Task with one entry of `arena cross-judge pool` from another family than the implementation:
+A second opinion is the same review against a different model. Use one read-only Task with one entry of `arena cross-judge pool` from another family than the implementation:
 
 ```json
 {
@@ -210,22 +157,6 @@ In the default flow, a second opinion is the same review against a different mod
   "subagent_type": "generalPurpose",
   "role": "arena cross-judge pool",
   "model": "<one configured entry from another family>",
-  "capability_profile": "pstack-leaf",
-  "readonly": true
-}
-```
-
-`code review`, `runtime verification`, and `publication` belong to managed delivery. An unbound Task with one of those roles fails before dispatch.
-
-## Managed static reviewer
-
-```json
-{
-  "description": "Review the accepted patch independently",
-  "delivery": { "kind": "managed", "issue": "<open issue id>" },
-  "prompt": "Read the accepted patch and bounded evidence. Return one complete verdict with findings, evidence, and blockers.",
-  "subagent_type": "generalPurpose",
-  "role": "code review",
   "capability_profile": "pstack-leaf",
   "readonly": true
 }
@@ -277,5 +208,4 @@ On timeout, inspect bounded status once and wait again if no other work is ready
 Never replace wait with shell `sleep` or repeated status polling.
 Call wait alone. A parallel shell `sleep` delays decision replies past their 5-minute deadline.
 
-Follow [Delivery operations](delivery-operations.md) for checkpoints, stalled corrections, artifact reconstruction, and browser preflight.
 Preserve failed, blocked, and interrupted outcomes. Correct tool or environment failures before redispatch instead of weakening verification requirements.
