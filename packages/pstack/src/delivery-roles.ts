@@ -18,12 +18,6 @@ function classification(role: string | undefined): PstackDeliveryClass | undefin
   return role === undefined ? undefined : classifications.get(role)
 }
 
-export function isDeliveryRole(role: string | undefined, readonly: boolean | undefined): boolean {
-  const delivery = classification(role)
-  if (delivery !== undefined) return delivery !== 'none'
-  return role !== undefined && readonly !== true
-}
-
 export function isImplementationRole(role: string | undefined): boolean {
   const delivery = classification(role)
   return delivery === undefined || delivery === 'implementation'

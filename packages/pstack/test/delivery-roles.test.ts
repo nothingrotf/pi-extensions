@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test'
 
-import { isDeliveryRole, isImplementationRole } from '../src/delivery-roles.ts'
+import { isImplementationRole } from '../src/delivery-roles.ts'
 import { pstackRoles } from '../src/model-policy.ts'
 
 describe('pstack delivery role classification', () => {
@@ -9,8 +9,6 @@ describe('pstack delivery role classification', () => {
       for (const role of [entry.role, ...entry.aliases]) {
         const implementation = entry.delivery === 'implementation'
         expect(isImplementationRole(role), role).toBe(implementation)
-        expect(isDeliveryRole(role, false), role).toBe(entry.delivery !== 'none')
-        expect(isDeliveryRole(role, true), role).toBe(entry.delivery !== 'none')
       }
     }
   })
@@ -20,7 +18,5 @@ describe('pstack delivery role classification', () => {
     expect(isImplementationRole('hardest tasks')).toBe(false)
     expect(isImplementationRole('architect runners')).toBe(false)
     expect(isImplementationRole('legacy implementation role')).toBe(true)
-    expect(isDeliveryRole('legacy implementation role', false)).toBe(true)
-    expect(isDeliveryRole('legacy implementation role', true)).toBe(false)
   })
 })

@@ -24,9 +24,9 @@ If you are already an independently assigned reviewer, including a leaf reviewer
 
 During accepted delivery or publication, reuse the existing independent verdict when its artifact and evidence remain current. Apply the checklist inline without another reviewer Task. Do not treat this check as a new independent verdict. If evidence is missing or invalidated, return to the assigned independent reviewer.
 
-For a standalone invocation, launch exactly one independent reviewer selected explicitly from the configured `code review` pool:
+For a standalone invocation, launch exactly one independent reviewer selected explicitly from the configured `arena cross-judge pool`:
 
-- `role`: `code review`
+- `role`: `arena cross-judge pool`
 - `capability_profile`: `pstack-leaf`
 - `subagent_type`: `Comment Sicko`
 - `model`: the selected configured entry, including explicit `auto` or `inherit-parent`; omit only when the pool is unconfigured or all choices are identical

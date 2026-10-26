@@ -1,6 +1,7 @@
 # Delivery contract
 
-Read this contract before dispatching or resuming issue work.
+This contract applies only to managed delivery, which the operator must request explicitly. The default flow is the Delivery section of `../SKILL.md`.
+Read this contract before dispatching or resuming managed issue work.
 Use [Delivery operations](delivery-operations.md) for checkpoints, completion-driven waiting, stalled corrections, artifact reconstruction, and runtime preflight.
 
 ## Per-issue fields

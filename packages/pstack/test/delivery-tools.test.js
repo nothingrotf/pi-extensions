@@ -2083,6 +2083,25 @@ describe('pstack delivery tool interception', () => {
       toolExecutionReceipts: [{ ...base.toolExecutionReceipts[0], command: 'x'.repeat(5000) }],
     })
     expect(longCommandResult.status).toBe('accepted')
+
+    const settledResult = validateDeliveryTerminal({
+      ...base,
+      isolation: isolationReceipt(snapshot, 'not-requested'),
+      readonly: false,
+      role: 'runtime verification',
+      structuredOutput: {
+        data: { ...runtimeReport, state: 'candidate' },
+        mode: 'strict',
+        source: 'caller',
+        status: 'valid',
+      },
+    })
+    expect(settledResult.status).toBe('accepted')
+    if (settledResult.status !== 'accepted') throw new Error('The settled verdict was rejected.')
+    expect(JSON.parse(settledResult.normalizedOutput ?? '{}')).toMatchObject({
+      kind: 'runtime-verification',
+      state: 'accepted',
+    })
   })
 
   it('derives in-place artifacts and rejects runtime verifiers that change the tree', () => {
@@ -2724,6 +2743,48 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
+  it('dispatches an issue-labeled Task without a ledger as ordinary work', async () => {
+    const dispatch = (id, extra) =>
+      plannedReply(
+        [
+          {
+            arguments: {
+              description: 'Implement the ticket',
+              prompt: 'issue: SPT-1\nImplement the ticket on its branch.',
+              role: 'feature',
+              subagent_type: 'generalPurpose',
+              ...extra,
+            },
+            id,
+            name: 'Task',
+            type: 'toolCall',
+          },
+        ],
+        'toolUse',
+      )
+    const harness = await sessionWithDeliveryTool({
+      messages: [
+        dispatch('ordinary', {}),
+        dispatch('managed', { delivery: { issue: 'SPT-1', kind: 'managed' } }),
+      ],
+    })
+    try {
+      await harness.session.prompt('Dispatch the ticket twice.', { expandPromptTemplates: false })
+      expect(harness.observed).toHaveLength(1)
+      expect(harness.observed[0].delivery).toBeUndefined()
+      expect(harness.observed[0].outputSchema).toBeUndefined()
+      const managed = harness.session.messages.findLast(
+        (message) => message.role === 'toolResult' && message.toolCallId === 'managed',
+      )
+      expect(managed?.isError).toBe(true)
+      expect(managed?.content.map((part) => part.text ?? '').join('\n')).toContain(
+        'Open the managed issue before dispatch: SPT-1',
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('injects the supported delivery schema into the real Task tool call', async () => {
     const harness = await sessionWithDeliveryTool()
     try {
@@ -2834,16 +2895,16 @@ describe('pstack delivery tool interception', () => {
   })
 
   it.each([
-    'feature',
-    'refactoring',
-    'bug-fix',
-    'perf-issue',
-    'hillclimb',
-    'code review',
-    'runtime verification',
-    'publication',
-    'hardest tasks',
-  ])('blocks a managed %s Task without an issue binding', async (role) => {
+    ['feature', true],
+    ['refactoring', true],
+    ['bug-fix', true],
+    ['perf-issue', true],
+    ['hillclimb', true],
+    ['code review', false],
+    ['runtime verification', false],
+    ['publication', false],
+    ['hardest tasks', true],
+  ])('handles an unbound %s Task while managed issues stay open', async (role, dispatched) => {
     const task = {
       arguments: {
         description: `Unbound ${role}`,
@@ -2880,11 +2941,16 @@ describe('pstack delivery tool interception', () => {
       await harness.session.prompt('Dispatch the managed delivery Task.', {
         expandPromptTemplates: false,
       })
-      expect(harness.observed).toHaveLength(0)
-      const result = harness.session.messages.findLast(
-        (message) => message.role === 'toolResult' && message.toolCallId === task.id,
-      )
-      expect(result?.content[0]?.text).toContain('issue binding')
+      if (dispatched) {
+        expect(harness.observed).toHaveLength(1)
+        expect(harness.observed[0].delivery).toBeUndefined()
+      } else {
+        expect(harness.observed).toHaveLength(0)
+        const result = harness.session.messages.findLast(
+          (message) => message.role === 'toolResult' && message.toolCallId === task.id,
+        )
+        expect(result?.content[0]?.text).toContain(`The ${role} role belongs to managed delivery`)
+      }
     } finally {
       await harness.close()
     }
@@ -3627,8 +3693,9 @@ describe('pstack delivery tool interception', () => {
                     subagent_type: 'generalPurpose',
                   },
                   {
-                    description: 'Unbound review',
-                    id: 'unbound',
+                    delivery: { issue: 'issue-missing', kind: 'managed' },
+                    description: 'Review an unopened issue',
+                    id: 'unopened',
                     prompt: 'Review the correction.',
                     readonly: true,
                     role: 'code review',
@@ -3651,7 +3718,9 @@ describe('pstack delivery tool interception', () => {
       const result = harness.session.messages.findLast(
         (message) => message.role === 'toolResult' && message.toolCallId === 'mixed-batch',
       )
-      expect(result?.content[0]?.text).toContain('issue binding')
+      expect(result?.content[0]?.text).toContain(
+        'Open the managed issue before dispatch: issue-missing',
+      )
     } finally {
       await harness.close()
     }
@@ -4754,7 +4823,7 @@ describe('pstack delivery tool interception', () => {
     }
   })
 
-  it('forbids independent publication once managed delivery is active', async () => {
+  it('rejects independent publication as a managed-only role', async () => {
     const harness = await sessionWithDeliveryTool({
       beforePrompt(sessionManager) {
         sessionManager.appendCustomEntry(
@@ -4791,7 +4860,7 @@ describe('pstack delivery tool interception', () => {
       const result = harness.session.messages.findLast(
         (message) => message.role === 'toolResult' && message.toolCallId === 'unbound-publication',
       )
-      expect(result?.content[0]?.text).toContain('cannot opt out')
+      expect(result?.content[0]?.text).toContain('The implementation owner opens its own PR')
     } finally {
       await harness.close()
     }

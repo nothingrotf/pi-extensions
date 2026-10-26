@@ -56,16 +56,27 @@ Match the gate to the phase:
 - Scope the focused type check to the changed package, not to the whole repository.
 - At the end of implementation, run every repository-required gate once.
 - During a correction, run the focused test that proves each finding, then one final repository-required gate.
+- Never run a full suite for a WIP report or a checkpoint.
+- When CI already runs a slow suite, such as a sharded end-to-end suite, leave it to CI unless the brief names a local reason.
 
 Start independent gates as parallel `pstack_gate` calls in one turn.
 Without `pstack_gate`, start them together in one command and collect their exit codes:
 
 ```sh
 bun run check > /tmp/<issue>-check.log 2>&1 & check=$!
-bun run test:e2e > /tmp/<issue>-e2e.log 2>&1 & e2e=$!
-wait $check; echo "CHECK=$?"; wait $e2e; echo "E2E=$?"
-tail -40 /tmp/<issue>-check.log; tail -40 /tmp/<issue>-e2e.log
+bun run test > /tmp/<issue>-test.log 2>&1 & test=$!
+wait $check; echo "CHECK=$?"; wait $test; echo "TEST=$?"
+tail -40 /tmp/<issue>-check.log; tail -40 /tmp/<issue>-test.log
 ```
+
+The repository instructions define the required gates. A brief can add a gate, but it cannot make a CI-only suite a local gate without a stated reason.
+
+When a gate fails in a test that your diff does not touch, rerun only that test file once.
+
+- If the rerun passes, record the test as flaky with both log paths and continue.
+- If the rerun fails, run the same file on the base revision.
+- If the base also fails, report the failure as pre-existing and continue.
+- Never rerun a whole suite to clear a flaky test.
 
 Each background gate still produces its own log and its own exit status, so the proof stays complete.
 Serialize only gates that share a database, a port, or a build directory.
@@ -109,6 +120,7 @@ Use the real entry point, authorization, application role, persistence, and read
 A new feature starts with a minimal vertical slice, not a complete implementation before its first integrated probe.
 Keep the harness in the repository so the independent reviewer can reuse it.
 Before expanding implementation, retain the probe receipt, observed result, affected boundary, and unresolved setup gaps.
+Record the probe checkpoint in your notes and continue in the same round. Do not end the round with a WIP report only to checkpoint the probe.
 Reject zero-assertion success, skipped required scenarios, swallowed failures, and mocks of the boundary under verification.
 Use separate-request durable readback, denied actors, and divergent revision counters when the behavior depends on those distinctions.
 List every bound and every derived counter the change introduces, and prove each one with its own executed scenario.
@@ -120,12 +132,15 @@ Read a retained log instead of rerunning an unchanged passing gate to obtain a d
 Preserve reproduction evidence and test meaningful behavior, including adjacent regression risks.
 An implementation cannot accept itself. Independent reviewers never wrote the candidate under review.
 A runtime verifier requires shell access and manual isolation. Never integrate its incidental output.
-Publication stays separately scoped, foreground, and authorized after acceptance.
+In the default flow, commit, push your own branch, and open the PR only when your brief assigns it.
+In managed delivery, publication stays separately scoped, foreground, and authorized after acceptance.
 Do not merge, deploy, publish, or message external systems outside the explicit assignment.
 
 Use `request_parent` for scope, permission, product, and preference decisions.
 `ask_parent` is advisory only and cannot authorize changes.
-If the real coordinator decision is unavailable, stop the affected work and report the blocker.
+If `request_parent` reports that no coordinator can answer, do not perform the requested change.
+Finish and retain the work that your brief already authorizes, including its commit when the brief assigns one.
+Then end your turn and report the open decision with its options and your recommendation.
 
 Write concise, evidenced reports. Use the required structured output when the execution contract supplies one.
 Match every evidence reference to its actual receipt, including failed commands in the numbering.

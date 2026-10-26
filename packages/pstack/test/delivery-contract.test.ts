@@ -8,6 +8,13 @@ function skill(path: string): string {
   return readFileSync(new URL(`../skills/${path}`, import.meta.url), 'utf8')
 }
 
+function managedAutopilot(name: string): string {
+  const [full, stack] = skill('poteto-mode/references/managed-autopilot.md').split(
+    '## Autopilot-stack',
+  )
+  return name === 'autopilot-full' ? (full ?? '') : (stack ?? '')
+}
+
 const deliveryContractPath = 'poteto-mode/references/delivery-contract.md'
 const poolAvailability = 'availability for selection, never a dispatch count'
 const laneRule = 'never the size of a configured model pool'
@@ -67,6 +74,25 @@ describe('pstack delivery contract', () => {
     expect(how).toContain('Run this skill in the current session by default')
   })
 
+  it('defaults poteto-mode to the upstream flow and keeps managed delivery opt-in', async () => {
+    const poteto = skill('poteto-mode/SKILL.md')
+    expect(poteto).toContain('The default delivery is the upstream flow.')
+    expect(poteto).toContain('A `/poteto-mode` request alone does not request it.')
+    expect(poteto).toContain('(references/managed-autopilot.md)')
+    for (const playbook of ['feature', 'bug-fix', 'perf-issue', 'refactoring']) {
+      const source = skill(`poteto-mode/playbooks/${playbook}.md`)
+      expect(source, playbook).toContain('This is the default flow.')
+      expect(source, playbook).toContain('Repository writer')
+      expect(source, playbook).not.toContain('issue workspace')
+      expect(source, playbook).not.toContain('per-issue fields')
+    }
+    const worker = skill('poteto-mode/references/worker.md')
+    expect(worker).toContain('Never run a full suite for a WIP report or a checkpoint.')
+    expect(worker).toContain('Do not end the round with a WIP report only to checkpoint the probe.')
+    const bootstrap = await loadPstackBootstrap()
+    expect(bootstrap.systemPrompt).toContain('Managed delivery is opt-in.')
+  })
+
   it('scopes the architect trigger to new or contested design', () => {
     const poteto = skill('poteto-mode/SKILL.md')
     expect(poteto).not.toContain('Code crossing a function boundary')
@@ -98,12 +124,12 @@ describe('pstack delivery contract', () => {
 
   it('keeps one implementer role, fresh rounds, and two issue lanes in the autopilots', () => {
     for (const playbook of ['autopilot-full', 'autopilot-stack']) {
-      const source = skill(`poteto-mode/playbooks/${playbook}.md`)
+      const source = managedAutopilot(playbook)
       expect(source, playbook).toContain('pstack-nested')
       expect(source, playbook).toContain('foreground')
       expect(source, playbook).toContain('synthetic snapshot')
       expect(source, playbook).toContain('accepted patch')
-      expect(source, playbook).toContain('references/delivery-contract.md')
+      expect(source, playbook).toContain('delivery-contract.md')
       expect(source, playbook).toContain('one independent reviewer')
       expect(source, playbook).toContain(laneRule)
       expect(source, playbook).toContain('time-to-acceptance')
@@ -153,7 +179,10 @@ describe('pstack delivery contract', () => {
     const task = skill('poteto-mode/references/task-contracts.md')
     expect(task).toContain('Never weaken resume validation')
     expect(task).toContain(
-      'A combined static and runtime reviewer starts with `runtime verification`',
+      'In managed delivery, a combined reviewer starts with `runtime verification`',
+    )
+    expect(task).toContain(
+      'In the default flow, a combined static and runtime reviewer starts with `swarm workers`',
     )
     const orchestrate = skill('poteto-mode/playbooks/orchestrate.md')
     expect(orchestrate).not.toContain('Never resume-chain a brief')
@@ -162,9 +191,12 @@ describe('pstack delivery contract', () => {
     )
     const trail = skill('show-me-your-work/SKILL.md')
     expect(trail).toContain("Add the trail audit to the brief of the round's independent reviewer")
-    expect(trail).toContain('role: "code review"')
-    for (const playbook of ['opening-a-pr', 'autopilot-full', 'autopilot-stack']) {
-      const source = skill(`poteto-mode/playbooks/${playbook}.md`)
+    expect(trail).toContain('role: "arena cross-judge pool"')
+    for (const source of [
+      skill('poteto-mode/playbooks/opening-a-pr.md'),
+      managedAutopilot('autopilot-full'),
+      managedAutopilot('autopilot-stack'),
+    ]) {
       expect(source).toContain('role: "publication"')
       expect(source).not.toContain('role: "judgment and prose"')
     }

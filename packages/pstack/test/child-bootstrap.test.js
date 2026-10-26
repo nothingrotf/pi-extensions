@@ -6,7 +6,7 @@ import { SessionManager } from '@earendil-works/pi-coding-agent'
 import { describe, expect, it } from 'vite-plus/test'
 
 import { loadPstackBootstrap } from '../src/bootstrap.ts'
-import { pstackRoles } from '../src/model-policy.ts'
+import { managedOnlyPstackRoles, pstackRoles } from '../src/model-policy.ts'
 import { readLivePolicy } from './live-policy.js'
 import {
   child,
@@ -332,7 +332,7 @@ describe('pstack SDK child bootstrap', () => {
 
 describe('pstack runtime model policy', () => {
   it.each(['code review', 'runtime verification', 'publication'])(
-    'selects and retains the %s model through a role-compatible Task policy probe',
+    'rejects an unbound %s Task and keeps its model policy for managed delivery',
     async (role) => {
       const plans = new Map()
       const h = await harness(
@@ -347,31 +347,23 @@ describe('pstack runtime model policy', () => {
         if (role === 'runtime verification') await initializeRepository(h)
         const input = policyInput({ role })
         if (role !== 'publication') input.model = 'pstack-test/configured:high'
-        const result = await invoke(h, plans, 'delivery-role', 'Task', input)
-        expect(result.status).toBe('completed')
-        expect(h.runtime.listSnapshots()).toHaveLength(1)
-        expect(h.runtime.getRecord(result.agentId)).toMatchObject({
+        plans.set('read:unbound-delivery-role', [{ name: 'Task', arguments: input }])
+        await h.session.prompt('read:unbound-delivery-role', { streamingBehavior: 'followUp' })
+        await h.session.agent.waitForIdle()
+        const rejected = h.session.messages.findLast(
+          (message) => message.role === 'toolResult' && message.toolName === 'Task',
+        )
+        expect(rejected?.isError).toBe(true)
+        expect(JSON.stringify(rejected?.content)).toContain('belongs to managed delivery')
+        expect(JSON.stringify(rejected?.content)).toContain('arena cross-judge pool')
+        expect(h.runtime.listSnapshots()).toHaveLength(0)
+        const result = await h.runtime.run({ ctx: h.ctx, input })
+        expect(result.kind, JSON.stringify(result)).toBe('completed')
+        expect(h.runtime.getRecord(result.details.agentId)).toMatchObject({
           role,
           model: role === 'publication' ? 'pstack-test/model' : 'pstack-test/configured',
           execution: { role, readonly: role !== 'runtime verification' },
         })
-        expect(h.inventories.find((entry) => entry.action === 'read:policy').tools).not.toContain(
-          'Task',
-        )
-        expect(
-          h.inventories.find((entry) => entry.action === 'read:policy').tools.includes('bash'),
-        ).toBe(role === 'runtime verification')
-        const resumed = await invoke(h, plans, 'resume-delivery', 'Task', {
-          description: 'Continue the same scoped delivery role',
-          prompt: 'read:delivery-resumed',
-          subagent_type: 'generalPurpose',
-          resume: result.agentId,
-          run_in_background: false,
-        })
-        expect(resumed.status).toBe('completed')
-        expect(resumed.agentId).toBe(result.agentId)
-        expect(h.runtime.getRecord(result.agentId).role).toBe(role)
-        expect(h.runtime.listSnapshots()).toHaveLength(1)
       } finally {
         await h.close()
       }
@@ -462,9 +454,9 @@ describe('pstack runtime model policy', () => {
         const record = h.runtime.getRecord(result.details.agentId)
         expect(record.model).toBe('pstack-test/configured')
         expect(record.effort).toBe('high')
-        expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
-          `${role}: pstack-test/configured:high`,
-        )
+        const prompt = h.inventories.find((entry) => entry.action === 'read:policy').prompt
+        if (managedOnlyPstackRoles.has(role)) expect(prompt).not.toContain(`${role}: pstack-test`)
+        else expect(prompt).toContain(`${role}: pstack-test/configured:high`)
       } finally {
         await h.close()
       }

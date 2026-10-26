@@ -17,7 +17,7 @@ import { availableParallelism } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 
 import { defineTool } from '@earendil-works/pi-coding-agent'
-import { captureWorkspaceSnapshot } from '@nothingrotf/subagent'
+import { captureWorkspaceSnapshot, setAwakeTimeout } from '@nothingrotf/subagent'
 import { type Static, Type } from 'typebox'
 import { Value } from 'typebox/value'
 
@@ -281,18 +281,18 @@ async function execute(
           status = reason
           killGroup(child.pid)
         }
-        const timer = setTimeout(() => stop('timed-out'), gateTimeoutMs())
+        const cancelTimer = setAwakeTimeout(() => stop('timed-out'), gateTimeoutMs())
         const abort = () => stop('aborted')
         if (signal?.aborted === true) abort()
         else signal?.addEventListener('abort', abort, { once: true })
         child.on('error', (error) => {
-          clearTimeout(timer)
+          cancelTimer()
           signal?.removeEventListener('abort', abort)
           reject(error)
         })
         child.on('exit', (code) => {
           if (sandbox) killGroup(child.pid)
-          clearTimeout(timer)
+          cancelTimer()
           signal?.removeEventListener('abort', abort)
           resolveExecution({
             durationMs: Date.now() - started,

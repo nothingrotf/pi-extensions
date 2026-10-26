@@ -91,6 +91,7 @@ export default async function pstack(
         'Mentioning pstack in logs, examples, or a bug report is not an activation request.',
         'Without activation, do not open pstack deliveries or select pstack capability profiles.',
         'The model policy below configures authorized pstack Tasks only. It does not require delegation, managed delivery, or a review pipeline.',
+        'Managed delivery is a separate opt-in. Use pstack_deliver, pstack_delivery, and managed Task bindings only when the operator explicitly requests managed delivery. A poteto-mode request alone runs the default flow.',
         policyPrompt,
       ].join('\n\n'),
     }

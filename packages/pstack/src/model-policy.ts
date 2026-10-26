@@ -12,6 +12,7 @@ interface PstackRole {
   aliases: readonly string[]
   delivery: PstackDeliveryClass
   fallbackRoles?: readonly string[]
+  managedOnly?: true
 }
 
 export const pstackRoles: readonly PstackRole[] = [
@@ -27,6 +28,7 @@ export const pstackRoles: readonly PstackRole[] = [
     aliases: [],
     delivery: 'managed-support',
     fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
+    managedOnly: true,
   },
   {
     role: 'runtime verification',
@@ -34,6 +36,7 @@ export const pstackRoles: readonly PstackRole[] = [
     aliases: [],
     delivery: 'managed-support',
     fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
+    managedOnly: true,
   },
   {
     role: 'publication',
@@ -41,6 +44,7 @@ export const pstackRoles: readonly PstackRole[] = [
     aliases: [],
     delivery: 'managed-support',
     fallbackRoles: ['judgment and prose'],
+    managedOnly: true,
   },
   { role: 'hardest tasks', panel: false, aliases: [], delivery: 'managed-support' },
   { role: 'how explorer', panel: false, aliases: [], delivery: 'none' },
@@ -68,6 +72,10 @@ export const pstackRoles: readonly PstackRole[] = [
   { role: 'interrogate reviewers', panel: true, aliases: [], delivery: 'none' },
 ]
 
+export const managedOnlyPstackRoles: ReadonlySet<string> = new Set(
+  pstackRoles.filter((entry) => entry.managedOnly === true).map((entry) => entry.role),
+)
+
 const legacyPstackRoles: readonly PstackRole[] = [
   { role: 'how critics', panel: true, aliases: [], delivery: 'none' },
 ]
@@ -90,8 +98,15 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
     start = end + 1
   }
   const configured = new Map<string, readonly string[]>()
+  let commentStart: number | undefined
   for (let index = start; index < lines.length; index += 1) {
     const line = lines[index]?.trim() ?? ''
+    if (commentStart === undefined && line.startsWith('<!--')) commentStart = index
+    if (commentStart !== undefined) {
+      if (line.endsWith('-->') && (index > commentStart || line.length >= 7))
+        commentStart = undefined
+      continue
+    }
     if (line === '' || line.startsWith('#')) continue
     const separator = line.indexOf(':')
     if (separator < 1) return invalid(`pstack-models.md line ${index + 1} requires role: selector.`)
@@ -128,6 +143,8 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
       configured.set(role.role, selectors)
     }
   }
+  if (commentStart !== undefined)
+    return invalid(`pstack-models.md line ${commentStart + 1} opens an unterminated comment.`)
   const roles: RoleModelPolicyEntry[] = pstackRoles.map(({ role, fallbackRoles = [] }) => ({
     role,
     selectors: [
@@ -170,18 +187,19 @@ export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
     'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
     'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
     'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
-    'Use code review for independent technical review, runtime verification for executable proof, publication for destination Git/PR operations, and judgment and prose only for prose or evidence synthesis.',
-    'Code review and runtime verification are selector pools, not fanout. Choose one permitted model explicitly for each scoped reviewer or verifier. Use a different family from the implementation for independent review when required.',
-    'When new delivery roles are absent, code review and runtime verification inherit arena cross-judge pool, then judgment and prose. Publication inherits judgment and prose. Explicit role settings override these compatibility defaults.',
+    'A second opinion is the same review against a different model: use one entry of arena cross-judge pool from another family than the implementation. Use swarm workers for verification, and judgment and prose only for prose or evidence synthesis. The implementation owner commits, pushes, and opens its own PR.',
+    'Managed delivery binds its own review, verification, and publication roles to a managed issue. Never use those roles for unbound Tasks.',
     'The extension reads ~/.agents/rules/pstack-models.md automatically before each root prompt and root Task call. No manual read or alwaysApply support is required. Invalid policies block fresh pstack dispatches. Resume preserves its stored model.',
   ]
   if (policy.status === 'invalid')
     return [...instructions, `Policy unavailable. ${policy.error}`].join('\n')
   return [
     ...instructions,
-    ...policy.roles.map(
-      (entry) =>
-        `${entry.role}: ${entry.selectors.length === 0 ? 'unconfigured; agent default then parent; skill owns count' : entry.selectors.join(', ')}`,
-    ),
+    ...policy.roles
+      .filter((entry) => !managedOnlyPstackRoles.has(entry.role))
+      .map(
+        (entry) =>
+          `${entry.role}: ${entry.selectors.length === 0 ? 'unconfigured; agent default then parent; skill owns count' : entry.selectors.join(', ')}`,
+      ),
   ].join('\n')
 }

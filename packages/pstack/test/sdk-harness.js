@@ -329,10 +329,8 @@ export function workflowInput(scenario, graph = false) {
     ],
   }
   if (!graph)
-    input.run_in_background =
-      (scenario.kind !== 'static' && scenario.kind !== 'publication') ||
-      scenario.id.startsWith('swarm-')
-  if (scenario.kind !== 'static' && scenario.kind !== 'publication') {
+    input.run_in_background = scenario.kind !== 'static' || scenario.id.startsWith('swarm-')
+  if (scenario.kind !== 'static') {
     input.isolation = {
       mode: 'worktree',
       integration: scenario.kind === 'verifier' ? 'manual' : (scenario.integration ?? 'apply'),
@@ -479,11 +477,7 @@ export async function runWorkflowCase(scenario) {
     expect(completed.tools.includes('pstack_gate')).toBe(scenario.kind !== 'static')
     expect(completed.tools).not.toContain('session_history')
     expect(completed.tools).not.toContain('mcp')
-    if (scenario.kind === 'publication') {
-      expect(started.status).toBe('completed')
-      expect(record.isolation).toBeUndefined()
-      expect(await readFile(join(h.dir, 'output.txt'), 'utf8')).toBe(scenario.id)
-    } else if (scenario.kind !== 'static') {
+    if (scenario.kind !== 'static') {
       await expect(readFile(join(h.dir, 'output.txt'), 'utf8')).rejects.toThrow(/ENOENT/)
       const receipt = await invoke(h, plans, `join-${scenario.id}`, 'TaskControl', {
         action: 'join',
@@ -511,7 +505,7 @@ export async function runWorkflowCase(scenario) {
         run_in_background: false,
       })
       expect(resumed.agentId).toBe(started.agentId)
-      expect(resumed.role).toBe('runtime verification')
+      expect(resumed.role).toBe(scenario.role)
       expect(resumed.status).toBe('completed')
       const retained = h.runtime.getRecord(started.agentId)
       expect(retained.isolation.integration).toBe('manual')
