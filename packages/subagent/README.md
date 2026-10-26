@@ -24,7 +24,7 @@ The guard also checks validated active-branch history after bounded Task records
 Historical lookup preserves journal integrity and owner checks without reconstructing execution permissions.
 If ownership history fails validation, the guard cancels switching and preserves the current session and its original evidence.
 Inspect a Task with `/subagents peek`, and continue it through `Task` with `resume`.
-Opening a worker transcript as an independent root session does not reconstruct its tools, workspace, or managed delivery ownership.
+Opening a worker transcript as an independent root session does not reconstruct its tools or workspace.
 Existing independently opened transcripts need recovery through their original coordinator.
 
 Continue the same child:

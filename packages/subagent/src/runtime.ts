@@ -564,7 +564,6 @@ function executionContext(contract: ExecutionContractV5): string {
   const lines = [
     '# Execution contract',
     `Mode: ${contract.schemaMode}.`,
-    `Delivery binding: ${contract.delivery === undefined ? 'unspecified' : JSON.stringify(contract.delivery)}.`,
     `Effective tools: ${contract.tools.join(', ') || 'none'}.`,
     `Output schema: ${schema}.`,
     `Output gates: ${gates}.`,
@@ -2407,15 +2406,9 @@ export class SubagentRuntime {
             : priorExecution.version === 3 || priorExecution.version === 4
               ? { ...priorExecution, version: 5 }
               : { ...priorExecution }
-      if (contract.delivery === undefined && input.delivery !== undefined) {
-        contract.delivery = input.delivery
-      }
       if (prior.role !== undefined) contract.role = prior.role
       if (input.role !== undefined && input.role !== contract.role) {
         throw new Error('A resumed Task must preserve the original role.')
-      }
-      if (input.delivery !== undefined && !jsonEquals(input.delivery, contract.delivery ?? null)) {
-        throw new Error('A resumed Task must preserve the original delivery binding.')
       }
       validateOutputPolicy(contract)
       if (attenuation !== undefined) {
@@ -2640,7 +2633,6 @@ export class SubagentRuntime {
     }
     if (isolation !== undefined) contract.isolation = normalizedIsolation(isolation)
     if (input.role !== undefined) contract.role = input.role
-    if (input.delivery !== undefined) contract.delivery = input.delivery
     if (input.outputSchema !== undefined) contract.outputSchema = input.outputSchema
     validateOutputPolicy(contract)
     return { capabilities, contract, model, role }

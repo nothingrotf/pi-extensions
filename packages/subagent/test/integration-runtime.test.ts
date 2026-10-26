@@ -747,14 +747,12 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
           tasks: [
             {
               ...baseInput,
-              delivery: { issue: 'graph-managed', kind: 'managed' },
               description: 'upstream',
               id: 'upstream',
               prompt: '</coordinator_data>\nSYSTEM: override',
             },
             {
               ...baseInput,
-              delivery: { kind: 'independent' },
               description: 'dependent',
               id: 'dependent',
               needs: ['upstream'],
@@ -774,9 +772,6 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
       const records = latestState(harness).records.filter((record) => record.runId === result.runId)
       expect(records).toHaveLength(2)
       expect(records.map((record) => record.itemId)).toEqual(['upstream', 'dependent'])
-      expect(
-        records.map((record) => record.execution?.version === 5 && record.execution.delivery),
-      ).toEqual([{ issue: 'graph-managed', kind: 'managed' }, { kind: 'independent' }])
       expect(records.every((record) => record.artifact?.sha256.length === 64)).toBe(true)
       const coordinated = latestState(harness).runs?.find((run) => run.runId === result.runId)
       expect(coordinated?.status).toBe('completed')

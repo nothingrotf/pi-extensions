@@ -69,7 +69,6 @@ describe('tool input unions', () => {
     const task = schemas.get('Task')
     expect(Object.keys(task?.properties ?? {})).toEqual(
       expect.arrayContaining([
-        'delivery',
         'description',
         'isolation',
         'prompt',
@@ -79,6 +78,7 @@ describe('tool input unions', () => {
         'tasks',
       ]),
     )
+    expect(task?.properties).not.toHaveProperty('delivery')
     expect(task?.properties['run_in_background']).toMatchObject({ type: 'boolean' })
     expect(task?.properties['isolation']).toMatchObject({ type: 'object' })
     const control = schemas.get('TaskControl')

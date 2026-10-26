@@ -188,22 +188,8 @@ export const GateDefinitionSchema = Type.Union([
   ]),
 ])
 
-export const DeliveryBindingSchema = Type.Union([
-  Type.Object(
-    { issue: Type.String({ minLength: 1, maxLength: 256 }), kind: Type.Literal('managed') },
-    { additionalProperties: false },
-  ),
-  Type.Object({ kind: Type.Literal('independent') }, { additionalProperties: false }),
-])
-
-export function parseDeliveryBinding<Input>(input: Input): DeliveryBinding {
-  if (!Value.Check(DeliveryBindingSchema, input)) throw new Error('Invalid delivery binding.')
-  return Value.Decode(DeliveryBindingSchema, input)
-}
-
 const SingleTaskFields = {
   capability_profile: Type.Optional(Type.String({ minLength: 1 })),
-  delivery: Type.Optional(DeliveryBindingSchema),
   cwd: Type.Optional(Type.String({ minLength: 1 })),
   description: Type.String({ minLength: 1 }),
   gates: Type.Optional(Type.Array(GateDefinitionSchema)),
@@ -600,7 +586,6 @@ export const ExecutionContractV4Schema = Type.Object({
 
 export const ExecutionContractV5Schema = Type.Object({
   ...ExecutionContractV4Schema.properties,
-  delivery: Type.Optional(DeliveryBindingSchema),
   version: Type.Literal(5),
 })
 
@@ -841,7 +826,6 @@ export type ExecutionContractV1 = StaticDecode<typeof ExecutionContractV1Schema>
 export type EvidenceSection = StaticDecode<typeof EvidenceSectionSchema>
 export type GateDefinition = StaticDecode<typeof GateDefinitionSchema>
 export type GateResult = StaticDecode<typeof GateResultSchema>
-export type DeliveryBinding = StaticDecode<typeof DeliveryBindingSchema>
 export type DependencyMode = StaticDecode<typeof DependencyModeSchema>
 export type HeadState = StaticDecode<typeof HeadStateSchema>
 export type InPlaceReceipt = StaticDecode<typeof InPlaceReceiptSchema>
@@ -880,19 +864,15 @@ export type TaskToolInput = StaticDecode<typeof TaskInputSchema>
 export type TaskNodeInput = StaticDecode<typeof TaskNodeInputSchema>
 
 const TaskJsonFieldsSchema = Type.Object({
-  delivery: Type.Optional(Type.Unknown()),
   outputSchema: Type.Optional(Type.Unknown()),
   gates: Type.Optional(Type.Array(GateDefinitionSchema)),
 })
 
-function preserveTaskJson<
-  Input,
-  Output extends Pick<TaskInput, 'delivery' | 'outputSchema' | 'gates'>,
->(input: Input, output: Output): Output {
+function preserveTaskJson<Input, Output extends Pick<TaskInput, 'outputSchema' | 'gates'>>(
+  input: Input,
+  output: Output,
+): Output {
   if (!Value.Check(TaskJsonFieldsSchema, input)) return output
-  if (input.delivery !== undefined) {
-    output.delivery = parseDeliveryBinding(input.delivery)
-  }
   if (Object.hasOwn(input, 'outputSchema'))
     output.outputSchema = decodeJsonValue(input.outputSchema)
   if (input.gates !== undefined) {

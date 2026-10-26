@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Value } from 'typebox/value'
 import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { CapabilityRegistry } from '../src/capabilities.ts'
@@ -21,7 +20,6 @@ import {
 import { isReadonlyByDefault, resolveRole } from '../src/roles.ts'
 import {
   type CoordinationRunState,
-  DeliveryBindingSchema,
   decodeSingleTaskInput,
   SingleTaskInputSchema,
   TaskInputSchema,
@@ -523,32 +521,16 @@ describe('coordination primitives', () => {
     expect(recentRuns(terminal).some((run) => run.runId === 'terminal-0')).toBe(false)
   })
 
-  it.each([
-    [{ kind: 'managed' }, undefined, 'Decode'],
-    [
-      { issue: 'unexpected', kind: 'independent' },
-      { kind: 'independent' },
-      'Invalid delivery binding',
-    ],
-  ])(
-    'rejects malformed delivery bindings even when TypeBox decode can clean them',
-    (delivery, cleaned, expectedBoundaryError) => {
-      expect(Value.Check(DeliveryBindingSchema, delivery)).toBe(false)
-      if (cleaned === undefined) {
-        expect(() => Value.Decode(DeliveryBindingSchema, delivery)).toThrow('Decode')
-      } else {
-        expect(Value.Decode(DeliveryBindingSchema, delivery)).toEqual(cleaned)
-      }
-      expect(() =>
-        decodeSingleTaskInput({
-          delivery,
-          description: 'Malformed delivery',
-          prompt: 'Do not start.',
-          subagent_type: 'explore',
-        }),
-      ).toThrow(expectedBoundaryError)
-    },
-  )
+  it('drops the retired delivery binding from decoded Task input', () => {
+    expect(
+      decodeSingleTaskInput({
+        delivery: { issue: 'retired', kind: 'managed' },
+        description: 'Retired delivery binding',
+        prompt: 'Do not start.',
+        subagent_type: 'explore',
+      }),
+    ).not.toHaveProperty('delivery')
+  })
 
   it('keeps the combined Task schema inside its measured context budget', () => {
     const singleBytes = Buffer.byteLength(JSON.stringify(SingleTaskInputSchema), 'utf8')

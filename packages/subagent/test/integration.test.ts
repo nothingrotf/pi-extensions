@@ -1173,7 +1173,7 @@ describe('subagent Task integration', () => {
     }
   })
 
-  it('adopts a structured delivery binding while upgrading a legacy v1 resume', async () => {
+  it('upgrades a legacy v1 execution contract on resume', async () => {
     const harness = await createHarness()
     try {
       const id = agentId(await runTask(harness, baseInput))
@@ -1206,17 +1206,9 @@ describe('subagent Task integration', () => {
       })
       harness.runtime.restore(harness.context())
 
-      const resumed = await runTask(harness, {
-        ...baseInput,
-        delivery: { issue: 'legacy-v1', kind: 'managed' },
-        prompt: 'second',
-        resume: id,
-      })
+      const resumed = await runTask(harness, { ...baseInput, prompt: 'second', resume: id })
       expect(resumed).toContain('child:first|second')
-      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({
-        delivery: { issue: 'legacy-v1', kind: 'managed' },
-        version: 5,
-      })
+      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({ version: 5 })
     } finally {
       await harness.close()
     }
@@ -1255,14 +1247,13 @@ describe('subagent Task integration', () => {
 
       const resumed = await runTask(harness, {
         ...input,
-        delivery: { issue: 'legacy-v2', kind: 'managed' },
         prompt: 'second',
         resume: id,
       })
       expect(resumed).toContain('child:first|second')
       const executionContext = harness.state.childSystemPrompts.at(-1)
       expect(executionContext).toContain(
-        '# Execution contract\nMode: permissive.\nDelivery binding: {"issue":"legacy-v2","kind":"managed"}.\nEffective tools: read.\nOutput schema: {"type":"string"}.\nOutput gates: [{"expected":"completed","type":"status"}].',
+        '# Execution contract\nMode: permissive.\nEffective tools: read.\nOutput schema: {"type":"string"}.\nOutput gates: [{"expected":"completed","type":"status"}].',
       )
     } finally {
       await harness.close()
@@ -1300,98 +1291,62 @@ describe('subagent Task integration', () => {
 
       const resumed = await runTask(harness, {
         ...input,
-        delivery: { issue: 'legacy-v3', kind: 'managed' },
         prompt: 'second',
         resume: id,
       })
       expect(resumed).toContain('child:first|second')
       const executionContext = harness.state.childSystemPrompts.at(-1)
       expect(executionContext).toContain(
-        '# Execution contract\nMode: permissive.\nDelivery binding: {"issue":"legacy-v3","kind":"managed"}.\nEffective tools: read.\nOutput schema: {"type":"string"}.\nOutput gates: [{"expected":"completed","type":"status"}].',
+        '# Execution contract\nMode: permissive.\nEffective tools: read.\nOutput schema: {"type":"string"}.\nOutput gates: [{"expected":"completed","type":"status"}].',
       )
     } finally {
       await harness.close()
     }
   })
 
-  it('adopts a structured delivery binding while upgrading a legacy v4 resume', async () => {
+  it('upgrades a legacy v4 execution contract on resume', async () => {
     const harness = await createHarness()
     try {
       const id = agentId(await runTask(harness, baseInput))
       const state = latestState(harness)
       const record = state.records.find((candidate) => candidate.agentId === id)
       if (record?.execution?.version !== 5) throw new Error('The v5 execution contract is missing.')
-      const { delivery: _delivery, version: _version, ...legacy } = record.execution
+      const { version: _version, ...legacy } = record.execution
       harness.pi.appendEntry('pi-subagent-state', {
         ...state,
         records: [{ ...record, execution: { ...legacy, version: 4 } }],
       })
       harness.runtime.restore(harness.context())
 
-      const resumed = await runTask(harness, {
-        ...baseInput,
-        delivery: { issue: 'legacy-managed', kind: 'managed' },
-        prompt: 'second',
-        resume: id,
-      })
+      const resumed = await runTask(harness, { ...baseInput, prompt: 'second', resume: id })
       expect(resumed).toContain('child:first|second')
-      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({
-        delivery: { issue: 'legacy-managed', kind: 'managed' },
-        version: 5,
-      })
+      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({ version: 5 })
     } finally {
       await harness.close()
     }
   })
 
-  it('adopts a structured delivery binding for an unbound v5 resume', async () => {
+  it('resumes a retained v5 record that still carries a retired delivery binding', async () => {
     const harness = await createHarness()
     try {
       const id = agentId(await runTask(harness, baseInput))
       const state = latestState(harness)
       const record = state.records.find((candidate) => candidate.agentId === id)
       if (record?.execution?.version !== 5) throw new Error('The v5 execution contract is missing.')
-      const { delivery: _delivery, ...unbound } = record.execution
       harness.pi.appendEntry('pi-subagent-state', {
         ...state,
-        records: [{ ...record, execution: unbound }],
+        records: [
+          {
+            ...record,
+            execution: { ...record.execution, delivery: { issue: 'retired', kind: 'managed' } },
+          },
+        ],
       })
       harness.runtime.restore(harness.context())
 
-      const resumed = await runTask(harness, {
-        ...baseInput,
-        delivery: { issue: 'unbound-v5', kind: 'managed' },
-        prompt: 'second',
-        resume: id,
-      })
+      const resumed = await runTask(harness, { ...baseInput, prompt: 'second', resume: id })
       expect(resumed).toContain('child:first|second')
-      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({
-        delivery: { issue: 'unbound-v5', kind: 'managed' },
-        version: 5,
-      })
-    } finally {
-      await harness.close()
-    }
-  })
-
-  it('keeps a retained v5 independent delivery binding immutable on resume', async () => {
-    const harness = await createHarness()
-    try {
-      const id = agentId(
-        await runTask(harness, { ...baseInput, delivery: { kind: 'independent' } }),
-      )
-      expect(
-        await runTask(harness, {
-          ...baseInput,
-          delivery: { issue: 'managed', kind: 'managed' },
-          resume: id,
-        }),
-      ).toContain('must preserve the original delivery binding')
-      await runTask(harness, { ...baseInput, prompt: 'second', resume: id })
-      expect(harness.runtime.getRecord(id)?.execution).toMatchObject({
-        delivery: { kind: 'independent' },
-        version: 5,
-      })
+      expect(harness.state.childSystemPrompts.at(-1)).not.toContain('Delivery binding')
     } finally {
       await harness.close()
     }
@@ -1413,29 +1368,6 @@ describe('subagent Task integration', () => {
       await harness.close()
     }
   })
-
-  it.each([{ kind: 'managed' }, { issue: 'unexpected', kind: 'independent' }])(
-    'rejects malformed persisted delivery bindings during restore',
-    async (delivery) => {
-      const harness = await createHarness()
-      try {
-        const id = agentId(await runTask(harness, baseInput))
-        const state = latestState(harness)
-        const record = state.records.find((candidate) => candidate.agentId === id)
-        if (record?.execution?.version !== 5)
-          throw new Error('The v5 execution contract is missing.')
-        harness.pi.appendEntry('pi-subagent-state', {
-          ...state,
-          records: [{ ...record, execution: { ...record.execution, delivery } }],
-        })
-        expect(() => harness.runtime.restore(harness.context())).toThrow(
-          'The persisted subagent state is invalid.',
-        )
-      } finally {
-        await harness.close()
-      }
-    },
-  )
 
   it('caps oversized restored state by update recency', async () => {
     const harness = await createHarness(258)

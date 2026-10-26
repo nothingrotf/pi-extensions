@@ -23,7 +23,6 @@ import {
 import { registerTaskControl } from './control.ts'
 import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
-import { registerTaskExecution } from './execute-event.ts'
 import { taskRoleLabel } from './format.ts'
 import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs.ts'
 import { JobProgress } from './progress.ts'
@@ -316,17 +315,6 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
       capabilityProfileSources.add(registration.sourceId)
     },
   )
-  const unregisterTaskExecution = registerTaskExecution(
-    pi,
-    async (input, signal, ctx, toolCallId) => {
-      const children = new RailChildReporter(rail, runtime, toolCallId)
-      try {
-        return await executeTask(runtime, input, signal, ctx, children.started)
-      } finally {
-        children.stop()
-      }
-    },
-  )
   pi.events.emit(SUBAGENT_CAPABILITY_DISCOVERY_EVENT, { version: 1 })
   pi.events.emit(SUBAGENT_DISCOVERY_EVENT, { version: 1 })
   pi.events.emit(SUBAGENT_CAPABILITY_PROFILE_DISCOVERY_EVENT, { version: 1 })
@@ -388,7 +376,6 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
     unregisterAgentEvents()
     unregisterCapabilityEvents()
     unregisterCapabilityProfileEvents()
-    unregisterTaskExecution()
     for (const unregister of agentRegistrations.values()) unregister()
     agentRegistrations.clear()
     if (await host.stopSession(ctx)) tui.sessionShutdown(ctx)
@@ -690,8 +677,6 @@ async function executeTask(
 
 export { acquireSubagentController } from './controller.ts'
 export { setAwakeTimeout } from './awake-timer.ts'
-export { ExecuteTaskRequestSchema, SUBAGENT_EXECUTE_TASK_EVENT } from './execute-event.ts'
-export type { ExecuteTaskRequest } from './execute-event.ts'
 export { captureWorkspaceSnapshot, materializeDependencyDirectories } from './git-isolation.ts'
 export { linkedWorktreeRoot } from './in-place.ts'
 export { latestState as readSubagentState } from './state.ts'
@@ -728,7 +713,6 @@ export type {
   BatchTaskInput,
   CapabilityContract,
   CoordinationRunState,
-  DeliveryBinding,
   ExecutionContractV4,
   ExecutionContractV5,
   GateDefinition,
