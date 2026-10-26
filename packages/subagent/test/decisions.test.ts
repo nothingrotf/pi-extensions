@@ -66,7 +66,9 @@ describe('real parent decisions', () => {
     try {
       const h = harness()
       const response = h.broker.request(h.handle, 'A decision', h.controller.signal)
-      const rejection = expect(response).rejects.toThrow('No authorization was granted')
+      const rejection = expect(response).rejects.toThrow(
+        'No authorization was granted. Do not perform the requested change. Finish and retain the work',
+      )
       await vi.advanceTimersByTimeAsync(1000)
       await rejection
       expect(h.deliveries.list()[0]?.state).toBe('cancelled')

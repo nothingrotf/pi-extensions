@@ -880,11 +880,17 @@ export async function executeTaskControl(
   if (input.action === 'join') {
     const destination = await scope.destination(ctx, agentId).catch(() => undefined)
     if (destination === undefined) {
+      const snapshot = scope.snapshots().find((candidate) => candidate.agentId === agentId)
       return {
         action: 'join',
         agent_id: agentId,
         outcome: 'rejected',
-        reason: 'invalid-lineage',
+        reason:
+          snapshot?.status === 'running'
+            ? 'running'
+            : snapshot?.isolation === undefined
+              ? 'not-staged'
+              : 'invalid-lineage',
         receipt: null,
         revision: runtime.currentRevision,
       }

@@ -1016,7 +1016,7 @@ describe('subagent Task integration', () => {
     },
   )
 
-  it('fails closed instead of deadlocking a foreground coordinator decision', async () => {
+  it('keeps a foreground child running and returns its open decision without authorization', async () => {
     const harness = await createHarness()
     try {
       const result = await runTask(harness, {
@@ -1024,9 +1024,10 @@ describe('subagent Task integration', () => {
         prompt: 'REQUEST_PARENT',
         readonly: true,
       })
+      expect(result).toContain('decision:')
       expect(result).toContain('No authorization was granted')
-      expect(result).toContain('run_in_background=true')
-      expect(harness.runtime.latestResult(agentId(result))?.status).toBe('aborted')
+      expect(result).toContain('report this decision with its options and your recommendation')
+      expect(harness.runtime.latestResult(agentId(result))?.status).toBe('completed')
       expect(harness.state.sideQuestions).toHaveLength(0)
     } finally {
       await harness.close()

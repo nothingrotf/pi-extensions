@@ -339,8 +339,16 @@ export async function captureIsolation(workspace: WriterWorkspace): Promise<Isol
     .filter((repository) => repository.relativePath.length > 0)
     .map((repository) => repository.relativePath)
   const actualNested = await nestedRepositories(workspace.rootWorktree)
-  if (!(await matchesRepositoryBoundaries(workspace, expectedNested, actualNested))) {
-    return failureReceipt(workspace, 'The isolated task changed a nested repository boundary.')
+  const changedBoundaries = await changedRepositoryBoundaries(
+    workspace,
+    expectedNested,
+    actualNested,
+  )
+  if (changedBoundaries.length > 0) {
+    return failureReceipt(
+      workspace,
+      `The isolated task changed a nested repository boundary: ${changedBoundaries.join(', ')}. A Git repository created inside the worktree must sit under a path that the repository .gitignore ignores. The worktree is retained at ${workspace.rootWorktree}.`,
+    )
   }
 
   const repositories: IsolationRepositoryReceipt[] = []
@@ -372,12 +380,14 @@ export async function captureIsolation(workspace: WriterWorkspace): Promise<Isol
   }
 }
 
-async function matchesRepositoryBoundaries(
+async function changedRepositoryBoundaries(
   workspace: WriterWorkspace,
   expected: readonly string[],
   actual: readonly string[],
-): Promise<boolean> {
-  if (expected.some((path) => !actual.includes(path))) return false
+): Promise<string[]> {
+  const changed = expected
+    .filter((path) => !actual.includes(path))
+    .map((path) => `${path} (removed)`)
   const references: string[] = []
   for (const path of actual) {
     if (expected.includes(path) || references.some((parent) => path.startsWith(`${parent}/`)))
@@ -388,13 +398,22 @@ async function matchesRepositoryBoundaries(
           repository.relativePath === '' || path.startsWith(`${repository.relativePath}/`),
       )
       .sort((left, right) => right.relativePath.length - left.relativePath.length)[0]
-    if (owner === undefined) return false
     const relativePath =
-      owner.relativePath === '' ? path : path.slice(owner.relativePath.length + 1)
-    if (!(await isBaselineReference(owner, relativePath))) return false
+      owner === undefined
+        ? undefined
+        : owner.relativePath === ''
+          ? path
+          : path.slice(owner.relativePath.length + 1)
+    if (
+      owner === undefined ||
+      relativePath === undefined ||
+      !(await isBaselineReference(owner, relativePath))
+    ) {
+      changed.push(`${path} (added)`)
+    }
     references.push(path)
   }
-  return true
+  return changed
 }
 
 async function isBaselineReference(

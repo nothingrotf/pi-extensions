@@ -431,6 +431,33 @@ describe('subagent Task integration: registered agents and preflight', () => {
     180_000,
   )
 
+  it('requires identity fields for a new Task but not for a resume', async () => {
+    const harness = await createHarness()
+    try {
+      const missing = await runTask(harness, { prompt: 'first', subagent_type: 'explore' })
+      expect(missing).toContain('A new Task requires description and subagent_type')
+      expect(harness.runtime.listSnapshots()).toHaveLength(0)
+      const first = await runTask(harness, { ...baseInput, readonly: true })
+      const resumed = await runTask(harness, { prompt: 'second', resume: agentId(first) })
+      expect(resumed).not.toContain('Task failed')
+      expect(harness.runtime.getRecord(agentId(first))?.description).toBe(baseInput.description)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports a read-only Task as having nothing staged to join', async () => {
+    const harness = await createHarness()
+    try {
+      const result = await runTask(harness, { ...baseInput, readonly: true })
+      const joined = await runTaskControl(harness, { action: 'join', agent_id: agentId(result) })
+      expect(joined).toContain('"outcome": "rejected"')
+      expect(joined).toContain('"reason": "not-staged"')
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('rejects a join when its recorded execution directory disappears', async () => {
     const harness = await createHarness()
     try {

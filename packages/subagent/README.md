@@ -31,12 +31,12 @@ Continue the same child:
 
 ```ts
 Task({
-  description: 'Continue metadata review',
   prompt: 'Now report the package version.',
-  subagent_type: 'explore',
   resume: '<agent-id>',
 })
 ```
+
+A resume needs only `resume` and `prompt`. The runtime fills `description` and `subagent_type` from the run record. Explicit values must match the original.
 
 Select a model, effort, and priority path:
 
@@ -71,6 +71,9 @@ This field belongs only to a single Task, never a `tasks[]` node or batch wrappe
 The graph scheduler owns batch execution. Invalid argument errors include a corrective shape without executing the rejected call.
 
 The runtime automatically adds writer isolation to a mutable background Task. Its accepted result remains staged until a safe join barrier.
+When the `cwd` of a direct root writer is in a linked Git worktree outside the session repository, the runtime runs it in place instead. This also applies when a foreground writer in that worktree resumes in the background.
+
+A Task stops after six hours of awake time. Time while the machine sleeps does not count toward that limit.
 
 Set `readonly` to `true` to remove shell and mutation tools.
 
@@ -509,6 +512,8 @@ The runtime creates no copy and performs no join. The child edits the worktree t
 - The runtime holds an exclusive lease on the worktree for the run. A second in-place Task in the same worktree fails until the first one settles. Read-only Tasks do not take the lease.
 - A role that requires manual isolation also accepts `in-place`, because nothing is integrated.
 - Resume continues in the same worktree without reconstruction.
+- A mutable Task without an isolation policy runs in place by default when its `cwd` is in a linked worktree outside the session repository.
+- A resume can add `in-place` to a Task that had no isolation policy.
 
 The terminal record contains an `inPlace` receipt with the base tree at admission, the result tree at capture, the current `HEAD`, and a binary patch between the two trees for each repository.
 The `isolation` evidence section returns this receipt.
@@ -779,7 +784,7 @@ Each child receives these private tools:
 
 An advisory answer cannot authorize scope changes or claim that the actual coordinator replied. The question and advisory answer enter the transcript as a `subagent-intercom` message.
 
-Only direct background Tasks can wait through `request_parent`. Foreground, nested, and graph Tasks fail closed with handoff guidance instead of blocking their coordinator.
+Only direct background Tasks can wait through `request_parent`. In foreground, nested, and graph Tasks, the call returns an error without authorization, and the child keeps running. The child finishes and retains its authorized work, then reports the open decision. A decision that misses its five-minute deadline returns the same guidance.
 
 Inspect pending notices and decision requests:
 

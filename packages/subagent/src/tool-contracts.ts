@@ -12,7 +12,7 @@ export const taskControlToolGuidelines = [
 ]
 
 const batchRecovery =
-  'Task argument recovery: use a complete single-Task object. Root Task also accepts { tasks: [{ id, description, prompt, subagent_type }], context? }; nested Task does not accept graphs. run_in_background belongs only to a single Task. The graph scheduler owns batch execution; do not put run_in_background on nodes or the batch wrapper. Correct the rejected arguments before retrying.'
+  'Task argument recovery: use a complete single-Task object, or { resume, prompt } to continue an existing Agent ID. Root Task also accepts { tasks: [{ id, description, prompt, subagent_type }], context? }; nested Task does not accept graphs. run_in_background belongs only to a single Task. The graph scheduler owns batch execution; do not put run_in_background on nodes or the batch wrapper. Correct the rejected arguments before retrying.'
 
 export function registerHybridTaskTool<Parameters extends TSchema, Details, State>(
   pi: ExtensionAPI,
