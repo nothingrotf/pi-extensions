@@ -17,8 +17,8 @@ Run `pi --list-models` to detect available `provider/model-id` values. A concret
 
 The default role-to-model mapping is the rule shape shown in step 5 below. If `~/.agents/rules/pstack-models.md` already exists, read it and treat its values as the current choices. Otherwise start from those defaults.
 
-`how critics` is a known legacy role.
-The runtime accepts its valid configuration but ignores its selectors and publishes no dispatch role for it.
+`how critics`, `code review`, `runtime verification`, and `publication` are known legacy roles.
+The runtime accepts their valid configuration but ignores their selectors and publishes no dispatch role for them.
 Before confirmation, list each known legacy row that the rewrite will remove and explain that it has no runtime effect.
 Preserve the choices of active roles.
 Unknown roles remain errors, not legacy compatibility.
@@ -28,7 +28,7 @@ If unknown roles occur, report the errors and resolve them with the operator bef
 
 Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Every list is an availability pool. The dispatching skill owns its count and explicitly selects each required entry when choices differ, including `model: "inherit-parent"` for an inherited entry. List length never causes fanout or sets a skill's count. Prefer AskQuestion over free text.
 
-`judgment and prose` is only for prose or evidence synthesis, never code review or verification. The default flow takes a second opinion from `arena cross-judge pool` and verification from `swarm workers`. `arena cross-judge pool`, `arena runners`, `architect runners`, and `interrogate reviewers` are availability pools whose skills own selection and count. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
+`judgment and prose` is only for prose or evidence synthesis, never code review or verification. A second opinion comes from `arena cross-judge pool` and verification from `swarm workers`. `arena cross-judge pool`, `arena runners`, `architect runners`, and `interrogate reviewers` are availability pools whose skills own selection and count. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
 
 ### 4. Validate
 
@@ -69,11 +69,9 @@ Every dispatch must pass the selected role as `Task.role`, including inherited m
 
 Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing and unknown dispatch roles fail clearly. Grouped file keys expand to exact roles. The configuration aliases `divergent` and `synthesizer` mean `reflect divergent` and `reflect synthesizer`; use the full names in Task calls.
 
-Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry or compatibility derivation allow explicit models before the agent default and parent fallback.
+Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry allow explicit models before the agent default and parent fallback.
 
 A pool with distinct choices requires an explicit selection, never first-entry selection or hidden list-size fanout. Identical choices may omit the selector. Skills own all dispatch counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
-
-`code review`, `runtime verification`, and `publication` are managed-delivery roles. Managed delivery runs only on an explicit operator request, so this skill does not write them. When they are absent, `code review` and `runtime verification` use the `arena cross-judge pool` choices, then `judgment and prose`, and `publication` uses `judgment and prose`. Add an explicit line only when managed delivery needs a different choice. Preserve existing lines for these roles on a rerun.
 
 The runtime preserves the role through execution and display. A role never grants capabilities or comes from a guessed model name.
 

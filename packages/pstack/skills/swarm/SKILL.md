@@ -26,7 +26,6 @@ Use `todo_write` to create one item per phase before you launch anything.
    For a model race, name each arm's model up front.
    If the configured scalar policy prevents the race, request a policy change instead of bypassing it.
 
-   Managed verification uses its delivery role's pool instead, as Phase B defines.
    Verify each concrete selector against the active Pi runtime.
    If Pi rejects it, mark that arm `BLOCKED`.
    Do not substitute a model.
@@ -35,12 +34,8 @@ Use `todo_write` to create one item per phase before you launch anything.
 ## Phase B: Fan out
 
 Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
-For ordinary coverage, set `Task.role` to `swarm workers` and `delivery: { kind: "independent" }`.
+Set `Task.role` to `swarm workers`.
 Pass `capability_profile: "pstack-leaf"` for leaves or `pstack-nested` for owners whose workflow requires delegation.
-
-For managed verification, use `code review` for static analysis or `runtime verification` for shell proof.
-Bind each worker with `delivery: { kind: "managed", issue: "<existing issue id>" }`.
-Select a permitted model from that role's pool, explicitly when choices differ.
 Retain the declared worker count, never the pool size.
 
 Spawn all N workers in one message with parallel `Task` calls. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
@@ -50,18 +45,11 @@ Use `readonly: true` for static analysis. A worker that runs shell verification 
 Every brief stands alone.
 Include the goal, scope, exact slice or race arm, verification method, and report contract.
 
-For an independent delivery:
+Report contract:
 
 - Require `outputSchema` with `schemaMode: "strict"`.
 - The schema contains `status` with `PASS`, `ISSUES`, or `BLOCKED`, plus `summary`, `evidence`, and `gaps`.
 - Require an output artifact and status, schema-valid, artifact-present, and `/status` membership gates.
-
-Omit `outputSchema` and `schemaMode` in a managed delivery.
-Preflight supplies the exact `DeliveryOutputSchema` and current criteria.
-Carry the contract below in evidence, findings, and `reason`.
-Use only registered criterion IDs and preserve their required coverage.
-New review findings belong in `findings`, not `criteria`.
-Record missing proof against its registered criterion without claiming acceptance.
 
 ## Verifiable work contract
 
@@ -99,7 +87,6 @@ Use this schema for the `subject` property:
 
 For measurements, also require a structured `method` field next to `subject` in the report schema.
 Include sample count, sample definition, order, runtime, and conditions.
-Managed reports retain `DeliveryOutputSchema` instead of adding these fields.
 The `summary`, `evidence`, and `gaps` state the assigned contract.
 Name the actual checks and results, not a generic `evidence` field.
 The `evidence` field cites the checks and receipts that support each claim.
@@ -108,7 +95,7 @@ The `gaps` field lists every unmet part of the contract.
 Missing or incompatible identity is a gap, never `PASS`.
 An unestablished identity is missing proof, even when the schema passes.
 Missing or incompatible method is a gap, never `PASS`, when measurement is assigned.
-For independent reports, return `ISSUES` for demonstrated discrepancies or `BLOCKED` for unavailable required proof.
+Return `ISSUES` for demonstrated discrepancies or `BLOCKED` for unavailable required proof.
 
 If a worker drops out, proceed with N-1 and note it.
 
@@ -119,7 +106,7 @@ After native notifications arrive, inspect each terminal result with `TaskContro
 For product proof, match the observed identity and any required method to the brief.
 Check that recorded evidence supports the verdict. Keep every demonstrated defect, not only the first.
 
-If the proof exists with receipts intact and only the report is defective, repair the report through the supported path. In a managed delivery, use `pstack_delivery` with `action: "repair"` per [Delivery operations](../poteto-mode/references/delivery-operations.md), without a new Task or model run. Missing execution needs real proof, not repair. Obtain it through an authorized execution. Existing diagnoses still apply.
+If the proof exists with receipts intact and only the report is defective, correct the report from the retained receipts without a new Task or model run. Missing execution needs real proof, not repair. Obtain it through an authorized execution. Existing diagnoses still apply.
 
 For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
 

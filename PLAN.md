@@ -1,5 +1,7 @@
 # Delivery latency plan
 
+> [ADR 0004](docs/adr/0004-remove-managed-delivery.md) removed managed delivery. References to the ledger, `throughput.ts`, and the managed preflight describe the state before that decision.
+
 Ranked by wall-clock gain. Effort, confidence, and risk are separate columns, not part of the order.
 
 ## Method

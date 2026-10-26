@@ -160,7 +160,7 @@ describe('poteto-mode', () => {
     expect(opening).toContain('partial success')
     expect(opening).toContain('Load the bundled `pr` skill from `../pr/SKILL.md`')
     expect(opening).not.toContain('~/.agents/skills/pr')
-    expect(opening).toContain('Their prompt requires the `pr` skill for the PR body.')
+    expect(opening).toContain('The owner commits, pushes its own branch, and opens the PR')
     expect(opening).not.toContain('`## What changed`')
     const plan = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
     expect(plan).toContain('Lane 1. Regression lane against trunk')

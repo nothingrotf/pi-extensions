@@ -2,8 +2,6 @@
 
 **You own the verdicts, never the PRs. One owner role carries each PR from build to merge, and nothing merges until your verifiers, which never wrote the code, have proven the code that lands.**
 
-This is the default flow. With an explicit managed delivery request, follow the Autopilot-full section of `../references/managed-autopilot.md` instead.
-
 A verdict covers one patch and green CI covers one head. Step 4 runs a full swarm once, and again only for a major change. The patch-id rule in `playbooks/shipping.md` can carry a lane's result, and every new head needs its own green CI.
 
 1. **The operator's gates come first.** The grant covers only the queue's items, so items the operator names as theirs and PRs outside the queue stop at merge-ready. A request to state the plan is not a go.

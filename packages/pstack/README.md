@@ -25,11 +25,10 @@ Restart Pi after installation.
 ## Activation
 
 Pstack is opt-in. Invoke `/skill:poteto-mode` or explicitly request a pstack workflow to activate it.
-Ordinary coding requests do not activate managed delivery or pstack delegation.
-Managed delivery is a separate opt-in. A `/poteto-mode` run uses the default flow unless the operator explicitly requests managed delivery.
+Ordinary coding requests do not activate pstack delegation.
 Installation, model configuration, and references to pstack in logs or bug reports do not authorize activation.
-The root prompt states this boundary before the model policy. Delivery tool descriptions repeat it.
-The extension enforces model selection and delivery contracts, but activation remains a model instruction rather than a runtime authorization gate.
+The root prompt states this boundary before the model policy.
+The extension enforces model selection, but activation remains a model instruction rather than a runtime authorization gate.
 
 ## Resources
 
@@ -140,12 +139,10 @@ These later upstream commits are also synchronized:
 
 The Pi port adapts these commits:
 
-- A fix round, a follow-up, a retry, and the next queue item go to a fresh agent. The managed delivery ledger supplies the consolidated scope. The implementation owner of an issue with an issue workspace is the exception: it resumes for each correction.
+- A fix round, a follow-up, a retry, and the next queue item go to a fresh agent with consolidated scope.
 - Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
-- Isolated owners do not push. In Autopilot-full, the root publishes each verifiable unit as a WIP snapshot on a `wip/<issue>` branch.
-- In Autopilot-stack, the root publishes each WIP snapshot to the layer's draft pull request in the stack. Publication marks it ready only after independent acceptance.
-- The root keeps one destination worktree per issue in flight and releases it after publication with `scripts/release-worktree.sh`.
-- Autopilot-stack starts a dependent layer only after its parent layer is accepted and published.
+- Each owner works in place in a linked worktree on its own branch, so it pushes and opens its own PR.
+- The root removes each linked worktree after its PR lands or closes with `scripts/release-worktree.sh`.
 - The built-in PR tool rule is omitted because Pi has no built-in PR tool.
 - The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
 
@@ -190,8 +187,7 @@ These upstream changes through [#634](https://github.com/cursor/plugins/pull/634
 The Pi port adapts or omits these parts:
 
 - The runtime model policy fixes the model, effort, and speed of each role. The upstream rule that picks a reasoning level and speed for each subagent has no counterpart.
-- The playbooks keep the Graphite and GitHub stack backends, the delivery engine, and one independent reviewer per round. They take the principles from #613 without its base-chain landing steps or the Origin forge.
-- The delivery contract invalidates a code verdict on any patch change, so the upstream rule that carries a lane result across a test-only patch change has no counterpart.
+- The playbooks keep the Graphite and GitHub stack backends. They take the principles from #613 without its base-chain landing steps or the Origin forge.
 - The bundled `orch` keeps the upstream `--forge origin` choice. The Pi playbooks use the default `gh` forge.
 - The orchestration frontier no longer needs a backend adapter, so the `gt` compatibility shim is removed.
 - `ketchup` still draws charts with an available tool instead of `/visualize`.
@@ -247,16 +243,14 @@ The extension reads `~/.agents/rules/pstack-models.md` at startup, before each r
 Configured selectors are mandatory, including effort and fast mode. An explicit `Task.model` outside the configured choices fails before execution.
 Selectors for the `openai` and `openai-codex` providers match each other for the same model, effort, and fast mode. Scalar roles can omit `model`. Distinct panel or pool choices require an explicit selector, including `inherit-parent` for an inherited entry. Identical choices can omit it. Skills determine panel counts; the runtime never picks the first model or fans out.
 
-The default flow uses the upstream roles. A second opinion selects one entry of `arena cross-judge pool` from another model family. Verification uses `swarm workers`. The branch owner publishes its own PR. `judgment and prose` remains for prose and evidence synthesis.
+Pstack uses the upstream roles. A second opinion selects one entry of `arena cross-judge pool` from another model family. Verification uses `swarm workers`. The branch owner publishes its own PR. `judgment and prose` remains for prose and evidence synthesis.
 
-`code review`, `runtime verification`, and `publication` exist only for managed delivery, and `/setup-pstack` does not write them. When they are absent, review and verification use `arena cross-judge pool`, then `judgment and prose`, and `publication` uses `judgment and prose`. Explicit settings override these compatibility defaults. Missing files and otherwise absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
+The parser ignores older `how critics`, `code review`, `runtime verification`, and `publication` lines, so those files stay valid. Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or fast settings fail affected selections.
 
 Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
-In an issue workspace, runtime verifiers run in place. Otherwise, they use `isolation: { mode: "worktree", integration: "manual" }`.
+Runtime verifiers use `isolation: { mode: "worktree", integration: "manual" }`.
 Their artifacts remain inspectable, but the runtime rejects `join`.
-Omitted runtime-verification isolation defaults to `manual`. Explicit `apply`, `branch`, or read-only execution fails before dispatch.
-Managed reviewer and verifier resumes inherit their recorded directory and isolation when omitted.
 Repository writers use relative paths in the effective child workspace.
 An isolated worktree separates Git state but is not an OS sandbox.
 Use the optional `pstack-sandbox` profile for OS-sandboxed runtime verification.
@@ -264,19 +258,16 @@ Never bypass it through an absolute source-checkout path or push its synthetic h
 
 Read [Task contracts](skills/poteto-mode/references/task-contracts.md) for executable dispatch examples and coordinator decisions.
 
-After updating, reload Pi before new dispatches. Before adding the three new role keys to the global policy, reload every older session that reads it. Older loaded registries reject those keys and block fresh pstack Tasks. Stage the new policy separately when active sessions cannot reload yet. Later edits to recognized role selectors do not require another reload.
+After updating, reload Pi before new dispatches. Later edits to recognized role selectors do not require another reload.
 Existing child contracts do not gain tools automatically.
 If a retained capability contract changed, start a fresh child from its saved brief and evidence instead of weakening resume validation.
 Older records without a role remain unlabeled rather than receiving a guessed role.
 
 ## Verification sandbox
 
-Select `capability_profile: "pstack-sandbox"` for a mutable verifier Task with `readonly: false`. In managed delivery, that verifier uses `role: "runtime verification"`.
-The existing verifier isolation contract still requires a private worktree or the dedicated issue worktree.
+Select `capability_profile: "pstack-sandbox"` for a mutable verifier Task with `readonly: false`.
+The verifier isolation contract still requires a private worktree.
 The profile does not permit nested delegation.
-
-For managed delivery, pass `review: { sandbox: true }` to `pstack_deliver`.
-Only the runtime verifier receives the sandbox profile. Owners and static reviewers keep their existing profiles.
 Sandboxing remains opt-in. A requested sandbox fails closed when the host cannot enforce it; no command runs unsandboxed automatically.
 
 The command backend uses macOS Seatbelt through `/usr/bin/sandbox-exec`, or Bubblewrap on Linux.
@@ -303,219 +294,25 @@ macOS `sandbox-exec` is deprecated, and Linux support depends on the host's Bubb
 Run `PSTACK_SANDBOX_REQUIRED=1 bun run test packages/pstack/test/verification-sandbox.test.js` to require real sandbox coverage.
 Without that flag, unsupported hosts report the backend limitation and skip the containment tests.
 
-## Default delivery
+## Delivery
 
-`/poteto-mode` follows the upstream flow by default.
+`/poteto-mode` follows the upstream flow.
 The coordinator owns the design, the review, and the verdict. One `poteto-agent` owner per issue builds the change in place in a linked worktree on its own branch, then commits, pushes, and opens the PR.
 The owner proves each unit with focused checks and runs the repository-required gates once on the finished head. It never runs a full suite for a WIP report. A slow suite that CI already runs stays in CI unless the brief names a local reason.
 The coordinator reads the diff, gets one `arena cross-judge pool` second opinion from another model family, and verifies load-bearing behavior on the matching surface. A fresh owner takes each correction.
 Autopilot-full and Autopilot-stack follow their upstream playbooks with these owners. Shipping keeps its independent per-PR verdict before landing.
 
-An `issue:` line in a Task prompt binds the Task to managed delivery only when that issue is open in the ledger.
-
-## Managed delivery
-
-Managed delivery adds the delivery ledger, recorded gates, the delivery engine, and a mandatory independent reviewer loop. Use it only on an explicit operator request. The managed autopilots live in [managed autopilot](skills/poteto-mode/references/managed-autopilot.md).
-
-A runtime verifier that reports `candidate` with every criterion proven and no open blocking finding is recorded as `accepted`, so the engine does not send a passing candidate back to its owner.
-
-Bounded managed work uses an accepted design, one implementer role, and one independent reviewer.
-Each round, including every correction, goes to a fresh agent with consolidated scope. In an issue workspace, the implementation owner resumes for each correction instead, and reviewers stay fresh.
-Assign the implementer before reproduction or discovery, not after a separate investigation handoff.
-Run `how` and `why` in that owner's session by default. Delegate only independent slices or explicitly required perspectives.
-Scoped workers load their assigned workflow instead of the coordinator's full routing catalog.
-Corrections carry the accepted design, harness, and findings into fresh agents instead of restarting design or duplicating verification. Plan combined reviewers with runtime tools from their first dispatch, in place in the issue workspace or with manual isolation without one. Reviewers return one complete verdict with static, comment, deslop, and runtime findings. The implementer applies corrections. Publication includes commit and PR text without a separate prose-preparation worktree.
-New or contested architecture defaults to two candidates and one independent judge.
-A configured model pool does not determine fanout.
-
-Two independent issue lanes form the initial pilot when files, dependencies, and mutable resources are disjoint.
-Early probes exercise risky runtime boundaries before extensive implementation.
-Reusable harnesses and artifact-bound receipts avoid repeated setup without removing required checks.
-
-[Light mode](skills/poteto-mode/references/light-mode.md) is an operator-selected setting. It keeps the issue workspace, every landing gate, and one independent review. It cuts design panels to one runner, limits runtime verification to criteria that static review cannot observe, and skips optional fan-out. An issue escalates to full mode on a high-risk path, two rejected verdicts, or a contested design.
-
-Read the [delivery contract](skills/poteto-mode/references/delivery-contract.md) for routing, ownership, preflight, and evidence invalidation.
-Read [throughput and pilot](skills/poteto-mode/references/throughput.md) for the measurement format and interpretation limits.
-Read the [continuity pilot](skills/poteto-mode/references/continuity-pilot.md) for controlled comparison and the concurrency decision.
-Read [delivery operations](skills/poteto-mode/references/delivery-operations.md) for compact checkpoints, completion-driven waiting, artifact reconstruction, and browser preflight.
-Two incomplete returns without meaningful progress trigger diagnosis, not an identical redispatch or automatic acceptance.
-Candidates require a passing criterion matrix before independent verification.
-Structural diagnosis uses the configured `hardest tasks` role without reopening accepted design automatically.
-The root session model remains separate from Task model policy.
-
 ## Local footprint
 
 The remote stack holds delivered state. Local worktrees, branches, and services exist only while an issue is in flight.
-The [delivery operations](skills/poteto-mode/references/delivery-operations.md) reference defines the resource ledger and the release triggers.
 
-A completed managed publication Task result ends with a release notice for its destination.
-The notice names `scripts/release-worktree.sh` from the `poteto-mode` skill.
+Release a linked worktree with `scripts/release-worktree.sh` from the `poteto-mode` skill after its PR lands or closes.
 That script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
 Otherwise, it prints `held` with the reason and exits with status 1.
 
 `scripts/worktree-audit.sh` compares merge state with `origin/HEAD`, then `origin/main`, then `origin/master`. Pass `-b <ref>` when pull requests target another branch.
 
-## Managed delivery protocol
-
-Use `pstack_delivery` to open an issue and record a terminal Task. Its schema declares every action field at the top level, so providers that read only top-level properties still receive typed `criteria` and `runtimeRequired` fields. The ledger stores only entries owned by the current session. The reader skips corrupt entries from other sessions before it decodes their full delivery data.
-
-`open`, `record`, `refresh`, `repair`, and default `read` responses return compact checkpoints with owner identities, criteria, artifact state, recent attempts, and evidence references.
-Use `view: "submissions"` or `view: "criteria"` with `offset` and `limit` for retained records.
-The default page size is five, and the maximum is twenty. Byte budgets can shorten a page. Follow the returned `nextOffset`.
-Oversized submissions return a `detail` locator instead of broken JSON. Open that locator with `view: "submission"`, `agentId`, and `attempt`.
-Exact submission pages contain JSON text in `content`, with UTF-16 offsets and a maximum `limit` of 4096 characters.
-Pages preserve complete Unicode characters. Follow `nextOffset` rather than adding `limit` to the previous offset.
-Pass the returned `sha256` on continuation pages. A changed submission rejects stale pages. Restart at offset zero after a change.
-Concatenate the chunks before parsing the submission. Tool content and details each remain within 32 KiB, including escaped Unicode.
-Checkpoint previews expose counts and omission markers. They never replace the full artifact or evidence.
-Ready-to-use `repair` locators appear in the checkpoint's `recentAttempts`, `view: "submissions"` entries, and the `view: "submission"` paging envelope. Spread that locator into a `pstack_delivery` call and add only the corrected `report`. It pins the issue, agent, attempt, next revision, current report digest, evidence digest, and artifact digest, so callers never hash a guess or inspect raw session JSONL.
-Reading a checkpoint does not reverify its evidence or change acceptance.
-
-Every checkpoint carries `next`, a deterministic next step derived from the ledger, the workspace, and the runtime records bound to the issue.
-The order is: record settled attempts, wait for running ones, prepare the workspace, implement, review in parallel, correct, diagnose after two incomplete returns, refresh, and publish.
-A `correct` step names the owner to resume when the issue has a workspace and the owner completed its attempt. It names `null` when a fresh owner must take the correction.
-A `review` step names only the review roles that the current candidate still lacks.
-A `repair` step names a review of the current candidate that failed only its report contract. Repair that report before a replacement review.
-
-### Delivery engine
-
-`pstack_deliver` runs that order in code for one open issue. The [engine ADR](../../docs/adr/0003-delivery-engine.md) records the design.
-
-- The coordinator passes the owner role and brief, the reviewer models, and optional reviewer guidance.
-- The engine prepares the workspace, dispatches the owner, records every attempt, and dispatches static review and runtime verification in one batch.
-- It resumes the owner with the unresolved criteria, the open findings, and the reviewer reports. After a diagnosis, it gives the brief and the diagnosis to a fresh owner.
-- Every engine Task passes the same managed preflight and dispatch binding as a model-issued `Task`. Records and workspace calls run through `pstack_delivery`.
-- The engine stops at acceptance, at a running background Task, at a report repair, at a rejected dispatch or protocol step, after a repeated protocol step, or after `maxDispatches` Tasks. The default is 8.
-- The result lists every step with its agents and duration, and it ends with the compact checkpoint.
-- Abort the tool call to cancel the running Task. Call `pstack_deliver` for several issues in one turn to run them in parallel.
-
-The engine dispatches through the `@nothingrotf/subagent/execute-task` event. A subagent version without that event rejects the first dispatch before any Task starts.
-
-Managed Task preflight appends a delivery packet of at most 32 KiB of UTF-8.
-The packet always carries every registered criterion with its exact description.
-It also carries every registered finding ID, the open criteria, and the open blocking findings.
-The current implementation owner, the candidate artifact, and the exact terminal packet are always present.
-Retained findings, receipts, and command locators fill the remaining budget from the most recent attempt backward.
-Commands and references longer than 512 characters appear as marked previews.
-`Omitted retained history` reports included and omitted counts with exact `read` inputs for the omitted rows.
-These inputs resolve only in the coordinator session that owns the issue ledger.
-A leaf Task gains no ledger access from them. It asks its coordinator for omitted detail.
-Retained rows remain prior-attempt locators, not current receipt aliases or proof.
-Preflight rejects the dispatch before any Task starts when the required contract alone exceeds the budget.
-
-`pstack_delivery` declares an output schema for codemode scripts.
-A script receives `{ issue, truncated, page }`, where `page` is the parsed JSON of the text result.
-A script can page through a submission and return only the verdict instead of every chunk.
-
-New records append only their submission to a linked delivery journal. Integration refresh appends only the attempt identity and integration state.
-Replay preserves immutable reports, evidence, and original timestamps. It rejects disconnected events, corrupt authority, and legacy checkpoints after journal activation.
-Normal Pi compaction retains the journal on the active branch. Compaction summaries never replace its acceptance evidence.
-Legacy checkpoints remain readable before journal activation. The selected session branch and owner determine the visible records.
-Reload the extension before continuing an existing delivery. Do not alternate older and newer extension versions within an active journal.
-
-A dispatch binding retains the issue and agent identity from the real Task result, including report-less failures.
-Bind managed work with `delivery: { kind: "managed", issue: "<open issue id>" }` on the Task or graph node.
-Use `delivery: { kind: "independent" }` for unrelated work, even when another issue has an open ledger.
-Independent work does not inherit managed acceptance or authorization for publication.
-When the session has a managed ledger, publication still requires an accepted managed issue.
-Legacy dispatches can use one exact `issue: <id>` prompt line or the resumed agent's retained binding.
-This rule covers implementation roles, `code review`, `runtime verification`, `publication`, and `hardest tasks` diagnosis.
-Conflicting, duplicate, unknown, or prose-only bindings fail before execution. The protocol never selects the first ledger issue.
-The runtime persists the binding in the execution contract and preserves it on resume.
-Read-only investigation Tasks outside those delivery roles remain ordinary Tasks. Sessions with no managed ledger remain ordinary unless they explicitly request an issue that is not open.
-An unrelated plain resume does not enter managed delivery.
-Managed publication must identify its accepted issue and cannot escape its gates through an independent resume.
-Unusable retained evidence records WIP with a reason instead of blocking diagnosis indefinitely.
-Evidence failures preserve registered criteria and reported findings without treating unverified evidence as proof.
-Duplicate findings remain conservatively open. Invalid criterion IDs remain outside the acceptance matrix.
-A failed review vetoes publication even when its artifact identity is unavailable.
-
-Managed implementations, reviews, and diagnoses receive the exact `DeliveryOutputSchema`, every exact criterion ID and full description, prior findings with severity and disposition, exact candidate identity, digest-addressable retained receipt metadata, prior command and log locators, and current-attempt receipt instructions during Pi's `tool_call` preflight. The same supported JSON schema validates the child output. Retained locators are never presented as current aliases or proof-reuse authorization. A managed resume requires the stored delivery schema and accepts only a semantically identical schema. Record the prior terminal attempt before resuming. A changed schema requires a fresh Task contract. Terminal JSON-looking prose never supplies a binding or substitutes for structured output.
-
-Before terminal settlement, pstack applies the full authoritative `DeliveryReportSchema`, exact criterion set, current receipt existence and status, role, and candidate artifact identity. Invalid reports receive at most two report-only turns in the same child session with no tools. Each raw report remains in terminal evidence. Exhaustion fails the Task while retaining captured WIP and specific diagnostics.
-
-Three deterministic repairs settle without a correction turn. A passing criterion that cites a failed receipt loses that reference when at least one successful cited receipt remains, and the report is rejected when no successful proof remains. A report that claims no failure, passes every criterion, and leaves no open finding receives `failureClass: "none"` when the field is absent. An oversized `reason` is truncated to the 4096-character limit with an explicit truncation marker. Both repairs replace the terminal output, so the persisted report and structured output stay identical to the accepted verdict. A repair never promotes readiness, criterion outcomes, or finding dispositions, and a correction may still lower them. An implementation candidate or acceptance requires at least one successful shell receipt from its own attempt; read receipts never satisfy that proof.
-
-`action: "repair"` revises only a persisted report over the pinned immutable attempt. It never starts a Task, model, shell, or worktree. The original report remains unchanged and each correction carries its journaled timestamp as an auditable revision. Repair accepts a failed Task only when trusted runtime metadata identifies report-contract exhaustion after otherwise intact execution. It rejects execution or tool failure, aborts, stale digests, candidate switching, implementation-to-review conversion, promoted criterion outcomes, and erased or weakened findings. A correction may conservatively downgrade readiness, passing criteria, or closed findings to WIP, non-passing outcomes, or open blockers when immutable proof is unavailable. When retained raw semantics do not establish the intended verdict, repair fails closed or remains WIP.
-
-A command receipt uses the deterministic `command:1`, `command:2`, and later aliases in shell execution order. Reports cite those aliases only when the receipts exist. Read-only static reviews and diagnoses may cite recorded read receipts as `read:1`, `read:2`, and later values. Read receipts cannot replace the shell proof required for runtime verification. To bound the record, runs retain the first and final 128 shell or read receipts plus any cited intermediate receipt. A receipt proves that Pi ran and retained the tool output. It does not prove that the tool tested the right behavior.
-
-A static reviewer runs read-only and identifies the candidate tree. When the issue requires runtime verification, a static review can return `candidate` with each execution-only criterion `pending`. It endorses the candidate when it passes every other criterion with proof and leaves no open blocking finding. Acceptance then requires an accepted runtime verdict on the same candidate. Without an issue workspace, a runtime verifier runs with a writable shell in worktree isolation with `integration: "manual"`. It starts from the integrated candidate tree and must leave its product tree unchanged. Put verifier caches and scratch output outside the product tree or in ignored paths. Manual isolation never integrates verifier output.
-
-### Issue workspaces
-
-`action: "workspace"` gives an open issue one persistent Git worktree. The [issue workspace ADR](../../docs/adr/0001-issue-workspaces.md) records the design.
-
-- The worktree lives under `~/.pi/worktrees/<repository>-<id>/<issue>` on branch `pstack/<issue>`. Set `PSTACK_WORKTREE_ROOT` to move it.
-- The branch starts at `base`, or at the session `HEAD` when `base` is absent. An existing branch is reused.
-- The branch records its base in the Git config key `branch.<branch>.pstackbase`. A reused worktree or branch reports that base, or the merge base with the requested commit when the record is absent or stale.
-- Preparation copies ignored files listed in `.worktreeinclude`, copies `node_modules` directories with copy-on-write clones when the file system supports them, and runs `.pstack/worktree-setup.sh` once. The script receives `PSTACK_ISSUE`, `PSTACK_SOURCE_ROOT`, and `PSTACK_WORKTREE`.
-- The setup script writes to the log file directly, so a background service that it starts cannot block the call.
-- Setup times out after 15 minutes. Set `PSTACK_SETUP_TIMEOUT_SECONDS` to change the limit. A timeout kills the whole setup process group.
-- A failed setup script returns its exit code, its timeout state, and its log path, and the worktree remains for correction.
-- After setup passes, writer Tasks in the workspace cannot rerun the setup script or one of its command lines. The block names the log. Prefix `PSTACK_SETUP_RERUN=1` when a changed dependency or a missing environment requires a rerun.
-- Later calls return the recorded workspace. When the worktree is gone, the call prepares it again.
-- The result carries `next`, like every checkpoint.
-
-After the workspace exists, managed preflight changes fresh Tasks for that issue:
-
-- An omitted `cwd` becomes the worktree. A `cwd` outside the worktree fails before dispatch.
-- Implementation owners, runtime verifiers, and publication receive `isolation: { mode: "in-place" }` when they omit isolation. They write in the worktree under an exclusive writer lease.
-- Read-only reviewers read the worktree directly, so static review and runtime verification can start together on the same tree.
-- Each fresh Task prompt gains a workspace brief with the branch, the base, and the setup result. A passed setup tells the agent to reuse the environment instead of running setup again.
-
-An in-place attempt captures its base and result trees as the artifact and counts as integrated, so `refresh` and patch joins are unnecessary.
-A runtime verifier must finish with the candidate tree unchanged. A changed tree rejects its verdict.
-Resume a recorded implementation owner for a correction. It keeps its context and continues in the same worktree.
-
-Record every terminal attempt that reports an issue before another implementation dispatch. This rule applies to unlisted implementation roles. Two incomplete implementation returns without new proven criteria block the next dispatch. Record a `hardest tasks` diagnosis before the next correction. Failed runs without a report remain recordable WIP when the runtime retained no artifact.
-
-Use `pstack_delivery` with `action: "refresh"` after trusted integration changes a recorded attempt from captured, pending, or conflict to integrated. Refresh preserves the recorded report, artifact, evidence, and time. It rejects a changed immutable attempt.
-
-Publication sets `run_in_background: false`. It requires independent acceptance and integration of the current candidate. The preflight compares repository root, relative path, and tree identity. It does not trust a moving base branch or an empty destination HEAD.
-
-The protocol governs direct Task calls from a coordinator that loads this extension.
-Delegated coordinators do not inherit this session's ledger or managed preflight hooks.
-`TaskControl` can steer, cancel, join, or inspect a Task. Parent-session shell commands are also outside the managed delivery boundary. Neither action creates a managed command receipt or changes delivery acceptance.
-Managed preflight removes a `wait` deadline shorter than 15 minutes, because a completion-driven wait settles on the child and a short window only spends coordinator turns. An explicit longer deadline is preserved.
-For the personal Sol-based coordinator policy, start a new session with `pi --model openai-codex/gpt-5.6-sol:medium`.
-Existing sessions, global defaults, and active children remain unchanged.
-
-Run the report from the package directory:
-
-```sh
-bun src/throughput-cli.ts /absolute/path/to/measurements.json
-```
-
-The report groups acceptance time by implementation model and complexity.
-It retains unfinished work and rejects unsupported comparisons.
-Synthetic tests validate the reporting tool, not actual savings for a product backlog.
-
-Derive per-session latency directly from a recorded session:
-
-```sh
-bun src/session-metrics-cli.ts /absolute/path/to/session.jsonl
-bun src/session-metrics-cli.ts --json /absolute/path/to/session.jsonl
-bun src/session-metrics-cli.ts --compare /path/to/baseline.jsonl /path/to/candidate.jsonl
-```
-
-The report separates generation time from tool time, counts turns that carried a single tool call,
-and totals read output, cache reads, cost, and terminal report rejections.
-Codemode calls count once as tool calls. Their nested calls appear separately as nested calls per tool.
-The cost includes usage that tool results report, such as classifier calls from codemode scripts.
-Generation time is the wall gap before each assistant message and tool time is the wall gap before
-each tool result, so concurrent tool calls count once instead of once per call.
-Only the active branch is measured, so a fork, a rewind, or a compaction does not inflate the totals.
-
-The comparison mode places a candidate session beside a frozen baseline and reports the signed change
-of every counter, including calls per tool. It reports an absent baseline value as unavailable rather
-than as an improvement, so a workflow change is judged against measured numbers instead of estimates.
-
-This report reads a session file path directly and stays outside the project scope, because delivery
-reviews compare sessions across repositories. Use `session_history` instead for model-facing,
-project-scoped retrieval with stable references, redaction, and pagination.
-
-### Gates
+## Gates
 
 Mutable pstack Tasks receive `pstack_gate` through the `pstack-gates` registration. The [gate ADR](../../docs/adr/0002-tree-keyed-gates.md) records the design.
 
@@ -526,9 +323,35 @@ Mutable pstack Tasks receive `pstack_gate` through the `pstack-gates` registrati
 - Concurrent calls for one key share one run. A caller that aborts leaves the run to the others, and the run stops only when every caller aborts. `fresh: true` never joins a run in flight. Set `PSTACK_GATE_CONCURRENCY` to change the number of gates that run at once. The default is a quarter of the CPU count, with a minimum of one.
 - A gate stops after 30 minutes of awake time. Time while the machine sleeps does not count. Set `PSTACK_GATE_TIMEOUT_SECONDS` to change the limit. A timeout or an abort kills the whole process group.
 - Records and logs live in `<git common dir>/pstack/gates`. The tool keeps the newest 256 records and 512 logs.
-- Each call is a tool receipt, and the delivery ledger counts it as command evidence.
+- Each call is a tool receipt.
 
-### Tool definition cost
+## Session metrics
+
+Derive per-session latency directly from a recorded session:
+
+```sh
+bun src/session-metrics-cli.ts /absolute/path/to/session.jsonl
+bun src/session-metrics-cli.ts --json /absolute/path/to/session.jsonl
+bun src/session-metrics-cli.ts --compare /path/to/baseline.jsonl /path/to/candidate.jsonl
+```
+
+The report separates generation time from tool time, counts turns that carried a single tool call,
+and totals read output, cache reads, and cost.
+Codemode calls count once as tool calls. Their nested calls appear separately as nested calls per tool.
+The cost includes usage that tool results report, such as classifier calls from codemode scripts.
+Generation time is the wall gap before each assistant message and tool time is the wall gap before
+each tool result, so concurrent tool calls count once instead of once per call.
+Only the active branch is measured, so a fork, a rewind, or a compaction does not inflate the totals.
+
+The comparison mode places a candidate session beside a frozen baseline and reports the signed change
+of every counter, including calls per tool. It reports an absent baseline value as unavailable rather
+than as an improvement, so a workflow change is judged against measured numbers instead of estimates.
+
+This report reads a session file path directly and stays outside the project scope, because reviews
+compare sessions across repositories. Use `session_history` instead for model-facing,
+project-scoped retrieval with stable references, redaction, and pagination.
+
+## Tool definition cost
 
 Every registered tool definition is serialized into each model request, so a verbose description is
 paid on every turn of every session. Rank that fixed overhead:

@@ -4,80 +4,40 @@ import { join } from 'node:path'
 
 import type { CapabilityModelPolicy, RoleModelPolicyEntry } from '@nothingrotf/subagent'
 
-export type PstackDeliveryClass = 'implementation' | 'managed-support' | 'none'
-
 interface PstackRole {
   role: string
   panel: boolean
   aliases: readonly string[]
-  delivery: PstackDeliveryClass
-  fallbackRoles?: readonly string[]
-  managedOnly?: true
 }
 
 export const pstackRoles: readonly PstackRole[] = [
-  { role: 'feature', panel: false, aliases: [], delivery: 'implementation' },
-  { role: 'refactoring', panel: false, aliases: [], delivery: 'implementation' },
-  { role: 'bug-fix', panel: false, aliases: [], delivery: 'implementation' },
-  { role: 'perf-issue', panel: false, aliases: [], delivery: 'implementation' },
-  { role: 'hillclimb', panel: false, aliases: [], delivery: 'implementation' },
-  { role: 'judgment and prose', panel: false, aliases: [], delivery: 'none' },
-  {
-    role: 'code review',
-    panel: true,
-    aliases: [],
-    delivery: 'managed-support',
-    fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
-    managedOnly: true,
-  },
-  {
-    role: 'runtime verification',
-    panel: true,
-    aliases: [],
-    delivery: 'managed-support',
-    fallbackRoles: ['arena cross-judge pool', 'judgment and prose'],
-    managedOnly: true,
-  },
-  {
-    role: 'publication',
-    panel: false,
-    aliases: [],
-    delivery: 'managed-support',
-    fallbackRoles: ['judgment and prose'],
-    managedOnly: true,
-  },
-  { role: 'hardest tasks', panel: false, aliases: [], delivery: 'managed-support' },
-  { role: 'how explorer', panel: false, aliases: [], delivery: 'none' },
-  { role: 'how explainer', panel: false, aliases: [], delivery: 'none' },
-  { role: 'why investigators', panel: false, aliases: [], delivery: 'none' },
-  { role: 'why synthesizer', panel: false, aliases: [], delivery: 'none' },
-  { role: 'reflect tooling', panel: false, aliases: [], delivery: 'none' },
-  { role: 'reflect judgment', panel: false, aliases: [], delivery: 'none' },
-  {
-    role: 'reflect divergent',
-    panel: false,
-    aliases: ['divergent'],
-    delivery: 'none',
-  },
-  {
-    role: 'reflect synthesizer',
-    panel: false,
-    aliases: ['synthesizer'],
-    delivery: 'none',
-  },
-  { role: 'arena runners', panel: true, aliases: [], delivery: 'none' },
-  { role: 'arena cross-judge pool', panel: true, aliases: [], delivery: 'none' },
-  { role: 'swarm workers', panel: false, aliases: [], delivery: 'none' },
-  { role: 'architect runners', panel: true, aliases: [], delivery: 'none' },
-  { role: 'interrogate reviewers', panel: true, aliases: [], delivery: 'none' },
+  { role: 'feature', panel: false, aliases: [] },
+  { role: 'refactoring', panel: false, aliases: [] },
+  { role: 'bug-fix', panel: false, aliases: [] },
+  { role: 'perf-issue', panel: false, aliases: [] },
+  { role: 'hillclimb', panel: false, aliases: [] },
+  { role: 'judgment and prose', panel: false, aliases: [] },
+  { role: 'hardest tasks', panel: false, aliases: [] },
+  { role: 'how explorer', panel: false, aliases: [] },
+  { role: 'how explainer', panel: false, aliases: [] },
+  { role: 'why investigators', panel: false, aliases: [] },
+  { role: 'why synthesizer', panel: false, aliases: [] },
+  { role: 'reflect tooling', panel: false, aliases: [] },
+  { role: 'reflect judgment', panel: false, aliases: [] },
+  { role: 'reflect divergent', panel: false, aliases: ['divergent'] },
+  { role: 'reflect synthesizer', panel: false, aliases: ['synthesizer'] },
+  { role: 'arena runners', panel: true, aliases: [] },
+  { role: 'arena cross-judge pool', panel: true, aliases: [] },
+  { role: 'swarm workers', panel: false, aliases: [] },
+  { role: 'architect runners', panel: true, aliases: [] },
+  { role: 'interrogate reviewers', panel: true, aliases: [] },
 ]
 
-export const managedOnlyPstackRoles: ReadonlySet<string> = new Set(
-  pstackRoles.filter((entry) => entry.managedOnly === true).map((entry) => entry.role),
-)
-
 const legacyPstackRoles: readonly PstackRole[] = [
-  { role: 'how critics', panel: true, aliases: [], delivery: 'none' },
+  { role: 'how critics', panel: true, aliases: [] },
+  { role: 'code review', panel: true, aliases: [] },
+  { role: 'runtime verification', panel: true, aliases: [] },
+  { role: 'publication', panel: true, aliases: [] },
 ]
 
 export interface PstackModelPolicyOptions {
@@ -145,15 +105,9 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
   }
   if (commentStart !== undefined)
     return invalid(`pstack-models.md line ${commentStart + 1} opens an unterminated comment.`)
-  const roles: RoleModelPolicyEntry[] = pstackRoles.map(({ role, fallbackRoles = [] }) => ({
+  const roles: RoleModelPolicyEntry[] = pstackRoles.map(({ role }) => ({
     role,
-    selectors: [
-      ...(configured.get(role) ??
-        fallbackRoles
-          .map((fallback) => configured.get(fallback))
-          .find((value) => value !== undefined) ??
-        []),
-    ],
+    selectors: [...(configured.get(role) ?? [])],
   }))
   return { status: 'valid', enforcement: 'configured', roles }
 }
@@ -181,25 +135,22 @@ export async function loadPstackModelPolicy(
 export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
   const instructions = [
     '# Pstack runtime model policy',
-    'Every pstack Task must pass an exact role below and capability_profile pstack-leaf, pstack-sandbox for an OS-sandboxed runtime verifier, or pstack-nested for a delegating owner. Registered pstack agents default to pstack-leaf.',
+    'Every pstack Task must pass an exact role below and capability_profile pstack-leaf, pstack-sandbox for an OS-sandboxed verifier, or pstack-nested for a delegating owner. Registered pstack agents default to pstack-leaf.',
     'The configured role is mandatory. Task.model must match a configured selector, including effort and fast mode. Unknown or missing Task.role fails for pstack capabilities. Other capabilities are unaffected.',
     'openai/ and openai-codex/ selectors match each other for the same model, effort, and fast mode. When one of these providers has no login, dispatch uses the same model on the other provider if it has a ChatGPT subscription login.',
     'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
     'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
     'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
     'A second opinion is the same review against a different model: use one entry of arena cross-judge pool from another family than the implementation. Use swarm workers for verification, and judgment and prose only for prose or evidence synthesis. The implementation owner commits, pushes, and opens its own PR.',
-    'Managed delivery binds its own review, verification, and publication roles to a managed issue. Never use those roles for unbound Tasks.',
     'The extension reads ~/.agents/rules/pstack-models.md automatically before each root prompt and root Task call. No manual read or alwaysApply support is required. Invalid policies block fresh pstack dispatches. Resume preserves its stored model.',
   ]
   if (policy.status === 'invalid')
     return [...instructions, `Policy unavailable. ${policy.error}`].join('\n')
   return [
     ...instructions,
-    ...policy.roles
-      .filter((entry) => !managedOnlyPstackRoles.has(entry.role))
-      .map(
-        (entry) =>
-          `${entry.role}: ${entry.selectors.length === 0 ? 'unconfigured; agent default then parent; skill owns count' : entry.selectors.join(', ')}`,
-      ),
+    ...policy.roles.map(
+      (entry) =>
+        `${entry.role}: ${entry.selectors.length === 0 ? 'unconfigured; agent default then parent; skill owns count' : entry.selectors.join(', ')}`,
+    ),
   ].join('\n')
 }

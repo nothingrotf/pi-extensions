@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0004
+---
+
 # Issue workspaces replace per-attempt writer copies for managed delivery
 
 Managed pstack delivery gives each issue one persistent Git worktree on its own branch, outside the source checkout, and prepares its environment once.

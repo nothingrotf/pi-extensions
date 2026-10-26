@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 
-import { formatGateOutcome, gateIdentity, runGate } from '../src/delivery-gates.ts'
+import { formatGateOutcome, gateIdentity, runGate } from '../src/gates.ts'
 
 const exec = promisify(execFile)
 const roots: string[] = []

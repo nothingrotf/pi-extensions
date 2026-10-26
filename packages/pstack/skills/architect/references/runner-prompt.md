@@ -1,6 +1,6 @@
 # Architect runner prompt
 
-The orchestrator passes this file to every parallel candidate runner during Phase B. It supplies the task, Phase A grounding artifacts, isolated working directory, and output path. Repository writers use a managed `Task` worktree. Other artifacts use a separate directory for each runner.
+The orchestrator passes this file to every parallel candidate runner during Phase B. It supplies the task, Phase A grounding artifacts, isolated working directory, and output path. Repository writers use an isolated `Task` worktree. Other artifacts use a separate directory for each runner.
 
 You are producing one candidate design in architect's parallel exploration. Read the **architect** skill in full first. That's the workflow you're inside. Output a candidate design package: type sketch, function signatures, module map, and prose rationale shaped per [`rationale-template.md`](rationale-template.md).
 

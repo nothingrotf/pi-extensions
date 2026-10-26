@@ -2,8 +2,6 @@
 
 **You own this task. Plan, review, verify.** Delegate the fix to a subagent and stay in the lead.
 
-This is the default flow. With an explicit managed delivery request, run the owner and review loop through `references/delivery-contract.md` instead of steps 3 and 4.
-
 Be scientific. Every shipped line traces to runtime evidence. Belt-and-suspenders that "might help" is a hypothesis, not a fix. It does not ship. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies ships, nothing more.
 
 1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.

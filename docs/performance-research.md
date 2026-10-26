@@ -1,5 +1,7 @@
 # Pesquisa de desempenho do pstack e do subagent
 
+> O [ADR 0004](adr/0004-remove-managed-delivery.md) removeu o modo gerenciado. As referências a `pstack_deliver`, `pstack_delivery` e `bench:delivery` descrevem o estado anterior a essa decisão.
+
 Data: 2026-10-10. Escopo: o tempo até uma issue gerenciada ficar aceita, e quantas issues por hora o sistema entrega. A pesquisa considera mudanças de qualquer tamanho, inclusive reescrita completa.
 
 ## Conclusões

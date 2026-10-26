@@ -35,7 +35,7 @@ describe('architect', () => {
 
   it('uses isolated runners without generated code comments', () => {
     const prompt = text(join(skillRoot, 'references', 'runner-prompt.md'))
-    expect(prompt).toContain('managed `Task` worktree')
+    expect(prompt).toContain('isolated `Task` worktree')
     expect(prompt).toContain('separate pseudocode blocks')
     expect(prompt).toContain('independently configured runners')
     expect(prompt).not.toContain('// TODO')

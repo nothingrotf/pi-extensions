@@ -99,8 +99,6 @@ export interface SessionMetrics {
   /** Characters returned by read results, the dominant source of retained grounding. */
   readResultChars: number
   startedAt: string | undefined
-  /** Terminal delivery reports rejected by managed validation. */
-  terminalRejections: number
   toolCalls: number
   tools: readonly ToolUsageMetric[]
 }
@@ -117,8 +115,6 @@ interface MutableToolUsage {
 function emptyUsage(): MutableToolUsage {
   return { calls: 0, executionMs: 0, measuredCalls: 0, nestedCalls: 0, resultChars: 0, wallMs: 0 }
 }
-
-const rejectionMarker = 'Your terminal delivery report was rejected'
 
 function parseEntry(line: string): SessionEntry | undefined {
   if (line.trim().length === 0) return undefined
@@ -195,7 +191,6 @@ export function sessionMetrics(content: string): SessionMetrics {
   let measuredToolCalls = 0
   let readResultChars = 0
   let singleCallTurns = 0
-  let terminalRejections = 0
   let toolCalls = 0
   let startedAt: string | undefined
   let finishedAt: string | undefined
@@ -243,10 +238,6 @@ export function sessionMetrics(content: string): SessionMetrics {
         usage.set(part.name, current)
       }
       if (turnCalls === 1) singleCallTurns += 1
-      continue
-    }
-    if (message.role === 'user') {
-      if (messageText(message).includes(rejectionMarker)) terminalRejections += 1
       continue
     }
     if (message.role !== 'toolResult') continue
@@ -300,7 +291,6 @@ export function sessionMetrics(content: string): SessionMetrics {
     readResultChars,
     singleCallTurns,
     startedAt,
-    terminalRejections,
     toolCalls,
     toolCostUsd,
     toolMs,
@@ -371,7 +361,6 @@ export function compareSessionMetrics(
     compareValue('cache read tokens', baseline.cacheReadTokens, candidate.cacheReadTokens),
     compareValue('output tokens', baseline.outputTokens, candidate.outputTokens),
     compareValue('cost usd', baseline.costUsd, candidate.costUsd),
-    compareValue('terminal rejections', baseline.terminalRejections, candidate.terminalRejections),
   ]
   const names = new Set([
     ...baseline.tools.map((tool) => tool.name),
@@ -409,7 +398,7 @@ export function formatSessionComparison(comparison: SessionComparison): string {
   return lines.join('\n')
 }
 
-/** Render one metrics record as the compact latency report used for delivery reviews. */
+/** Render one metrics record as the compact latency report used for workflow reviews. */
 export function formatSessionMetrics(metrics: SessionMetrics): string {
   const perTurn =
     metrics.assistantTurns === 0
@@ -424,7 +413,7 @@ export function formatSessionMetrics(metrics: SessionMetrics): string {
     `measured model ${minutes(metrics.measuredModelMs)} over ${metrics.measuredModelTurns}/${metrics.assistantTurns} turns | measured tool ${minutes(metrics.measuredToolMs)} over ${metrics.measuredToolCalls} results`,
     `turns ${metrics.assistantTurns} | single-call turns ${metrics.singleCallTurns} | tool calls ${metrics.toolCalls} | nested ${metrics.nestedToolCalls} | ${perTurn}s per turn`,
     `read result chars ${metrics.readResultChars} | cache read ${metrics.cacheReadTokens} | output ${metrics.outputTokens}`,
-    `cost ${metrics.costUsd.toFixed(2)} USD (tools ${metrics.toolCostUsd.toFixed(2)}) | terminal rejections ${metrics.terminalRejections}`,
+    `cost ${metrics.costUsd.toFixed(2)} USD (tools ${metrics.toolCostUsd.toFixed(2)})`,
   ]
   for (const tool of metrics.tools.slice(0, 8)) {
     const nested = tool.nestedCalls === 0 ? '' : ` + ${tool.nestedCalls} nested`

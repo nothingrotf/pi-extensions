@@ -2,8 +2,6 @@
 
 **You own the design. Plan, review, verify.** Delegate implementation. Stay in the lead.
 
-This is the default flow. With an explicit managed delivery request, run the owner and review loop through `references/delivery-contract.md` instead of steps 4 and 5.
-
 1. Run `how` over the affected subsystem when grounding is missing or stale. An accepted design for this issue carries its grounding, so implementation inherits it without rerunning `how` or `architect`; record `design: accepted <ref>`.
 2. Design only genuinely new or contested contracts, ownership, state, or security with `architect`. Crossing a function is not a design trigger. Keep a skip as `architect skipped: <reason>`.
 3. Write the throughput checkpoint as four todo items. A dimension that genuinely does not apply (single file, no fan-out) keeps its item with `n/a: <reason>` rather than being dropped:

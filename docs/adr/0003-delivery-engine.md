@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0004
+---
+
 # A deterministic engine runs the managed delivery loop
 
 The `pstack_deliver` tool runs the managed delivery loop in code instead of one coordinator model turn per step.

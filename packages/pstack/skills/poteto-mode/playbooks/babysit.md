@@ -4,22 +4,21 @@
 
 Babysitting normally starts on a separate user request after a phase or stack build, not merely because a PR opens.
 In Autopilot-full or Autopilot-stack, an explicit lifecycle assignment is that request.
-Once the owner reports the PR URL, the root starts the assigned loop without waiting for unrelated builds. In managed delivery, the publication Task reports it.
+Once the owner reports the PR URL, the root starts the assigned loop without waiting for unrelated builds.
 For Autopilot-stack, keep one babysitter at the merge frontier while the remaining builds continue.
-The root owns the installed loop and watcher, not an implementer or a managed publication Task.
+The root owns the installed loop and watcher, not an implementer.
 Babysit grants no merge authority.
 
 1. **Declare the mode in your first line, before any poll.** `drive` runs the loop to merge-ready, for "babysit this", "get it green", "merge-ready". `background` triages without blocking, which is the mode for a plan still executing. `threads-only` answers review comments and touches nothing else, for "address the bugbot comments". `check` is one status pass and a report, for "check on X" and "is it green". Undeclared defaults to `drive`. Small or docs-only PRs get `check`, not `drive`.
 2. **Work the merge frontier and nothing above it.** The lowest unmerged PR is the only one that matters until it merges. Upstack threads get read and batched, never fixed at the cost of restarting the frontier's checks. If you catch yourself upstack while the frontier is red, stop and go back down.
 3. **One babysitter per stack.** Before starting, check nothing else is already on it.
 4. **Never mutate stack topology.** Do not submit, synchronize, rebase, or force-push a stack from inside a babysit.
-   In an Autopilot or managed delivery, apply these boundaries to every fix, commit, and push below.
-   Route code fixes to the implementer for the owning branch. In the default flow, a fresh owner commits and pushes that branch.
-   In managed delivery, publish accepted corrections through the separately scoped foreground destination boundary.
+   In an Autopilot, apply these boundaries to every fix, commit, and push below.
+   Route code fixes to the implementer for the owning branch. A fresh owner commits and pushes that branch.
    Report rebase or restack work to the root for an authorized destination operation.
    An Autopilot lifecycle assignment does not grant those operations to the babysitter.
 
-   For a standalone request without a managed issue, fix only on the owning branch.
+   For a standalone request, fix only on the owning branch.
    Respect the requested mode and repository rules.
    When a fix's owning PR already merged, create a separately authorized follow-up PR on top of the remaining stack.
    Never rewrite merged history.
