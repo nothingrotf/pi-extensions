@@ -67,7 +67,6 @@ function taskInput(node: TaskNodeInput, prompt: string): TaskInput {
   }
   if (node.capability_profile !== undefined) input.capability_profile = node.capability_profile
   if (node.cwd !== undefined) input.cwd = node.cwd
-  if (node.delivery !== undefined) input.delivery = node.delivery
   if (node.gates !== undefined) input.gates = node.gates
   if (node.isolation !== undefined) input.isolation = node.isolation
   if (node.model !== undefined) input.model = node.model
