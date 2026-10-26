@@ -5,7 +5,6 @@ Read this contract before dispatching pstack work. Preserve it across single cal
 ## Task input
 
 Pass scope, design, evidence, and acceptance context inside `prompt`, never as invented Task input fields.
-A brief can name its ticket in an `issue:` line. That line is context for the worker and binds nothing.
 
 ## Identity and model selection
 

@@ -105,7 +105,7 @@ You own every subagent's work. Review each diff against its evidence and write y
 
 ## Delivery
 
-Delivery follows the upstream flow. You own the design, the review, and the verdict. One owner per issue builds the change.
+You own the design, the review, and the verdict. One owner per issue builds the change.
 
 - **Owner.** Delegate code-writing to one `poteto-agent` with the playbook's implementation role and a specific scope: paths, the named data shape, and success criteria. Give it a linked worktree on its own branch per Repository writer in [Task contracts](references/task-contracts.md), so it commits, pushes, and opens its PR on a real branch. Create the worktree in a tool call that finishes before the dispatch.
 - **Brief.** Write each brief from this flow and the repository instructions.
