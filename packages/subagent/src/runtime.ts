@@ -12,6 +12,7 @@ import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
 import { SubagentResolver, type SubagentDefinition } from './agents.ts'
+import { setAwakeTimeout } from './awake-timer.ts'
 import {
   assertRoleToolRequirements,
   resolveRoleIsolation,
@@ -52,7 +53,12 @@ import {
   commonDirectory,
   repositoryRoot,
 } from './git-isolation.ts'
-import { acquireInPlaceLease, captureInPlaceReceipt, type InPlaceLease } from './in-place.ts'
+import {
+  acquireInPlaceLease,
+  captureInPlaceReceipt,
+  linkedWorktreeRoot,
+  type InPlaceLease,
+} from './in-place.ts'
 import {
   ParentSideTurnError,
   recordAutomaticReply,
@@ -117,7 +123,7 @@ import type {
   WorkspaceIdentity,
   WorkspaceLifecycle,
 } from './schema.ts'
-import { decodeSingleTaskInput, SingleTaskInputSchema, TaskRoleSchema } from './schema.ts'
+import { decodeSingleTaskInput, TaskRoleSchema, TaskToolSingleInputSchema } from './schema.ts'
 import { StateStore } from './state.ts'
 import {
   registerHybridTaskTool,
@@ -576,6 +582,15 @@ function executionContext(contract: ExecutionContractV5): string {
       'The baseline is synthetic and an isolated workspace can be clean by design. Do not infer a missing patch from a branch label or clean status. Compare the expected tree and captured patch instead.',
     )
   }
+  if (contract.isolation?.mode === 'worktree') {
+    lines.push(
+      '# Temporary worktree',
+      'This isolated worktree is removed after the Task ends. The captured patch keeps tracked and untracked files that Git does not ignore.',
+      'It is a synthetic snapshot with no Git remotes, and its history is not product history. Do not push, open a pull request, or publish from it. The coordinator integrates the captured patch. Report any publication step that your brief assigns as blocked.',
+      'Files under ignored paths, such as `.local/`, `dist/`, or `node_modules/`, are lost. Write any file that must outlive this Task to a path that Git does not ignore, or return its content in your report.',
+      'Never create a Git repository with `git init` or `git clone` inside this worktree, except under a path that the repository .gitignore ignores. Use a directory under the system temporary directory instead. Any other new repository fails the capture of the whole Task.',
+    )
+  }
   return lines.join('\n')
 }
 
@@ -893,6 +908,30 @@ export class SubagentRuntime {
     return agentId === undefined ? undefined : this.state.get(agentId)
   }
 
+  completeResumeInput<
+    Input extends {
+      description?: string | undefined
+      resume?: string | undefined
+      subagent_type?: string | undefined
+    },
+  >(input: Input) {
+    if (input.description !== undefined && input.subagent_type !== undefined) return input
+    if (input.resume === undefined) {
+      throw new Error(
+        'A new Task requires description and subagent_type. A resume needs only resume and prompt.',
+      )
+    }
+    const record = this.state.get(input.resume.trim())
+    if (record === undefined || record.ownerSessionId !== this.state.owner) {
+      throw new Error('The requested Agent ID does not belong to the current parent session.')
+    }
+    return {
+      ...input,
+      description: input.description ?? record.description,
+      subagent_type: input.subagent_type ?? record.subagentType,
+    }
+  }
+
   listSnapshots(): SubagentSnapshot[] {
     return this.state
       .all()
@@ -1128,8 +1167,7 @@ export class SubagentRuntime {
     const validCaller = rootJoin
       ? record.parentAgentId === undefined
       : record.parentAgentId === callerId
-    const validDestination = receipt?.parentWorkspaceId === destination.destinationWorkspaceId
-    if (!validCaller || !validDestination) {
+    if (!validCaller) {
       return {
         reason: 'invalid-lineage',
         receipt: undefined,
@@ -1156,6 +1194,14 @@ export class SubagentRuntime {
     if (receipt === undefined || receipt.integration !== 'apply') {
       return {
         reason: 'not-staged',
+        receipt: undefined,
+        revision: this.currentRevision,
+        status: 'rejected',
+      }
+    }
+    if (receipt.parentWorkspaceId !== destination.destinationWorkspaceId) {
+      return {
+        reason: 'invalid-lineage',
         receipt: undefined,
         revision: this.currentRevision,
         status: 'rejected',
@@ -1333,7 +1379,7 @@ export class SubagentRuntime {
             if (options.currentDepth >= options.maxDepth) {
               throw new Error(`The nested Task reached the maximum depth of ${options.maxDepth}.`)
             }
-            const input = decodeSingleTaskInput(rawInput)
+            const input = decodeSingleTaskInput(this.completeResumeInput(rawInput))
             if (
               input.capability_profile === undefined &&
               input.resume === undefined &&
@@ -1425,7 +1471,7 @@ export class SubagentRuntime {
           exposure: 'direct',
           label: 'Task',
           name: 'Task',
-          parameters: SingleTaskInputSchema,
+          parameters: TaskToolSingleInputSchema,
         })
       },
       hidden: true,
@@ -1436,7 +1482,7 @@ export class SubagentRuntime {
   private scopeBoundTaskControlExtension(): InlineExtension {
     return {
       factory: (pi) => {
-        registerTaskToolContracts(pi, SingleTaskInputSchema)
+        registerTaskToolContracts(pi, TaskToolSingleInputSchema)
         const labelFor = (agentId: string): string =>
           this.listSnapshots().find((snapshot) => snapshot.agentId === agentId)?.description ??
           agentId
@@ -1532,13 +1578,37 @@ export class SubagentRuntime {
     logicalCwd: string,
   ): Promise<WorkspaceContext> {
     const root = await this.resolveRootWorkspaceContext(ctx)
-    const sessionRelativeCwd = relativeCwdWithin(root.physicalRoot, logicalCwd)
+    let sessionRelativeCwd: string
+    try {
+      sessionRelativeCwd = relativeCwdWithin(root.physicalRoot, logicalCwd)
+    } catch {
+      throw new Error(
+        `The path ${logicalCwd} escapes its workspace root ${root.physicalRoot}. An isolated writer must start inside the session repository. Point cwd at a linked Git worktree to write there in place, or start the session in that repository.`,
+      )
+    }
     if (sessionRelativeCwd.split(/[/\\]/).includes('.git')) {
       throw new Error(
         'Task cwd targets Git metadata, which writer snapshots exclude. Integrate the accepted patch into the destination workspace before dispatching an isolated verifier.',
       )
     }
     return createRootWorkspaceContext(logicalCwd, root.scopeId, this.state.owner)
+  }
+
+  private async separateLinkedWorktree(ctx: ExtensionContext, cwd: string): Promise<boolean> {
+    const target = await repositoryRoot(cwd)
+    if (target === undefined) return false
+    const root = await this.resolveRootWorkspaceContext(ctx)
+    if (target === (await repositoryRoot(root.physicalRoot))) return false
+    try {
+      await linkedWorktreeRoot(cwd)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async inPlaceRelativeCwd(cwd: string): Promise<string> {
+    return (await createRootWorkspaceContext(cwd, 'in-place', this.state.owner)).relativeCwd
   }
 
   private async inPlaceWorkspaceContext(
@@ -1891,7 +1961,7 @@ export class SubagentRuntime {
     const model = execution.model
     const contract = execution.contract
     const requestedPhysicalCwd = contract.logicalCwd
-    const inPlace = contract.isolation?.mode === 'in-place'
+    let inPlace = contract.isolation?.mode === 'in-place'
     if (inPlace && (options.parentAgentId !== undefined || options.parentWorkspace !== undefined)) {
       throw new Error(
         'In-place execution requires a direct root Task. Nested and aggregated writers use isolation mode "worktree".',
@@ -1912,8 +1982,18 @@ export class SubagentRuntime {
         (contract.capability?.nested.enabled === true &&
           (await repositoryRoot(requestedPhysicalCwd)) !== undefined))
     ) {
-      contract.isolation = { integration: 'apply', mode: 'worktree' }
-      contract.relativeCwd = await this.rootRelativeCwd(options.ctx, requestedPhysicalCwd, true)
+      if (
+        options.parentAgentId === undefined &&
+        options.parentWorkspace === undefined &&
+        (await this.separateLinkedWorktree(options.ctx, requestedPhysicalCwd))
+      ) {
+        contract.isolation = { mode: 'in-place' }
+        contract.relativeCwd = await this.inPlaceRelativeCwd(requestedPhysicalCwd)
+        inPlace = true
+      } else {
+        contract.isolation = { integration: 'apply', mode: 'worktree' }
+        contract.relativeCwd = await this.rootRelativeCwd(options.ctx, requestedPhysicalCwd, true)
+      }
     }
     if (options.parentWorkspace !== undefined) {
       const relativeCwd =
@@ -2037,9 +2117,9 @@ export class SubagentRuntime {
         requestParent: async (question, signal) => {
           const active = this.active.get(writerId)
           if (!background || options.parentAgentId !== undefined || options.mailbox !== undefined) {
-            const reason = `A foreground or nested Task cannot wait for its blocked coordinator. Resume a direct Task with run_in_background=true to request this decision: ${redactSensitiveText(question)}. No authorization was granted.`
-            this.requestCancel(writerId, reason)
-            throw new Error(reason)
+            throw new Error(
+              `No coordinator can answer while a foreground or nested Task runs, so this decision stays open: ${redactSensitiveText(question)}. No authorization was granted. Do not perform the requested change. Finish and retain the work that your brief already authorizes, then end your turn and report this decision with its options and your recommendation. A coordinator that needs live decisions can dispatch a direct Task with run_in_background=true.`,
+            )
           }
           if (active === undefined || active.abortReason !== undefined)
             throw new Error('The child is not active.')
@@ -2390,6 +2470,13 @@ export class SubagentRuntime {
       if (input.isolation !== undefined) {
         const requestedIsolation = normalizedIsolation(input.isolation)
         if (
+          contract.isolation === undefined &&
+          requestedIsolation.mode === 'in-place' &&
+          !contract.readonly
+        ) {
+          contract.isolation = requestedIsolation
+          contract.relativeCwd = await this.inPlaceRelativeCwd(contract.logicalCwd)
+        } else if (
           contract.isolation === undefined ||
           !jsonEquals(requestedIsolation, contract.isolation)
         ) {
@@ -3119,7 +3206,7 @@ export class SubagentRuntime {
       }
       this.emitChange()
     })
-    let timeout: ReturnType<typeof setTimeout> | undefined
+    let cancelTimeout: (() => void) | undefined
     const abortFromSignal = () => {
       this.requestCancel(record.agentId, 'The parent Task call was aborted.')
     }
@@ -3134,9 +3221,10 @@ export class SubagentRuntime {
       this.assertRunContinuing(active)
 
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
+        cancelTimeout = setAwakeTimeout(() => {
           if (active.integrationStarted) return
-          active.abortReason = 'The child exceeded the six-hour runtime limit.'
+          active.abortReason =
+            'The child exceeded the six-hour runtime limit. Time while the machine slept does not count.'
           active.intercomController.abort(active.abortReason)
           active.abortPromise ??= active.session.abort().catch((error) => {
             active.abortReason = errorMessage(error)
@@ -3532,7 +3620,7 @@ export class SubagentRuntime {
         toolExecutionReceipts,
       )
     } finally {
-      if (timeout !== undefined) clearTimeout(timeout)
+      cancelTimeout?.()
       signal?.removeEventListener('abort', abortFromSignal)
       unsubscribe()
       if (active.inPlace !== undefined) {

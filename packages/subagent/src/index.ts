@@ -468,7 +468,7 @@ export function registerSubagent(pi: ExtensionAPI, runTimeoutMs?: number): Subag
 
   registerHybridTaskTool<typeof TaskInputSchema, TaskToolDetails, TaskRenderState>(pi, {
     description:
-      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label preserved on resume. A selected capability profile may require an exact role and provide its default model. Explicit model overrides take precedence over valid capability policy. Foreground is the default unless the selected agent defines background mode. Codemode may dispatch a single Task only with explicit run_in_background: true. Call Task directly for foreground or batch execution. Batch graphs use { tasks: [{ id, description, prompt, subagent_type }] }; run_in_background is forbidden on graph nodes and the batch wrapper.',
+      'Run a subagent with a persistent transcript. Use resume with the returned Agent ID to continue it. Optional role is an explicit task-purpose label preserved on resume. A selected capability profile may require an exact role and provide its default model. Explicit model overrides take precedence over valid capability policy. Foreground is the default unless the selected agent defines background mode. Codemode may dispatch a single Task only with explicit run_in_background: true. Call Task directly for foreground or batch execution. A resume needs only resume and prompt. Batch graphs use { tasks: [{ id, description, prompt, subagent_type }] }; run_in_background is forbidden on graph nodes and the batch wrapper.',
     execute: async (callId, input, signal, onUpdate, ctx) => {
       const progress = new JobProgress(
         runtime,
@@ -651,7 +651,7 @@ async function executeTask(
       isError: batch.status !== 'completed',
     }
   }
-  const decoded = decodeSingleTaskInput(input)
+  const decoded = decodeSingleTaskInput(runtime.completeResumeInput(input))
   const result = await runtime.run({ ctx, input: decoded, onStarted, signal })
 
   if (result.kind === 'background') {
@@ -689,6 +689,7 @@ async function executeTask(
 }
 
 export { acquireSubagentController } from './controller.ts'
+export { setAwakeTimeout } from './awake-timer.ts'
 export { ExecuteTaskRequestSchema, SUBAGENT_EXECUTE_TASK_EVENT } from './execute-event.ts'
 export type { ExecuteTaskRequest } from './execute-event.ts'
 export { captureWorkspaceSnapshot, materializeDependencyDirectories } from './git-isolation.ts'

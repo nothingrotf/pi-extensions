@@ -67,7 +67,7 @@ export class ParentDecisions {
       () =>
         response.reject(
           new Error(
-            'The parent did not answer before the decision deadline. No authorization was granted.',
+            'The parent did not answer before the decision deadline. No authorization was granted. Do not perform the requested change. Finish and retain the work that your brief already authorizes, then end your turn and report this decision with its options and your recommendation.',
           ),
         ),
       this.timeoutMs,

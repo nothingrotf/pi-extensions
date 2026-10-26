@@ -227,6 +227,15 @@ export const SingleTaskInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
+export const TaskToolSingleInputSchema = Type.Object(
+  {
+    ...SingleTaskInputSchema.properties,
+    description: Type.Optional(SingleTaskFields.description),
+    subagent_type: Type.Optional(SingleTaskFields.subagent_type),
+  },
+  { additionalProperties: false },
+)
+
 export const TaskNodeInputSchema = Type.Object(
   {
     ...SingleTaskFields,
@@ -244,7 +253,7 @@ export const BatchTaskInputSchema = Type.Object(
   { additionalProperties: false },
 )
 
-export const TaskInputSchema = toolInputUnion([SingleTaskInputSchema, BatchTaskInputSchema])
+export const TaskInputSchema = toolInputUnion([TaskToolSingleInputSchema, BatchTaskInputSchema])
 
 export const RunStatusSchema = Type.Union([
   Type.Literal('running'),
