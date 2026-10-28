@@ -62,6 +62,59 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
     }
   })
 
+  it.each([
+    ['openai', 'high'],
+    ['openai', 'max'],
+    ['openai-codex', 'high'],
+    ['openai-codex', 'max'],
+  ])('runs Terra tools and resumes with fast mode on %s at %s effort', async (provider, effort) => {
+    const harness = await createHarness()
+    try {
+      await writeFile(join(harness.dir, 'receipt.txt'), 'TERRA_TOOL_RESULT')
+      const model = `${provider}/gpt-6.1-terra`
+      const payloadStart = harness.state.payloads.length
+      const result = await runTask(harness, {
+        ...baseInput,
+        model: `${model}:${effort} [fast]`,
+        prompt: 'READ_THROUGH_CAPABILITY',
+      })
+      const id = agentId(result)
+      expect(result).toContain('TERRA_TOOL_RESULT')
+      expect(latestState(harness).records.at(-1)).toMatchObject({
+        model,
+        effort,
+        fast: true,
+        status: 'completed',
+      })
+      const payloads = harness.state.payloads
+        .slice(payloadStart)
+        .map((payload) => Value.Decode(PayloadSchema, payload))
+      const childPayloads = payloads.filter((payload) => payload.model === model)
+      expect(childPayloads.length).toBeGreaterThanOrEqual(2)
+      expect(childPayloads.every((payload) => payload.service_tier === 'priority')).toBe(true)
+
+      const resumeStart = harness.state.payloads.length
+      const resumed = await runTask(harness, { resume: id, prompt: 'resume fast' })
+      expect(agentId(resumed)).toBe(id)
+      expect(latestState(harness).records.at(-1)).toMatchObject({
+        model,
+        effort,
+        fast: true,
+        status: 'completed',
+      })
+      const resumedPayloads = harness.state.payloads
+        .slice(resumeStart)
+        .map((payload) => Value.Decode(PayloadSchema, payload))
+      const resumedChildPayloads = resumedPayloads.filter((payload) => payload.model === model)
+      expect(resumedChildPayloads.length).toBeGreaterThan(0)
+      expect(resumedChildPayloads.every((payload) => payload.service_tier === 'priority')).toBe(
+        true,
+      )
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('applies explicit fast mode through the OpenAI provider', async () => {
     const harness = await createHarness()
     try {

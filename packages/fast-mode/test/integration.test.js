@@ -86,7 +86,7 @@ async function harness(modelId, { provider = 'openai-codex', responseTier } = {}
     api: provider === 'openai' ? 'openai-responses' : 'openai-codex-responses',
     apiKey: provider === 'openai' ? 'siwc-access-token' : token,
     baseUrl,
-    models: ['gpt-6-astra', 'gpt-6.1-sol', 'not-fast'].map((id) => ({
+    models: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'not-fast'].map((id) => ({
       id,
       name: id,
       reasoning: true,
@@ -144,24 +144,27 @@ async function harness(modelId, { provider = 'openai-codex', responseTier } = {}
 }
 
 describe('Fast Mode through the OpenAI provider', () => {
-  it('requests the tier and reports the tier that the API used', async () => {
-    const instance = await harness('gpt-6.1-sol', { provider: 'openai' })
-    await instance.session.prompt('/fast on')
-    expect(instance.notices.at(-1)).toContain('gpt-6.1-sol: service_tier=priority')
-    await instance.session.prompt('Reply OK')
-    expect(instance.requests.at(-1)).toMatchObject({
-      model: 'gpt-6.1-sol',
-      service_tier: 'priority',
-      reasoning: { effort: 'medium' },
-    })
-    await instance.session.prompt('/fast status')
-    expect(instance.notices.at(-1)).toContain('Last response: service_tier=priority.')
-    expect(instance.statuses.at(-1)).toBe('Fast requested')
-    await instance.session.prompt('/fast off')
-    await instance.session.prompt('Reply OK again')
-    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
-    expect(instance.statuses.at(-1)).toBeUndefined()
-  })
+  it.each(['gpt-6.1-sol', 'gpt-6.1-terra'])(
+    'requests and reports the tier for %s',
+    async (modelId) => {
+      const instance = await harness(modelId, { provider: 'openai' })
+      await instance.session.prompt('/fast on')
+      expect(instance.notices.at(-1)).toContain(`${modelId}: service_tier=priority`)
+      await instance.session.prompt('Reply OK')
+      expect(instance.requests.at(-1)).toMatchObject({
+        model: modelId,
+        service_tier: 'priority',
+        reasoning: { effort: 'medium' },
+      })
+      await instance.session.prompt('/fast status')
+      expect(instance.notices.at(-1)).toContain('Last response: service_tier=priority.')
+      expect(instance.statuses.at(-1)).toBe('Fast requested')
+      await instance.session.prompt('/fast off')
+      await instance.session.prompt('Reply OK again')
+      expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+      expect(instance.statuses.at(-1)).toBeUndefined()
+    },
+  )
 
   it('reports a response that the API processed at the standard tier', async () => {
     const instance = await harness('gpt-6.1-sol', { provider: 'openai', responseTier: 'default' })
@@ -176,67 +179,76 @@ describe('Fast Mode through the OpenAI provider', () => {
   })
 })
 
-describe.each(['gpt-6-astra', 'gpt-6.1-sol'])('Fast Mode through Codex with %s', (modelId) => {
-  it('toggles the tier without changing reasoning, verbosity, or other payload fields', async () => {
-    const instance = await harness(modelId)
-    await instance.session.prompt('Reply OK')
-    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
-    const originalText = instance.requests.at(-1).text
-    await instance.session.prompt('/fast on')
-    await instance.session.prompt('Reply OK again')
-    expect(instance.requests.at(-1)).toMatchObject({
-      model: modelId,
-      service_tier: 'priority',
-      reasoning: { effort: 'medium' },
-      text: originalText,
+describe.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra'])(
+  'Fast Mode through Codex with %s',
+  (modelId) => {
+    it('toggles the tier without changing reasoning, verbosity, or other payload fields', async () => {
+      const instance = await harness(modelId)
+      await instance.session.prompt('Reply OK')
+      expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+      const originalText = instance.requests.at(-1).text
+      await instance.session.prompt('/fast on')
+      await instance.session.prompt('Reply OK again')
+      expect(instance.requests.at(-1)).toMatchObject({
+        model: modelId,
+        service_tier: 'priority',
+        reasoning: { effort: 'medium' },
+        text: originalText,
+      })
+      expect(
+        JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
+      ).toEqual({
+        enabled: true,
+      })
+      await instance.session.prompt('/codex-fast off')
+      await instance.session.prompt('Reply OK once more')
+      expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+      expect(instance.session.messages.at(-1).stopReason).toBe('stop')
     })
-    expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
-      enabled: true,
-    })
-    await instance.session.prompt('/codex-fast off')
-    await instance.session.prompt('Reply OK once more')
-    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
-    expect(instance.session.messages.at(-1).stopReason).toBe('stop')
-  })
 
-  it('respects catalog denial after a model switch and refuses unsupported activation', async () => {
-    const instance = await harness(modelId)
-    await instance.session.prompt('/fast on')
-    await instance.session.setModel(instance.runtime.getModel('openai-codex', 'not-fast'))
-    await instance.session.prompt('Reply OK')
-    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
-    await instance.session.prompt('/fast off')
-    await instance.session.prompt('/fast on')
-    expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
-      enabled: false,
+    it('respects catalog denial after a model switch and refuses unsupported activation', async () => {
+      const instance = await harness(modelId)
+      await instance.session.prompt('/fast on')
+      await instance.session.setModel(instance.runtime.getModel('openai-codex', 'not-fast'))
+      await instance.session.prompt('Reply OK')
+      expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+      await instance.session.prompt('/fast off')
+      await instance.session.prompt('/fast on')
+      expect(
+        JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
+      ).toEqual({
+        enabled: false,
+      })
+      await instance.session.setModel(instance.runtime.getModel('openai-codex', modelId))
+      await writeFile(
+        instance.catalogPath,
+        JSON.stringify({ models: [{ slug: modelId, service_tiers: [] }] }),
+      )
+      await instance.session.prompt('/fast on')
+      expect(
+        JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
+      ).toEqual({
+        enabled: false,
+      })
     })
-    await instance.session.setModel(instance.runtime.getModel('openai-codex', modelId))
-    await writeFile(
-      instance.catalogPath,
-      JSON.stringify({ models: [{ slug: modelId, service_tiers: [] }] }),
-    )
-    await instance.session.prompt('/fast on')
-    expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
-      enabled: false,
-    })
-  })
 
-  it('uses the catalog tier and suspends the override when the preference becomes invalid', async () => {
-    const instance = await harness(modelId)
-    await writeFile(
-      instance.catalogPath,
-      JSON.stringify({
-        models: [{ slug: modelId, service_tiers: [{ id: 'fast', name: 'Fast' }] }],
-      }),
-    )
-    await instance.session.prompt('/fast on')
-    await instance.session.prompt('Reply OK')
-    expect(instance.requests.at(-1).service_tier).toBe('fast')
-    await writeFile(join(instance.dir, 'state/fast-mode.json'), 'invalid')
-    await instance.session.prompt('Reply OK again')
-    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
-    expect(instance.notices.some((notice) => notice.includes('Cannot read Fast Mode state'))).toBe(
-      true,
-    )
-  })
-})
+    it('uses the catalog tier and suspends the override when the preference becomes invalid', async () => {
+      const instance = await harness(modelId)
+      await writeFile(
+        instance.catalogPath,
+        JSON.stringify({
+          models: [{ slug: modelId, service_tiers: [{ id: 'fast', name: 'Fast' }] }],
+        }),
+      )
+      await instance.session.prompt('/fast on')
+      await instance.session.prompt('Reply OK')
+      expect(instance.requests.at(-1).service_tier).toBe('fast')
+      await writeFile(join(instance.dir, 'state/fast-mode.json'), 'invalid')
+      await instance.session.prompt('Reply OK again')
+      expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+      expect(
+        instance.notices.some((notice) => notice.includes('Cannot read Fast Mode state')),
+      ).toBe(true)
+    })
+  },
+)

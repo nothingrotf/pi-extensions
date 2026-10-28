@@ -23,7 +23,7 @@ const astra = { api: 'openai-codex-responses', id: 'gpt-6-astra', provider: 'ope
 
 describe('Fast Mode capability policy', () => {
   it('supports verified Codex models without a catalog and rejects other transports', () => {
-    for (const id of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol']) {
+    for (const id of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra']) {
       expect(getFastSupport({ ...astra, id }, '/missing/catalog.json')).toEqual({
         supported: true,
         tier: 'priority',
@@ -38,7 +38,7 @@ describe('Fast Mode capability policy', () => {
     expect(getFastSupport({ ...astra, api: 'openai-responses' }).supported).toBe(false)
     expect(
       getFastSupport(
-        { api: 'openai-responses', id: 'gpt-6.1-sol', provider: 'openai' },
+        { api: 'openai-responses', id: 'gpt-6.1-terra', provider: 'openai' },
         '/missing/catalog.json',
       ),
     ).toEqual({ supported: true, tier: 'priority', source: 'builtin' })
@@ -73,6 +73,7 @@ describe('Fast Mode capability policy', () => {
           { slug: 'gpt-6-astra', service_tiers: [], additional_speed_tiers: ['fast'] },
           { slug: 'gpt-6-sol', service_tiers: [] },
           { slug: 'gpt-6.1-sol', service_tiers: [] },
+          { slug: 'gpt-6.1-terra', service_tiers: [] },
           { slug: 'gpt-6-luna', service_tiers: [{ id: 'fast' }] },
           { slug: 'legacy-catalog-model', additional_speed_tiers: ['fast'] },
         ],
@@ -86,6 +87,7 @@ describe('Fast Mode capability policy', () => {
     expect(getFastSupport(astra, path).supported).toBe(false)
     expect(getFastSupport({ ...astra, id: 'gpt-6-sol' }, path).supported).toBe(false)
     expect(getFastSupport({ ...astra, id: 'gpt-6.1-sol' }, path).supported).toBe(false)
+    expect(getFastSupport({ ...astra, id: 'gpt-6.1-terra' }, path).supported).toBe(false)
     expect(getFastSupport({ ...astra, id: 'gpt-6-luna' }, path)).toEqual({
       supported: true,
       tier: 'fast',

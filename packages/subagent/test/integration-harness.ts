@@ -77,7 +77,7 @@ export interface Harness {
 }
 
 export const PayloadSchema = Type.Object(
-  { request: Type.String(), service_tier: Type.Optional(Type.String()) },
+  { model: Type.String(), request: Type.String(), service_tier: Type.Optional(Type.String()) },
   { additionalProperties: true },
 )
 
@@ -1008,7 +1008,10 @@ export function streamResponse(
     { once: true },
   )
 
-  const transformed = options?.onPayload?.({ request: 'test' }, model)
+  const transformed = options?.onPayload?.(
+    { model: `${model.provider}/${model.id}`, request: 'test' },
+    model,
+  )
   const request = Promise.resolve(transformed).then(
     (payload) => {
       state.payloads.push(payload)
@@ -1039,7 +1042,7 @@ export function providerConfig(state: ProviderState): ProviderConfig {
         reasoning: true,
         thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high' },
       },
-      ...['gpt-6-sol', 'gpt-6-luna'].map((id) => ({
+      ...['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra'].map((id) => ({
         contextWindow: 272_000,
         cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
         id,

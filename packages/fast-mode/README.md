@@ -50,6 +50,7 @@ The built-in list covers these model identifiers when the catalog lacks tier met
 - `gpt-6-luna`
 - `gpt-6-sol`
 - `gpt-6.1-sol`
+- `gpt-6.1-terra`
 
 Unknown models require a catalog entry that advertises `priority` or `fast`.
 The `openai` and `openai-codex` providers use the same catalog and compatibility list.
