@@ -69,6 +69,40 @@ The footer shows the number of active commands.
 Completion messages show a status glyph, the name, the exit code, and the run time.
 Expand tool results or completion messages to inspect more output and the command ID.
 
+## Editor dock
+
+In the terminal UI, a dock above the editor lists active commands:
+
+```text
+   ⚙ bg · 2 ▾                                                   3m12s
+   ├─ ● Watch tests  1m5s  test run 31
+   ╰─ ● Development server  3m12s  ready on http://localhost:3000
+   ↯ logs and stop in the panel                          ctrl+shift+b
+```
+
+- Rows show the newest command first, with the name, run time, and last log line.
+- The dock shows at most five commands and counts the rest as `+N more`.
+- Rows below 56 columns omit the log line. Terminal control sequences never reach the dock.
+- A settled command remains for 1.4 seconds with its outcome, such as `✗ Build  exit 2  4s`.
+- The dock refreshes once per second while a command runs, and renders nothing otherwise.
+
+## Command pane
+
+Open the pane with `/bg` or `ctrl+shift+b`.
+The shortcut requires a terminal that reports modified keys, such as a terminal with the Kitty keyboard protocol.
+
+- Use `j`, `k`, or the arrow keys to select a command.
+- Press `enter` to open the retained log. The log follows new output.
+- Press `/` to search by name, command, ID, or status.
+- Press `tab` to switch between all commands and active commands.
+- Press `PageUp`, `PageDown`, `g`, or `G` to navigate a page, the start, or the end.
+- Press `x`, then `y`, to stop the selected running command.
+- Press `escape` to return or close the pane.
+
+The log view shows the status, run time, command, diagnostic, and ID above the retained output.
+It marks a truncated log as `retained tail only`.
+The pane lists retained terminal records, but reading a log in the pane does not acknowledge a completion.
+
 ## HUD integration
 
 The package works with `@nothingrotf/hud` without a dependency in either direction.

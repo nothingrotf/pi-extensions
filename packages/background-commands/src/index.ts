@@ -2,7 +2,6 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionFactory,
-  ThemeColor,
 } from '@earendil-works/pi-coding-agent'
 import {
   type Component,
@@ -13,6 +12,8 @@ import {
 import { Type } from 'typebox'
 import { Value } from 'typebox/value'
 
+import { PEEK_SHORTCUT } from './dock.ts'
+import { elapsed, statusStyle } from './format.ts'
 import {
   commandsState,
   HudBridge,
@@ -28,13 +29,13 @@ import {
   parseCommandRequest,
   toolParameters,
   ToolOutputSchema,
-  type CommandCompletion,
   type CommandRequest,
   type CommandSnapshot,
   type ToolOutput,
 } from './schema.ts'
 import { createBackgroundCommands, type BackgroundCommands } from './service.ts'
 import { sessionCommandContext } from './shell.ts'
+import { CommandsTui } from './ui.ts'
 
 export const completionMessageType = 'background-command-completion'
 const statusKey = 'background-commands'
@@ -66,31 +67,6 @@ function completionComponent(header: string, body: string, paddingX: number): Co
     },
     render: (width) => parts.flatMap((part) => part.render(width)),
   }
-}
-
-interface OutcomeStyle {
-  readonly glyph: string
-  readonly tone: ThemeColor
-}
-
-function outcomeStyle(status: CommandCompletion['snapshot']['status']): OutcomeStyle {
-  switch (status) {
-    case 'completed':
-      return { glyph: '✓', tone: 'success' }
-    case 'error':
-      return { glyph: '✗', tone: 'error' }
-    case 'stopped':
-      return { glyph: '■', tone: 'warning' }
-  }
-}
-
-function elapsed(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return seconds % 60 > 0 ? `${minutes}m${seconds % 60}s` : `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  return minutes % 60 > 0 ? `${hours}h${minutes % 60}m` : `${hours}h`
 }
 
 function describe(snapshot: CommandSnapshot): string {
@@ -154,9 +130,14 @@ export function createBackgroundCommandsExtension(
     let navigating = false
     let compactedTimer: ReturnType<typeof setTimeout> | undefined
     const hud = new HudBridge(pi)
+    const attached = () => (unsubscribeChanges === undefined ? undefined : service)
+    const panel = new CommandsTui({
+      list: () => attached()?.list() ?? [],
+      output: (id) => attached()?.find(id)?.output(),
+      stop: (id) => attached()?.find(id)?.stop(),
+    })
 
-    const currentState = () =>
-      commandsState(unsubscribeChanges === undefined ? [] : (service?.list() ?? []))
+    const currentState = () => commandsState(attached()?.list() ?? [])
     const refreshStatus = () => {
       const state = currentState()
       const active = state.running + state.stopping
@@ -165,6 +146,7 @@ export function createBackgroundCommandsExtension(
         active === 0 ? undefined : `${active} background command${active === 1 ? '' : 's'}`,
       )
       hud.publish(state)
+      panel.changed()
     }
     const attach = (ctx: ExtensionContext) => {
       context = ctx
@@ -210,6 +192,7 @@ export function createBackgroundCommandsExtension(
           )
         },
       })
+      panel.attach(ctx)
       refreshStatus()
       return service
     }
@@ -220,6 +203,7 @@ export function createBackgroundCommandsExtension(
       unbind = undefined
       unsubscribeChanges?.()
       unsubscribeChanges = undefined
+      panel.detach()
       context?.ui.setStatus(statusKey, undefined)
       hud.publish(currentState())
       context = undefined
@@ -313,7 +297,7 @@ export function createBackgroundCommandsExtension(
       if (!Value.Check(CompletionSchema, message.details)) return undefined
       const details = message.details
       const exit = details.exitCode === null ? '' : `, exit ${details.exitCode}`
-      const { glyph, tone } = outcomeStyle(details.status)
+      const { glyph, tone } = statusStyle(details)
       const summary = `${details.status}${exit} · ${elapsed(details.finishedAt - details.startedAt)}`
       const header = `${theme.fg(tone, glyph)} ${theme.fg('toolTitle', theme.bold(stripTerminalSequences(details.name)))} ${theme.fg('muted', summary)}`
       const lines: string[] = []
@@ -324,6 +308,14 @@ export function createBackgroundCommandsExtension(
       if (output.length > 0) lines.push(theme.fg('toolOutput', stripTerminalSequences(output)))
       if (details.output.truncated) lines.push(theme.fg('muted', '[Truncated log excerpt]'))
       return completionComponent(header, lines.join('\n'), Math.max(0, outputPad))
+    })
+    pi.registerCommand('bg', {
+      description: 'Browse background commands, read their logs, and stop a running command.',
+      handler: async (_args, ctx) => panel.open(ctx),
+    })
+    pi.registerShortcut(PEEK_SHORTCUT, {
+      description: 'Browse background commands',
+      handler: async (ctx) => panel.open(ctx),
     })
     pi.on('session_start', async (_event, ctx) => {
       await detach()

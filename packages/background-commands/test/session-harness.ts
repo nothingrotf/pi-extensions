@@ -15,6 +15,7 @@ import {
   DefaultResourceLoader,
   type ExtensionAPI,
   type ExtensionFactory,
+  type ExtensionUIContext,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -41,6 +42,7 @@ export async function sessionFixture(
   plan: Plan = () => [{ type: 'text', text: 'Done' }],
   ownership: 'standalone' | 'injected' = 'injected',
   extensionAfter?: ExtensionFactory,
+  terminalUI?: (base: ExtensionUIContext) => ExtensionUIContext,
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'pi-background-session-'))
   const agentDir = join(directory, 'agent')
@@ -152,7 +154,9 @@ export async function sessionFixture(
   })
   const errors: string[] = []
   await session.bindExtensions({
-    mode: 'print',
+    ...(terminalUI === undefined
+      ? { mode: 'print' }
+      : { mode: 'tui', uiContext: terminalUI(session.extensionRunner.getUIContext()) }),
     onError: (error) => {
       errors.push(error.error)
     },
