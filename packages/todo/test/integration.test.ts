@@ -431,21 +431,16 @@ describe('todo reminders through AgentSession', () => {
     }
   })
 
-  test('resets the cycle on user prompts but not custom continuation hooks', async () => {
+  test('continues reminders inside the settling run and resets them on user prompts', async () => {
     const instance = await harness()
     try {
       await instance.prompt([seed(), text(), text()])
-      expect(instance.events).toEqual([
-        'before_agent_start:user',
-        'agent_start',
-        'before_agent_start:custom',
-        'agent_start',
-      ])
+      expect(instance.events).toEqual(['before_agent_start:user', 'agent_start', 'agent_start'])
       await instance.prompt([text(), text()], 'Continue the task')
       expect(instance.customMessages('todo-reminder')).toHaveLength(2)
       expect(instance.events.filter((event) => event === 'before_agent_start:user')).toHaveLength(2)
       expect(instance.events.filter((event) => event === 'before_agent_start:custom')).toHaveLength(
-        2,
+        0,
       )
     } finally {
       await instance.close()
@@ -491,7 +486,7 @@ describe('todo reminders through AgentSession', () => {
       ])
       expect(instance.events.filter((event) => event === 'before_agent_start:user')).toHaveLength(1)
       expect(instance.events.filter((event) => event === 'before_agent_start:custom')).toHaveLength(
-        2,
+        0,
       )
     } finally {
       await instance.close()
@@ -551,6 +546,61 @@ describe('todo reminders through AgentSession', () => {
       await instance.close()
     }
   })
+
+  test.each([true, false])(
+    'never delivers a reminder snapshot after a concurrent turn changes todos (earlier registration %s)',
+    async (extraFirst) => {
+      let notified = false
+      const instance = await harness((pi) => {
+        pi.on('agent_settled', () => {
+          if (notified) return
+          notified = true
+          pi.sendMessage(
+            {
+              customType: 'background-notice',
+              content: 'Background lane finished.',
+              display: true,
+            },
+            { deliverAs: 'followUp', triggerTurn: true },
+          )
+        })
+      }, extraFirst)
+      try {
+        instance.script([
+          seed(),
+          text('Waiting for the background lane.'),
+          call('todo_write', {
+            merge: true,
+            todos: [
+              { id: 'task', content: 'Inspect the isolated test workspace', status: 'completed' },
+            ],
+          }),
+          text('Completed after the background result.'),
+          text('No work remains.'),
+        ])
+        await instance.session.prompt('Perform the test task')
+        await instance.session.agent.waitForIdle()
+        await expect.poll(() => instance.session.isIdle).toBe(true)
+        const transcript = instance.session.messages
+        const completion = transcript.findIndex(
+          (message) =>
+            message.role === 'toolResult' &&
+            message.toolName === 'todo_write' &&
+            contentText(message.content).includes('1 completed'),
+        )
+        expect(completion).toBeGreaterThan(-1)
+        const staleReminders = transcript
+          .slice(completion)
+          .filter((message) => message.role === 'custom' && message.customType === 'todo-reminder')
+        expect(staleReminders).toEqual([])
+        expect(instance.customMessages('background-notice')).toHaveLength(1)
+        expect(instance.unexpectedRequests()).toBe(0)
+        expect(instance.extensionErrors).toEqual([])
+      } finally {
+        await instance.close()
+      }
+    },
+  )
 
   test('caps continuations at three and resets the cap for the next prompt', async () => {
     const instance = await harness()

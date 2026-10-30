@@ -18,6 +18,7 @@ function harness(branch = []) {
   let confirmAnswer = true
   let activeTools = ['read', 'bash', 'edit', 'write', 'todo_write', 'todo_read']
   let pending = false
+  const reminders = []
   const api = {
     events: {
       emit(name, payload) {
@@ -170,6 +171,33 @@ function harness(branch = []) {
     },
     setPending(value) {
       pending = value
+    },
+    reminders,
+    async settle({ pendingMessages = [], outcome = 'completed', proposed = false } = {}) {
+      const handler = handlers.get('agent_before_settle')
+      if (handler === undefined) throw new Error('Missing agent_before_settle handler')
+      const result = await handler(
+        {
+          type: 'agent_before_settle',
+          entries: [],
+          continue: proposed,
+          outcome,
+          context: {
+            contextEntries: [],
+            contextMessages: [],
+            llmMessages: [],
+            pendingMessages,
+            canContinue: false,
+          },
+        },
+        ctx,
+      )
+      if (result !== undefined) {
+        expect(result.continue).toBe(true)
+        reminders.push(...result.entries)
+      }
+      await handlers.get('agent_settled')({ aborted: outcome === 'aborted' }, ctx)
+      return result
     },
   }
 }
@@ -565,16 +593,17 @@ describe('todo reminders', () => {
     await instance.emit('message_start', { message: { role: 'user', content: 'Continue' } })
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       await instance.emit('agent_end', { messages: [assistantStop('Done for now.')] })
-      const settled = instance.emit('agent_settled')
-      expect(instance.messages).toHaveLength(attempt)
-      expect(instance.messages.at(-1)).toMatchObject({
-        message: { customType: 'todo-reminder', display: true },
-        options: { triggerTurn: true, deliverAs: 'followUp' },
+      await instance.settle()
+      expect(instance.reminders).toHaveLength(attempt)
+      expect(instance.reminders.at(-1)).toMatchObject({
+        type: 'custom_message',
+        customType: 'todo-reminder',
+        display: true,
       })
-      expect(instance.messages.at(-1).message.content).toContain('1 incomplete todo item(s)')
-      expect(instance.messages.at(-1).message.content).toContain('- Inspect (id: 1)')
-      expect(instance.messages.at(-1).message.content).not.toContain('Wait for ops')
-      expect(instance.messages.at(-1).message.content).toContain(`(Reminder ${attempt}/3)`)
+      expect(instance.reminders.at(-1).content).toContain('1 incomplete todo item(s)')
+      expect(instance.reminders.at(-1).content).toContain('- Inspect (id: 1)')
+      expect(instance.reminders.at(-1).content).not.toContain('Wait for ops')
+      expect(instance.reminders.at(-1).content).toContain(`(Reminder ${attempt}/3)`)
       expect(instance.emitted.at(-1)).toMatchObject({
         name: 'todo_reminder',
         payload: { attempt, maxAttempts: 3, todos: [{ id: '1', status: 'in_progress' }] },
@@ -583,8 +612,7 @@ describe('todo reminders', () => {
       await instance.emit('agent_end', {
         messages: [assistantStop('Which task requires approval?')],
       })
-      await instance.emit('agent_settled')
-      await settled
+      await instance.settle()
       await instance.emit('tool_execution_end', {
         toolCallId: 'w',
         toolName: 'write',
@@ -593,16 +621,16 @@ describe('todo reminders', () => {
       })
     }
     await instance.emit('agent_end', { messages: [assistantStop('Still done.')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(3)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(3)
 
     await instance.emit('message_start', { message: { role: 'user', content: 'Continue' } })
     await instance.emit('agent_end', { messages: [assistantStop('New prompt stop.')] })
-    const settled = instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(4)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(4)
     await instance.emit('agent_end', { messages: [assistantStop('Stopped without progress.')] })
-    await instance.emit('agent_settled')
-    await settled
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(4)
   })
 
   test('stays silent while awaiting progress, on questions, on tool calls, and on aborts', async () => {
@@ -614,26 +642,29 @@ describe('todo reminders', () => {
     })
     await instance.emit('before_agent_start')
     await instance.emit('agent_end', { messages: [assistantStop('Which file should I edit?')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Please confirm.')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Working', { toolCall: true })] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('', { stopReason: 'aborted' })] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
-    expect(instance.messages).toHaveLength(0)
-    const settled = instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(1)
+    await instance.settle({ outcome: 'aborted' })
+    await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    await instance.settle({ proposed: true })
+    expect(instance.reminders).toHaveLength(0)
+    await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(1)
     await instance.emit('agent_start')
     await instance.emit('agent_end', { messages: [assistantStop('Stopped again without acting.')] })
-    await instance.emit('agent_settled')
-    await settled
-    expect(instance.messages).toHaveLength(1)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(1)
   })
 
   test('skips reminders when todo_write is inactive, messages are pending, or todos are closed', async () => {
@@ -644,23 +675,21 @@ describe('todo reminders', () => {
       todos: [{ id: '1', content: 'Inspect', status: 'pending' }],
     })
     await instance.emit('before_agent_start')
-    instance.setPending(true)
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
-    instance.setPending(false)
+    await instance.settle({ pendingMessages: [{ role: 'custom', customType: 'notice' }] })
+    expect(instance.reminders).toHaveLength(0)
     instance.setActiveTools(['read'])
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
     instance.setActiveTools(['read', 'todo_write'])
     await instance.tool('todo_write', {
       merge: true,
       todos: [{ id: '1', content: 'Inspect', status: 'completed' }],
     })
     await instance.emit('agent_end', { messages: [assistantStop('Stopped.')] })
-    await instance.emit('agent_settled')
-    expect(instance.messages).toHaveLength(0)
+    await instance.settle()
+    expect(instance.reminders).toHaveLength(0)
   })
 
   test('nudges after twelve mutations without a todo touch, at most twice per prompt', async () => {

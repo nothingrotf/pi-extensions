@@ -440,17 +440,21 @@ export default function todo(pi: ExtensionAPI): void {
     stoppedAssistant = lastAssistant(event.messages)
   })
 
-  pi.on('agent_settled', (_event, ctx) => {
+  pi.on('agent_settled', () => {
     overlay.setWorking(false)
+  })
+
+  pi.on('agent_before_settle', (event, ctx) => {
     const assistant = stoppedAssistant
     stoppedAssistant = null
     if (
       assistant === null ||
+      event.outcome !== 'completed' ||
+      event.continue ||
+      event.context.pendingMessages.length > 0 ||
       waitingForUser() ||
       ctx.signal?.aborted ||
-      !ctx.isIdle() ||
-      !todoToolActive() ||
-      ctx.hasPendingMessages()
+      !todoToolActive()
     )
       return
     const decision = decideStopReminder(cycle, todos, assistant)
@@ -465,19 +469,23 @@ export default function todo(pi: ExtensionAPI): void {
       attempt: decision.attempt,
       maxAttempts: maximumStopReminders,
     })
-    pi.sendMessage(
-      {
-        customType: 'todo-reminder',
-        content: formatStopReminder(decision.todos, decision.attempt),
-        display: true,
-        details: {
-          attempt: decision.attempt,
-          maxAttempts: maximumStopReminders,
-          todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
+    return {
+      entries: [
+        ...event.entries,
+        {
+          type: 'custom_message',
+          customType: 'todo-reminder',
+          content: formatStopReminder(decision.todos, decision.attempt),
+          display: true,
+          details: {
+            attempt: decision.attempt,
+            maxAttempts: maximumStopReminders,
+            todos: decision.todos.map((todo) => ({ id: todo.id, content: todo.content })),
+          },
         },
-      },
-      { triggerTurn: true, deliverAs: 'followUp' },
-    )
+      ],
+      continue: true,
+    }
   })
 
   pi.on('agent_start', () => {

@@ -228,13 +228,13 @@ The extension publishes `todo_turn_start_ids` when an agent run starts.
 
 ## Stop reminder
 
-The extension captures the last assistant response at `agent_end`. It evaluates the response at `agent_settled`, after automatic retries and queued continuations finish.
+The extension captures the last assistant response at `agent_end`. It evaluates the response at `agent_before_settle`, after automatic retries and queued continuations finish.
 
-An eligible stop produces a visible `todo-reminder` message and a new agent run. Pi starts this continuation after the `agent_settled` handlers finish and before the original prompt returns.
+An eligible stop adds a visible `todo-reminder` boundary message and requests one continuation in the same settling run. Pi records the reminder and sends it in the next model request.
 
-The handler never waits inside `agent_settled`. A blocked handler would defer every later extension turn, including Task notifications and coordinator decision requests.
+The reminder therefore reflects the todo list at delivery time. It never waits in a follow-up queue behind messages that other extensions send while the run settles, such as background command completions.
 
-Each accepted user message resets the reminder cycle at `message_start`. This includes queued user messages. Custom reminder continuations do not reset the cycle or emit `before_agent_start`.
+Each accepted user message resets the reminder cycle at `message_start`. This includes queued user messages. Reminder continuations do not reset the cycle or emit `before_agent_start`.
 
 The reminder does not fire when:
 
@@ -247,7 +247,8 @@ The reminder does not fire when:
 - three reminders already fired for the current user message
 - no actionable tasks remain
 - `todo_write` is inactive
-- another run is active or user messages remain queued
+- another boundary handler already requested a continuation
+- messages remain pending for the next request
 
 The detector uses Markdown structure and ignores quoted examples, code, tables, images, and HTML. It handles multiline quotes, multiline code spans, emphasis, headings, and questions regardless of ASCII characters.
 
