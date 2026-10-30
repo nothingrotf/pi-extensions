@@ -173,7 +173,7 @@ export async function prepareLiveFixture(directory, scenario) {
       'Remove duplicate trimmed names, preserve first appearance, preserve case sensitivity, and remove blank names.\n',
     )
     goal =
-      'Independently review the uncommitted names.js diff against contract.md. Find actionable correctness defects with concrete input and expected output. Do not edit product files.'
+      'Try to break the uncommitted names.js diff against contract.md. Prove each defect with a run that shows the concrete input, the actual output, and the expected output. Keep repros in your own worktree.'
   } else if (id.includes('comment')) {
     goal =
       'Audit exactly names.js and cli.js directly using your assigned Comment Sicko rules. Preserve application behavior. These scoped files contain no comments, so a truthful zero-deletion result is valid. Do not manufacture comments, defects, or behavior changes to make the audit nonempty.'
@@ -280,8 +280,6 @@ export async function prepareLiveFixture(directory, scenario) {
       'reflect-synthesizer',
       'trail-cross-review',
       'pickup-reducer',
-      'orchestrate-brief-auditor',
-      'orchestrate-retro-reader',
     ].includes(id)
   ) {
     await writeFile(

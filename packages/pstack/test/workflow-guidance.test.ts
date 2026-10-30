@@ -37,6 +37,26 @@ describe('standalone pstack worker contracts', () => {
     },
   )
 
+  it('runs autopilot-stack as autopilot-full without the merge', () => {
+    const stack = skill('poteto-mode/playbooks/autopilot-stack.md')
+    expect(stack).toContain('Run the Autopilot-full playbook, but do not merge.')
+    expect(stack).toContain('Stack a PR only when it builds on another PR.')
+    expect(stack).toContain('nobody pushes without the operator')
+    const full = skill('poteto-mode/playbooks/autopilot-full.md')
+    expect(full).toContain('Block a PR only for a problem you can show')
+    expect(full).toContain('a wording-only change gets none')
+  })
+
+  it('restates the goal first and decides before measuring', () => {
+    const mode = skill('poteto-mode/SKILL.md')
+    expect(mode).toContain('Your first message on a task')
+    expect(mode).toContain("open each PR's `## Summary` with it")
+    expect(mode).toContain('Run a resume with `run_in_background: true` too')
+    expect(skill('principle-explain-the-number/SKILL.md')).toContain(
+      'Write the decision before you run.',
+    )
+  })
+
   it('starts authorized autopilot babysit once the owner reports the PR URL', () => {
     const opening = skill('poteto-mode/playbooks/opening-a-pr.md')
     const babysit = skill('poteto-mode/playbooks/babysit.md')

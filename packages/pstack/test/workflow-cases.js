@@ -21,7 +21,7 @@ export const workflowCases = [
   ...['judgment', 'tooling', 'divergent', 'synthesizer'].map((lens) =>
     leaf(`reflect-${lens}`, skill('reflect'), `reflect ${lens}`),
   ),
-  leaf('interrogate-reviewer', skill('interrogate'), 'interrogate reviewers'),
+  leaf('interrogate-reviewer', skill('interrogate'), 'interrogate reviewers', 'verifier'),
   leaf('recall-slice', skill('recall'), 'judgment and prose'),
   ...['early', 'middle', 'recent'].map((slice) =>
     leaf(`automate-${slice}`, skill('automate-me'), 'judgment and prose'),
@@ -125,8 +125,4 @@ export const workflowCases = [
     ...leaf('worktree-investigator', playbook('worktree-cleanup'), 'judgment and prose'),
     type: 'poteto-agent',
   },
-  leaf('orchestrate-brief-auditor', playbook('orchestrate'), 'arena cross-judge pool'),
-  writer('orchestrate-stacker', playbook('orchestrate'), 'refactoring'),
-  leaf('orchestrate-babysitter', playbook('orchestrate'), 'swarm workers', 'verifier'),
-  leaf('orchestrate-retro-reader', playbook('orchestrate'), 'judgment and prose'),
 ]

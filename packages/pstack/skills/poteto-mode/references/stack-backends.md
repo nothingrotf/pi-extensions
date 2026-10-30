@@ -74,7 +74,7 @@ Always use `gh stack submit --auto`. The command without `--auto` can prompt for
 
 ## Frontier
 
-The bundled `orch frontier set` command works with both backends and does not read `POTETO_STACK_BACKEND`. It walks the pull request base chain from the checkout's current branch with `gh pr list`. Run it from the stacker's clone, because head SHAs come from local branch refs. It does not modify the stack.
+The merge frontier is the lowest unmerged pull request in the base chain. Read it with `gh pr list --head <branch>` and `gh pr list --base <branch>` from the owner's clone. The base chain is the same under both backends, so this read does not depend on `POTETO_STACK_BACKEND`. It does not modify the stack.
 
 ## Merge semantics
 

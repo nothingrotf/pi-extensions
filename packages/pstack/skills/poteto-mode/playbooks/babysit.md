@@ -5,7 +5,7 @@
 Babysitting normally starts on a separate user request after a phase or stack build, not merely because a PR opens.
 In Autopilot-full or Autopilot-stack, an explicit lifecycle assignment is that request.
 Once the owner reports the PR URL, the root starts the assigned loop without waiting for unrelated builds.
-For Autopilot-stack, keep one babysitter at the merge frontier while the remaining builds continue.
+For stacked PRs in Autopilot-stack, keep one babysitter at the merge frontier while the remaining builds continue.
 The root owns the installed loop and watcher, not an implementer.
 Babysit grants no merge authority.
 

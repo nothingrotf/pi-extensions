@@ -188,7 +188,6 @@ The Pi port adapts or omits these parts:
 
 - The runtime model policy fixes the model, effort, and speed of each role. The upstream rule that picks a reasoning level and speed for each subagent has no counterpart.
 - The playbooks keep the Graphite and GitHub stack backends. They take the principles from #613 without its base-chain landing steps or the Origin forge.
-- The bundled `orch` keeps the upstream `--forge origin` choice. The Pi playbooks use the default `gh` forge.
 - The orchestration frontier no longer needs a backend adapter, so the `gt` compatibility shim is removed.
 - `ketchup` still draws charts with an available tool instead of `/visualize`.
 - `worktree-audit.sh` keeps its `gh` pull request lookup, so the Origin lookup has no counterpart.
@@ -225,12 +224,29 @@ These upstream changes through [#807](https://github.com/cursor/plugins/pull/807
 
 The Pi port adapts or omits these parts:
 
-- The `orch` and `watch-pr` bundles are built with `bun build --target bun --minify --packages external` from the upstream sources without the dependency bootstrap.
+- The `watch-pr` bundle is built with `bun build --target bun --minify --packages external` from the upstream sources without the dependency bootstrap.
 - `reflect` targets the Pi and Agent Skills directories instead of `plugins/cache/` and `.cursor/skills/`. It reports a name collision when Pi keeps the package skill.
 - The `statechart` suite installs Pele and resvg with npm into the user cache on its first run. It skips PNG cases when that install fails and TLC cases when neither `TLA2TOOLS` nor mise can supply TLC.
 - The `swarm` Phase A numbering from [#807](https://github.com/cursor/plugins/pull/807) already holds locally.
 - [#805](https://github.com/cursor/plugins/pull/805) has no local counterpart because the local `worktree-audit.sh` does not read transcript times.
 - The Claude Code auto-update note from [#806](https://github.com/cursor/plugins/pull/806), `poteto-help`, the guide, and the version bumps have no local counterpart.
+
+These upstream changes through [#1043](https://github.com/cursor/plugins/pull/1043) at `c742dd61706fbacc1b95f1a20b7b988cf096ce6c` are also synchronized:
+
+- [#977](https://github.com/cursor/plugins/pull/977) replaces the `statechart` scripts with a TypeScript compiler. One command, `statechart SPEC.tla`, checks a TLA+ model with TLC, draws the Mermaid statechart, and reports the shortest path to each rule that breaks. It drops `from-chart`, `--against`, and `--fixed`.
+- [#982](https://github.com/cursor/plugins/pull/982) keeps qualified action names, such as `C!Up`, in property traces.
+- [#981](https://github.com/cursor/plugins/pull/981) waits for the reap in the statechart SIGKILL view test.
+- [#986](https://github.com/cursor/plugins/pull/986) restates the user's goal in the first message, briefs, PRs, and final reports. It makes `interrogate` adversaries prove each finding with a run, takes the arena cross-judge only from another family, adds subtitles to `ketchup-video`, and makes `principle-explain-the-number` write the decision before a run. Autopilot blocks a PR only for a problem a run or a wrong doc line shows, and Autopilot-stack becomes Autopilot-full without the merge.
+- [#1043](https://github.com/cursor/plugins/pull/1043) makes Orchestrate run with the coordinator's own tools and deletes the `orch` scripts.
+
+The Pi port adapts or omits these parts:
+
+- The `statechart` package test runs the upstream `node:test` suite with `fast-check` from the package development dependencies. TLC cases skip when neither `TLA2TOOLS` nor mise can supply TLC.
+- `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation. The skill keeps two adversaries by default and never substitutes an unconfigured model.
+- `arena` drops a rejected runner seat and marks a rejected judge `BLOCKED` instead of the upstream chain of model fallbacks. The upstream fallback chain for rejected slugs in `poteto-mode` has no counterpart.
+- PRs open their `## Summary` with the user's goal, because the `pr` template has no `## Why` heading.
+- Orchestrate keeps its state in `~/.pi/agent/poteto/orchestrate/<project-slug>/notes.md`, watches PRs with `loop_next`, and manages workers with `Task` and `TaskControl`. Cloud VMs, the Project store, and forks have no counterpart.
+- `poteto-help`, the guide, the Claude Code harness tree, and the version bumps have no local counterpart.
 
 ## Task roles and workspace contracts
 
@@ -386,6 +402,6 @@ gh extension install github/gh-stack
 
 Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers GitHub when both exist. Graphite remains an explicit selection and an automatic fallback.
 
-The bundled `orch frontier set` command needs neither backend. It walks the pull request base chain from the current branch with `gh pr list`, so it reads stacks from both backends.
+The merge frontier needs neither backend. `gh pr list` reads the pull request base chain of stacks from both backends.
 
 GitHub stack workflows require GitHub Stacked Pull Requests on the repository.

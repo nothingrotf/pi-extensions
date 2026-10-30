@@ -16,7 +16,7 @@ Every candidate gets the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric, 3-6 concrete gradeable criteria for what success looks like on *this* task. It is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. The configured pool is availability for selection, never a dispatch count. If the role is absent, inherit the parent model for each candidate the arena needs. Spawn more than the minimum only when the arena covers multiple distinct design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use the parsed `arena runners` runtime policy in context when configured. Concrete entries use `provider/model-id:effort [fast]`. For distinct choices, pass each selected `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. The configured pool is availability for selection, never a dispatch count. If the role is absent, inherit the parent model for each candidate the arena needs. Spawn more than the minimum only when the arena covers multiple distinct design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive. If Pi rejects a selected concrete runner, drop that seat and say so. Do not substitute an unconfigured model. If dropped seats leave fewer than two runners, add runners until there are two, or one when the line has one entry. Run each added runner on a remaining runner's configured model. If no runner remains, mark the arena `BLOCKED` and report the invalid configuration.
 4. Assign isolated outputs. For repository writers, give each candidate `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, assign a distinct output directory to each candidate. N candidates must never write to the same path, per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -27,11 +27,11 @@ If a candidate produces no output, proceed with N-1 and note the dropout.
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose one entry from the parsed `arena cross-judge pool` runtime policy in context. If the role is absent, inherit the parent model. Prefer a verified concrete selector from a different model family. For a distinct pool, pass the chosen `Task.model` explicitly, including `auto` or `inherit-parent` for an inherited entry. Never silently choose the first entry. Spawn one read-only judge with `Task` and `role: "arena cross-judge pool"`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with your reading in Phase D, not with the candidates. If Pi rejects a concrete selector, mark the judge `BLOCKED` and continue your review. Do not substitute a model.
+After all Phase B candidates complete, choose one entry from the parsed `arena cross-judge pool` runtime policy in context. The judge is never from the parent's model family. Try only the concrete entries from another family, in pool order, and pass the chosen `Task.model` explicitly. An `auto` or `inherit-parent` entry is the parent model, so it never judges. If the role is absent, or no entry comes from another family, skip the judge, pick the base alone in Phase D, and say so. Spawn one read-only judge with `Task` and `role: "arena cross-judge pool"`. Pass the rubric, terminal outputs, artifact references, and rationales with stable candidate labels. The judge scores each criterion and recommends a base with rationale. It runs in parallel with your reading in Phase D, not with the candidates. If Pi rejects a concrete selector, mark that judge `BLOCKED` and try the next entry from another family. Do not substitute a model. If no entry runs, skip the judge and say so.
 
 ## Phase D: Pick a base
 
-Read every candidate end to end before picking. Score each against the rubric criterion by criterion, not on holistic feel, and compare with the cross-judge. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
+Read every candidate end to end before picking. Score each against the rubric criterion by criterion, not on holistic feel, and compare with the cross-judge when Phase C ran one. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
 
 Pick the base a future maintainer can extend most easily without breaking invariants. When two feel tied, prefer the cleaner boundary or smaller API, per the Laziness Protocol.
 
@@ -47,4 +47,4 @@ Verify the synthesized artifact like any other output, per the **prove-it-works*
 
 ## Outputs
 
-One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.
+One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict or that Phase C skipped the judge, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.

@@ -112,11 +112,9 @@ function objective(scenario) {
     scenario.id.includes('pickup')
   )
     return 'Analyze only supplied evidence.md and the local execution evidence. If the exact workflow requires session_history or a different-family review that is unavailable, identify that prerequisite and stop that affected phase.'
-  if (
-    scenario.role === 'interrogate reviewers' ||
-    scenario.id.includes('judge') ||
-    scenario.id.includes('auditor')
-  )
+  if (scenario.role === 'interrogate reviewers')
+    return 'Try to break normalizeNames against contract.md. Prove each finding with a command that you run in your own worktree, and report the command, its output, and the output the contract requires. Do not change product files in the source checkout.'
+  if (scenario.id.includes('judge') || scenario.id.includes('auditor'))
     return 'Independently review whether stable deduplication after trimming fits this CLI contract. Cite the actual code, note risks, and give an evidenced recommendation without changing product files.'
   if (scenario.kind === 'verifier')
     return 'Verify the current CLI through its real command line. Run bun cli.js with spaced, blank, and duplicate names. Distinguish current behavior from the requested deduplication enhancement. Preserve product files.'

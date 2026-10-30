@@ -72,8 +72,6 @@ describe('poteto-mode', () => {
     ).toHaveLength(23)
     for (const path of [
       'scripts/check-plan.mjs',
-      'scripts/orch/orch',
-      'scripts/orch/orch.bundle',
       'scripts/worktree-audit.sh',
       'scripts/release-worktree.sh',
       'scripts/watch-pr/watch-pr',
@@ -128,7 +126,9 @@ describe('poteto-mode', () => {
     expect(orchestrate).toContain(
       'Give `capability_profile: "pstack-nested"` only to owners that must delegate.',
     )
-    expect(orchestrate).toContain('Record `poteto-agent` and `pstack-nested` rules exactly.')
+    expect(orchestrate).toContain('Call no bookkeeping scripts')
+    expect(orchestrate).toContain('`TaskControl`')
+    expect(orchestrate).not.toMatch(/\borch\b|environment: "cloud"|Project store/)
     expect(skill).toContain('`TaskControl`')
     expect(skill).toContain('`AskQuestion`')
     expect(skill).toContain('**create-skill**')
@@ -273,131 +273,6 @@ describe('poteto-mode', () => {
     expect(result.stderr).toContain('Program checklist lacks "/loop 1h"')
   })
 
-  it('runs the orchestration store through the bundled CLI', () => {
-    const orch = join(skillRoot, 'scripts', 'orch', 'orch')
-    const store = join(tmpdir(), `poteto-orch-${process.pid}`)
-    rmSync(store, { force: true, recursive: true })
-    expect(run(orch, ['--store', store, 'init']).status).toBe(0)
-    expect(run(orch, ['--store', store, 'unit', 'add', 'u1', '--track', 'build']).status).toBe(0)
-    expect(
-      run(orch, [
-        '--store',
-        store,
-        'ledger',
-        'record',
-        '1',
-        'abc123',
-        'unit-test-verified',
-        '--evidence',
-        'tests.log',
-      ]).status,
-    ).toBe(0)
-    expect(run(orch, ['--store', store, 'inbox', 'push', 'worker', 'u1', 'done']).status).toBe(0)
-    expect(run(orch, ['--store', store, 'inbox', 'drain']).stdout).toContain('u1\tdone')
-    expect(run(orch, ['--store', store, 'status']).stdout).toContain('unit-test-verified=1')
-    rmSync(store, { force: true, recursive: true })
-  })
-
-  it('resolves the orchestration frontier from the pull request base chain', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-frontier-')))
-    const repo = join(root, 'repo')
-    const bin = join(root, 'bin')
-    const store = join(root, 'store')
-    const git = (args) => run('git', args, { cwd: repo })
-    try {
-      mkdirSync(repo)
-      mkdirSync(bin)
-      expect(git(['init', '--quiet', '--initial-branch=main']).status).toBe(0)
-      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-      writeFileSync(join(repo, 'main.txt'), 'main\n')
-      expect(git(['add', '.']).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
-      const sha = {}
-      for (const branch of ['stack/one', 'stack/two', 'stack/three']) {
-        expect(git(['checkout', '--quiet', '-b', branch]).status).toBe(0)
-        writeFileSync(join(repo, `${branch.slice(6)}.txt`), `${branch}\n`)
-        expect(git(['add', '.']).status).toBe(0)
-        expect(git(['commit', '--quiet', '-m', branch]).status).toBe(0)
-        sha[branch] = git(['rev-parse', 'HEAD']).stdout.trim()
-      }
-      expect(git(['checkout', '--quiet', 'stack/two']).status).toBe(0)
-      const row = (number, state, head, base) => ({
-        baseRefName: base,
-        headRefName: head,
-        number,
-        state,
-      })
-      const list = (filter, branch) =>
-        `pr list ${filter} ${branch} --state all --json number,state,headRefName,baseRefName`
-      const reply = (rows) => `printf '%s\\n' '${JSON.stringify(rows)}'`
-      writeFileSync(
-        join(bin, 'gh'),
-        `#!/usr/bin/env bash
-set -euo pipefail
-[ "$(pwd -P)" = "${repo}" ] || exit 8
-case "$*" in
-  "${list('--head', 'stack/two')}") ${reply([row(11, 'OPEN', 'stack/two', 'stack/one')])} ;;
-  "${list('--head', 'stack/one')}") ${reply([row(10, 'MERGED', 'stack/one', 'main')])} ;;
-  "${list('--base', 'stack/two')}") ${reply([row(12, 'OPEN', 'stack/three', 'stack/two'), row(13, 'CLOSED', 'stack/old', 'stack/two')])} ;;
-  "${list('--base', 'stack/three')}") ${reply([])} ;;
-  *) printf 'unexpected gh arguments: %s\\n' "$*" >&2; exit 2 ;;
-esac
-`,
-      )
-      chmodSync(join(bin, 'gh'), 0o755)
-      const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
-      const orch = join(skillRoot, 'scripts', 'orch', 'orch')
-      expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
-      const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
-      expect(result.stderr).toBe('')
-      expect(result.status).toBe(0)
-      expect(JSON.parse(readFileSync(join(store, 'frontier.json'), 'utf8'))).toEqual({
-        generation: 1,
-        lowestUnmerged: 11,
-        prs: [
-          { branches: 'stack/one', pr: 10, sha: sha['stack/one'], state: 'MERGED' },
-          { branches: 'stack/two', pr: 11, sha: sha['stack/two'], state: 'OPEN' },
-          { branches: 'stack/three', pr: 12, sha: sha['stack/three'], state: 'OPEN' },
-        ],
-      })
-    } finally {
-      rmSync(root, { force: true, recursive: true })
-    }
-  })
-
-  it('names the branch that has no pull request in the frontier chain', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-frontier-missing-')))
-    const repo = join(root, 'repo')
-    const bin = join(root, 'bin')
-    const store = join(root, 'store')
-    const git = (args) => run('git', args, { cwd: repo })
-    try {
-      mkdirSync(repo)
-      mkdirSync(bin)
-      expect(git(['init', '--quiet', '--initial-branch=main']).status).toBe(0)
-      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-      writeFileSync(join(repo, 'main.txt'), 'main\n')
-      expect(git(['add', '.']).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
-      expect(git(['checkout', '--quiet', '-b', 'stack/one']).status).toBe(0)
-      writeFileSync(join(bin, 'gh'), "#!/usr/bin/env bash\nprintf '[]\\n'\n")
-      chmodSync(join(bin, 'gh'), 0o755)
-      const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }
-      const orch = join(skillRoot, 'scripts', 'orch', 'orch')
-      expect(run(orch, ['--store', store, 'init'], { env }).status).toBe(0)
-      const result = run(orch, ['--store', store, 'frontier', 'set', '--repo', repo], { env })
-      expect(result.status).toBe(1)
-      expect(result.stderr).toContain(
-        'branch stack/one has no pull request; open one with gh pr create',
-      )
-      expect(readFileSync(join(store, 'frontier.json'), 'utf8')).toBe('{}\n')
-    } finally {
-      rmSync(root, { force: true, recursive: true })
-    }
-  })
-
   it('releases only a published clean destination worktree', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-release-')))
     const release = join(skillRoot, 'scripts', 'release-worktree.sh')
@@ -522,15 +397,12 @@ esac
     }
   })
 
-  it('loads the bundled CLIs and parses the audit script', () => {
-    const orch = run(join(skillRoot, 'scripts', 'orch', 'orch'), ['--help'])
+  it('loads the bundled watcher and parses the audit script', () => {
     const watcher = run(join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'), ['--help'])
     const audit = run('bash', ['-n', join(skillRoot, 'scripts', 'worktree-audit.sh')])
     const release = run('bash', [join(skillRoot, 'scripts', 'release-worktree.sh')])
     expect(release.status).toBe(2)
     expect(release.stderr).toContain('usage: release-worktree.sh <worktree>')
-    expect(orch.status).toBe(0)
-    expect(orch.stdout).toContain('Plain-file orchestrate bookkeeping')
     expect(watcher.status).toBe(0)
     expect(watcher.stdout).toContain('Watch one pull request')
     expect(audit.status).toBe(0)
@@ -661,6 +533,8 @@ esac
       'scripts/bootstrap.ts',
       'scripts/bun.lock',
       'scripts/package.json',
+      'scripts/orch/orch',
+      'scripts/orch/orch.bundle',
       'scripts/orch/orch.test.ts',
       'scripts/orch/orch.ts',
       'scripts/orch/store.ts',

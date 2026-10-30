@@ -19,7 +19,7 @@ describe('statechart skill scripts', () => {
   it('pass the bundled upstream suite', async () => {
     const result = await exec(
       process.execPath,
-      ['--test', '--test-reporter=tap', 'test/statechart.test.mjs'],
+      ['--disable-warning=ExperimentalWarning', '--test', '--test-reporter=tap', 'test/*.test.ts'],
       {
         cwd: scripts,
         env: { ...process.env, TMPDIR: realpathSync(tmpdir()) },
@@ -31,9 +31,10 @@ describe('statechart skill scripts', () => {
     expect(result.stdout).toMatch(/^# pass [1-9]\d*$/m)
   }, 610_000)
 
-  it('prints usage without TLC', async () => {
-    const result = await exec(process.execPath, [join(scripts, 'statechart.mjs'), '--help'])
-    expect(result.stdout).toContain('from-spec')
-    expect(result.stdout).toContain('from-chart')
+  it('prints usage through the launcher without TLC', async () => {
+    const error = await exec(join(scripts, 'statechart'), []).catch((failure) => failure)
+    expect(error.code).toBe(2)
+    expect(error.stderr).toContain('Give one SPEC.tla.')
+    expect(error.stderr).toContain('Usage: statechart SPEC.tla')
   })
 })
