@@ -128,8 +128,8 @@ async function harness(extra?: ExtensionFactory, extraFirst = false, interactive
     else factories.push(extra)
   }
   factories.push((pi) => {
-    pi.on('before_agent_start', () => {
-      events.push('before_agent_start')
+    pi.on('before_agent_start', (event) => {
+      events.push(`before_agent_start:${event.messageType}`)
     })
     pi.on('agent_start', () => {
       events.push('agent_start')
@@ -431,14 +431,22 @@ describe('todo reminders through AgentSession', () => {
     }
   })
 
-  test('resets the cycle on each user prompt without a synthetic continuation hook', async () => {
+  test('resets the cycle on user prompts but not custom continuation hooks', async () => {
     const instance = await harness()
     try {
       await instance.prompt([seed(), text(), text()])
-      expect(instance.events).toEqual(['before_agent_start', 'agent_start', 'agent_start'])
+      expect(instance.events).toEqual([
+        'before_agent_start:user',
+        'agent_start',
+        'before_agent_start:custom',
+        'agent_start',
+      ])
       await instance.prompt([text(), text()], 'Continue the task')
       expect(instance.customMessages('todo-reminder')).toHaveLength(2)
-      expect(instance.events.filter((event) => event === 'before_agent_start')).toHaveLength(2)
+      expect(instance.events.filter((event) => event === 'before_agent_start:user')).toHaveLength(2)
+      expect(instance.events.filter((event) => event === 'before_agent_start:custom')).toHaveLength(
+        2,
+      )
     } finally {
       await instance.close()
     }
@@ -481,7 +489,10 @@ describe('todo reminders through AgentSession', () => {
         { details: { attempt: 1 } },
         { details: { attempt: 1 } },
       ])
-      expect(instance.events.filter((event) => event === 'before_agent_start')).toHaveLength(1)
+      expect(instance.events.filter((event) => event === 'before_agent_start:user')).toHaveLength(1)
+      expect(instance.events.filter((event) => event === 'before_agent_start:custom')).toHaveLength(
+        2,
+      )
     } finally {
       await instance.close()
     }

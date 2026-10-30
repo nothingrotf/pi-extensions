@@ -916,7 +916,11 @@ describe('/todo command', () => {
 describe('eager prelude', () => {
   async function userTurn(instance, text) {
     await instance.emit('input', { text, source: 'interactive' })
-    return instance.emit('before_agent_start', { prompt: text, systemPrompt: '' })
+    return instance.emit('before_agent_start', {
+      messageType: 'user',
+      prompt: text,
+      systemPrompt: '',
+    })
   }
 
   test('injects the prelude only on the first user prompt with no todos', async () => {
@@ -924,7 +928,11 @@ describe('eager prelude', () => {
     const instance = harness(branch)
     await instance.emit('session_start')
     expect(
-      await instance.emit('before_agent_start', { prompt: 'custom trigger', systemPrompt: '' }),
+      await instance.emit('before_agent_start', {
+        messageType: 'custom',
+        message: { role: 'custom', customType: 'test', content: 'custom trigger', display: false },
+        systemPrompt: '',
+      }),
     ).toBeUndefined()
     const byDefault = await userTurn(instance, 'do it')
     expect(byDefault.message.customType).toBe('eager-todo-prelude')

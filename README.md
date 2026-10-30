@@ -21,9 +21,10 @@ The root owns shared dependency versions, checks, formatting, and Git hooks.
 
 ## Pi compatibility
 
-The packages require Pi 1.1.0 or later.
-Pi loads every extension with its own installed Pi packages, not with the versions in this workspace.
-The root catalog pins the minimum supported version, so checks and tests run against that runtime.
+The packages require Pi 1.4.0 or later.
+Local SDK consumers can resolve Pi packages from this workspace rather than the host installation.
+Keep workspace dependencies aligned with the installed Pi runtime to avoid version-dependent model catalog differences.
+The root catalog declares the minimum supported version, and the lockfile records the versions used by checks and tests.
 
 Read the [integration contracts](docs/integration-contracts.md) for tool visibility, isolation limits, and cross-package events.
 

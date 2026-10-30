@@ -388,6 +388,7 @@ export default function todo(pi: ExtensionAPI): void {
     const fromUserPrompt = userPromptPending
     userPromptPending = false
     if (
+      event.messageType !== 'user' ||
       !fromUserPrompt ||
       eagerMode === 'off' ||
       todos.length > 0 ||

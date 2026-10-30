@@ -3,6 +3,7 @@ import {
   Container,
   CURSOR_MARKER,
   Editor,
+  renderFakeCursor,
   type Terminal,
   Text,
   truncateToWidth,
@@ -180,7 +181,7 @@ describe('patchEditorBorder', () => {
     editor.handleInput('\x1b[D')
     const frame = editor.render(20)
 
-    expect(frame[1]).toContain(`tex${CURSOR_MARKER}\x1b[7mt\x1b[0m`)
+    expect(frame[1]).toContain(`tex${CURSOR_MARKER}${renderFakeCursor('t')}`)
     expect(frame[1]).toContain('界🙂 é')
     expect(frame.at(-2)).toContain('界🙂 é')
     expect(frame.every((line) => visibleWidth(line) <= 20)).toBe(true)

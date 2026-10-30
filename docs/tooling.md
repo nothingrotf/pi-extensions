@@ -35,7 +35,8 @@ Bun owns the root lockfile.
 Do not commit package-level lockfiles.
 Use the root catalog for shared Pi packages.
 Keep the catalog at the minimum supported Pi version, which the root `README.md` names.
-Pi loads extensions with its installed packages, so checks against another version do not represent users.
+Local SDK consumers can resolve workspace dependencies instead of the host Pi packages.
+Align the workspace versions with the installed Pi runtime before validating model catalog behavior.
 
 Use exact versions for Vite+, Oxlint, and the Oxlint plugin API.
 Update the Vite override with the Vite+ version.
