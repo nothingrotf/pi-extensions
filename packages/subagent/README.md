@@ -66,6 +66,10 @@ That fallback requires a ChatGPT subscription login on the other provider. An AP
 The run record stores the provider that the Task used. Resume keeps that provider.
 It does not inherit the parent's global Fast Mode preference.
 
+If a requested model is absent locally, Task refreshes that provider's catalog once before rejecting it.
+The refresh has a ten-second timeout and respects `PI_OFFLINE`. Models already present require no network refresh.
+Fresh dispatch and resume preserve the requested model, effort, and fast mode through catalog refreshes.
+
 Set `run_in_background` to `true` to return the Agent ID after session creation.
 This field belongs only to a single Task, never a `tasks[]` node or batch wrapper.
 The graph scheduler owns batch execution. Invalid argument errors include a corrective shape without executing the rejected call.

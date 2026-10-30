@@ -2521,8 +2521,8 @@ export class SubagentRuntime {
       }
       const model =
         input.model === undefined
-          ? resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
-          : resolveModel(input.model, role, ctx, runtime)
+          ? await resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
+          : await resolveModel(input.model, role, ctx, runtime)
       this.validateResumeSelection(prior, model)
       return { capabilities, contract, model, role }
     }
@@ -2608,7 +2608,7 @@ export class SubagentRuntime {
     })
     const selector =
       selectCapabilityModel(capabilities.modelPolicies, input.role, input.model) ?? role.model
-    const model = resolveModel(selector, role, ctx, runtime)
+    const model = await resolveModel(selector, role, ctx, runtime)
     const contract: ExecutionContractV5 = {
       agentDescription: discovered?.description ?? input.subagent_type,
       agentName: discovered?.name ?? input.subagent_type,

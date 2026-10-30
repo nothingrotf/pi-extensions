@@ -97,10 +97,24 @@ function parseSelector(selector: string, runtime: ModelRuntime): ParsedSelector 
   return { ...parsed, fast }
 }
 
-function findExactModel(runtime: ModelRuntime, reference: string): Model<Api> {
+async function findExactModel(runtime: ModelRuntime, reference: string): Promise<Model<Api>> {
+  const cached = runtime.getModels().find((candidate) => modelRef(candidate) === reference)
+  if (cached !== undefined) return cached
+
+  const provider = reference.slice(0, reference.indexOf('/'))
+  const refresh = await runtime.refresh({
+    providers: [provider],
+    force: true,
+    signal: AbortSignal.timeout(10_000),
+  })
   const model = runtime.getModels().find((candidate) => modelRef(candidate) === reference)
   if (model === undefined) {
-    throw new Error(`Model "${reference}" is not available in the active Pi runtime.`)
+    const detail = refresh.aborted
+      ? ' The catalog refresh timed out.'
+      : refresh.errors.has(provider)
+        ? ' The provider catalog refresh failed.'
+        : ' The refreshed provider catalog does not contain this model.'
+    throw new Error(`Model "${reference}" is not available in the active Pi runtime.${detail}`)
   }
   return model
 }
@@ -126,7 +140,7 @@ function validateEffort(model: Model<Api>, effort: Effort): void {
   }
 }
 
-function inheritedModel(ctx: ExtensionContext, runtime: ModelRuntime): Model<Api> {
+async function inheritedModel(ctx: ExtensionContext, runtime: ModelRuntime): Promise<Model<Api>> {
   if (ctx.model === undefined) throw new Error('The parent session has no active model.')
   return findExactModel(runtime, modelRef(ctx.model))
 }
@@ -141,13 +155,13 @@ function normalizeEffort(model: Model<Api>, effort: Effort, explicit: boolean): 
   return effort
 }
 
-export function resolveStoredModel(
+export async function resolveStoredModel(
   reference: string,
   effort: Effort,
   fast: boolean,
   runtime: ModelRuntime,
-): ResolvedModel {
-  const model = findExactModel(runtime, reference)
+): Promise<ResolvedModel> {
+  const model = await findExactModel(runtime, reference)
   validateEffort(model, effort)
   validateFast(model, fast)
   return {
@@ -159,12 +173,12 @@ export function resolveStoredModel(
   }
 }
 
-export function resolveModel(
+export async function resolveModel(
   selector: string | undefined,
   role: RoleDefinition,
   ctx: ExtensionContext,
   runtime: ModelRuntime,
-): ResolvedModel {
+): Promise<ResolvedModel> {
   const parsed = parseSelector(selector ?? 'inherit', runtime)
   const reserved = RESERVED_SELECTORS.has(parsed.modelRef)
   if (reserved && parsed.fast) {
@@ -175,8 +189,12 @@ export function resolveModel(
   }
 
   const model = reserved
-    ? inheritedModel(ctx, runtime)
-    : withUsableProvider(findExactModel(runtime, parsed.modelRef), runtime.getModels(), runtime)
+    ? await inheritedModel(ctx, runtime)
+    : withUsableProvider(
+        await findExactModel(runtime, parsed.modelRef),
+        runtime.getModels(),
+        runtime,
+      )
   const reference = modelRef(model)
   const effort = normalizeEffort(
     model,

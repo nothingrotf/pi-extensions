@@ -2,8 +2,9 @@ import { readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { fauxAssistantMessage, fauxProvider, fauxText } from '@earendil-works/pi-ai'
 import { Value } from 'typebox/value'
-import { describe, expect, it } from 'vite-plus/test'
+import { describe, expect, it, vi } from 'vite-plus/test'
 
 import { runBatch as runCoordinatedBatch } from '../src/coordinator.ts'
 import {
@@ -238,6 +239,99 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
       await harness.close()
     }
   })
+
+  it('refreshes a stale provider catalog before rejecting the requested model', async () => {
+    const harness = await createHarness()
+    const faux = fauxProvider({
+      provider: 'catalog-refresh-test',
+      models: [{ id: 'new-model' }],
+    })
+    let refreshed = false
+    let networkRefreshes = 0
+    harness.session.modelRuntime.registerNativeProvider({
+      ...faux.provider,
+      getModels: () => (refreshed ? faux.provider.getModels() : []),
+      async refreshModels(context) {
+        if (!context.allowNetwork) return
+        networkRefreshes++
+        await context.publish({
+          update: () => {
+            refreshed = true
+          },
+        })
+      },
+    })
+    faux.setResponses([fauxAssistantMessage(fauxText('catalog model ran'))])
+    try {
+      const result = await runTask(harness, {
+        ...baseInput,
+        model: 'catalog-refresh-test/new-model:off',
+      })
+      expect(result).toContain('catalog model ran')
+      expect(networkRefreshes).toBe(1)
+      expect(latestState(harness).records.at(-1)?.model).toBe('catalog-refresh-test/new-model')
+
+      faux.setResponses([fauxAssistantMessage(fauxText('cached model ran'))])
+      const cached = await runTask(harness, {
+        ...baseInput,
+        model: 'catalog-refresh-test/new-model:off',
+      })
+      expect(cached).toContain('cached model ran')
+      expect(networkRefreshes).toBe(1)
+
+      refreshed = false
+      faux.setResponses([fauxAssistantMessage(fauxText('catalog model resumed'))])
+      const resumed = await runTask(harness, { resume: agentId(result), prompt: 'continue' })
+      expect(resumed).toContain('catalog model resumed')
+      expect(networkRefreshes).toBe(2)
+      expect(latestState(harness).records.at(-1)?.model).toBe('catalog-refresh-test/new-model')
+
+      const absent = await runTask(harness, {
+        ...baseInput,
+        model: 'catalog-refresh-test/missing-model:off',
+      })
+      expect(absent).toContain('The refreshed provider catalog does not contain this model.')
+      expect(absent).not.toContain('Agent ID:')
+      expect(networkRefreshes).toBe(3)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it.each([false, true])(
+    'rejects unavailable models without substitution (offline: %s)',
+    async (offline) => {
+      if (offline) vi.stubEnv('PI_OFFLINE', '1')
+      const harness = await createHarness()
+      const faux = fauxProvider({ provider: 'unavailable-catalog-test', models: [{ id: 'other' }] })
+      let networkRefreshes = 0
+      harness.session.modelRuntime.registerNativeProvider({
+        ...faux.provider,
+        async refreshModels(context) {
+          if (!context.allowNetwork) return
+          networkRefreshes++
+          throw new Error('Catalog unavailable')
+        },
+      })
+      try {
+        const result = await runTask(harness, {
+          ...baseInput,
+          model: 'unavailable-catalog-test/missing:off',
+        })
+        expect(result).toContain('Model "unavailable-catalog-test/missing" is not available')
+        expect(result).toContain(
+          offline
+            ? 'The refreshed provider catalog does not contain this model.'
+            : 'The provider catalog refresh failed.',
+        )
+        expect(result).not.toContain('Agent ID:')
+        expect(networkRefreshes).toBe(offline ? 0 : 1)
+      } finally {
+        await harness.close()
+        vi.unstubAllEnvs()
+      }
+    },
+  )
 
   it('synchronizes providers registered after the shared child runtime starts', async () => {
     const harness = await createHarness()
