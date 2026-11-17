@@ -4,8 +4,14 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vite-plus/test'
 
-import { applyFastTier, getFastSupport, reportedServiceTier } from '../src/policy.ts'
-import { loadFastMode, saveFastMode } from '../src/state.ts'
+import {
+  applyServiceTier,
+  getSpeedSupport,
+  isSpeedTier,
+  reportedServiceTier,
+  type FastModel,
+} from '../src/policy.ts'
+import { loadSpeed, saveSpeed } from '../src/state.ts'
 
 const directories: string[] = []
 
@@ -18,6 +24,9 @@ async function fixture(): Promise<string> {
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
+
+const getFastSupport = (model: FastModel | undefined, catalogPath?: string) =>
+  getSpeedSupport(model, 'fast', catalogPath)
 
 const astra = { api: 'openai-codex-responses', id: 'gpt-6-astra', provider: 'openai-codex' }
 
@@ -100,6 +109,54 @@ describe('Fast Mode capability policy', () => {
     })
   })
 
+  it('gates Ultrafast on its own catalog tier and documented models', async () => {
+    const sol = { ...astra, id: 'gpt-6.2-sol' }
+    for (const id of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol']) {
+      expect(getSpeedSupport({ ...astra, id }, 'ultrafast', '/missing/catalog.json')).toEqual({
+        supported: true,
+        tier: 'ultrafast',
+        source: 'builtin',
+      })
+    }
+    expect(
+      getSpeedSupport({ ...astra, id: 'gpt-6.1-terra' }, 'ultrafast', '/missing/catalog.json')
+        .supported,
+    ).toBe(false)
+    const path = join(await fixture(), 'catalog.json')
+    await writeFile(
+      path,
+      JSON.stringify({
+        models: [
+          { slug: 'gpt-6.2-sol', service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+          { slug: 'gpt-6.2-astra', service_tiers: [{ id: 'priority' }] },
+          { slug: 'gpt-6.1-sol', additional_speed_tiers: ['fast', 'ultrafast'] },
+        ],
+      }),
+    )
+    expect(getSpeedSupport(sol, 'ultrafast', path)).toEqual({
+      supported: true,
+      tier: 'ultrafast',
+      source: 'catalog',
+    })
+    expect(getSpeedSupport(sol, 'fast', path)).toEqual({
+      supported: true,
+      tier: 'priority',
+      source: 'catalog',
+    })
+    expect(getSpeedSupport({ ...astra, id: 'gpt-6.2-astra' }, 'ultrafast', path)).toEqual({
+      supported: false,
+      reason: 'The Codex catalog does not advertise the Ultrafast tier.',
+    })
+    expect(getSpeedSupport({ ...astra, id: 'gpt-6.1-sol' }, 'ultrafast', path)).toEqual({
+      supported: true,
+      tier: 'ultrafast',
+      source: 'catalog',
+    })
+    expect(isSpeedTier('ultrafast', 'ultrafast')).toBe(true)
+    expect(isSpeedTier('ultrafast', 'priority')).toBe(false)
+    expect(isSpeedTier('fast', 'priority')).toBe(true)
+  })
+
   it('preserves request fields without mutating the input', () => {
     const payload = {
       text: { verbosity: 'high' },
@@ -107,9 +164,9 @@ describe('Fast Mode capability policy', () => {
       input: [],
       service_tier: 'default',
     }
-    expect(applyFastTier(payload, 'priority')).toEqual({ ...payload, service_tier: 'priority' })
+    expect(applyServiceTier(payload, 'priority')).toEqual({ ...payload, service_tier: 'priority' })
     expect(payload.service_tier).toBe('default')
-    expect(() => applyFastTier(null, 'priority')).toThrow(
+    expect(() => applyServiceTier(null, 'priority')).toThrow(
       'The provider request payload is not an object.',
     )
   })
@@ -118,16 +175,24 @@ describe('Fast Mode capability policy', () => {
 describe('Fast Mode preference', () => {
   it('defaults to off and stores changes atomically in the selected profile', async () => {
     const path = join(await fixture(), 'state', 'fast-mode.json')
-    expect(await loadFastMode(path)).toBe(false)
-    await saveFastMode(path, true)
-    expect(await loadFastMode(path)).toBe(true)
-    await saveFastMode(path, false)
-    expect(await loadFastMode(path)).toBe(false)
+    expect(await loadSpeed(path)).toBe('standard')
+    for (const speed of ['fast', 'ultrafast', 'standard'] as const) {
+      await saveSpeed(path, speed)
+      expect(await loadSpeed(path)).toBe(speed)
+    }
+  })
+
+  it('reads the legacy enabled preference', async () => {
+    const path = join(await fixture(), 'fast-mode.json')
+    await writeFile(path, JSON.stringify({ enabled: true }))
+    expect(await loadSpeed(path)).toBe('fast')
+    await writeFile(path, JSON.stringify({ enabled: false }))
+    expect(await loadSpeed(path)).toBe('standard')
   })
 
   it('rejects malformed preferences instead of silently enabling Fast Mode', async () => {
     const path = join(await fixture(), 'fast-mode.json')
     await writeFile(path, JSON.stringify({ enabled: 'true' }))
-    await expect(loadFastMode(path)).rejects.toThrow('The Fast Mode state is invalid.')
+    await expect(loadSpeed(path)).rejects.toThrow('The Fast Mode state is invalid.')
   })
 })

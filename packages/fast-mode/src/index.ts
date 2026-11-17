@@ -6,13 +6,34 @@ import {
   type ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 
-import { applyFastTier, getFastSupport, isFastTier, reportedServiceTier } from './policy.ts'
-import { loadFastMode, saveFastMode } from './state.ts'
+import {
+  applyServiceTier,
+  getSpeedSupport,
+  isSpeedTier,
+  reportedServiceTier,
+  speedLabel,
+  type Speed,
+} from './policy.ts'
+import { loadSpeed, saveSpeed } from './state.ts'
 
 interface FastModeOptions {
   agentDir?: string
   catalogPath?: string
 }
+
+const actions = new Map<string, Speed | 'status'>([
+  ['on', 'fast'],
+  ['ultra', 'ultrafast'],
+  ['ultrafast', 'ultrafast'],
+  ['off', 'standard'],
+  ['status', 'status'],
+])
+
+const modeLabels = new Map<Speed, string>([
+  ['standard', 'OFF'],
+  ['fast', 'ON'],
+  ['ultrafast', 'ULTRAFAST'],
+])
 
 export function createFastModeExtension(options: FastModeOptions = {}) {
   return function fastMode(pi: ExtensionAPI): void {
@@ -21,20 +42,22 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
     let lastTier: string | undefined
 
     const status = async (ctx: ExtensionContext): Promise<string> => {
-      const enabled = await loadFastMode(statePath)
-      const support = getFastSupport(ctx.model, options.catalogPath)
-      const label = enabled ? 'ON' : 'OFF'
-      if (!support.supported) {
-        ctx.ui.setStatus('fast-mode', enabled ? 'Fast unavailable' : undefined)
-        return `Fast Mode: ${label}. ${support.reason}`
+      const speed = await loadSpeed(statePath)
+      const mode = `Fast Mode: ${modeLabels.get(speed)}.`
+      if (speed === 'standard') {
+        ctx.ui.setStatus('fast-mode', undefined)
+        return mode
       }
-      const applied = lastTier === undefined || isFastTier(lastTier)
-      ctx.ui.setStatus(
-        'fast-mode',
-        enabled ? (applied ? 'Fast requested' : 'Fast not applied') : undefined,
-      )
+      const label = speedLabel(speed)
+      const support = getSpeedSupport(ctx.model, speed, options.catalogPath)
+      if (!support.supported) {
+        ctx.ui.setStatus('fast-mode', `${label} unavailable`)
+        return `${mode} ${support.reason}`
+      }
+      const applied = lastTier === undefined || isSpeedTier(speed, lastTier)
+      ctx.ui.setStatus('fast-mode', `${label} ${applied ? 'requested' : 'not applied'}`)
       const observed = lastTier === undefined ? '' : ` Last response: service_tier=${lastTier}.`
-      return `Fast Mode: ${label}. ${ctx.model?.id}: service_tier=${support.tier} (${support.source}).${observed}`
+      return `${mode} ${ctx.model?.id}: service_tier=${support.tier} (${support.source}).${observed}`
     }
 
     const refresh = async (ctx: ExtensionContext): Promise<void> => {
@@ -67,40 +90,42 @@ export function createFastModeExtension(options: FastModeOptions = {}) {
       ctx.ui.setStatus('fast-mode', undefined)
     })
     pi.on('before_provider_request', async (event, ctx) => {
-      const support = getFastSupport(ctx.model, options.catalogPath)
-      if (!support.supported) return
+      let speed: Speed
       try {
-        if (!(await loadFastMode(statePath))) return
+        speed = await loadSpeed(statePath)
       } catch {
         await refresh(ctx)
         return
       }
-      return applyFastTier(event.payload, support.tier)
+      if (speed === 'standard') return
+      const support = getSpeedSupport(ctx.model, speed, options.catalogPath)
+      if (!support.supported) return
+      return applyServiceTier(event.payload, support.tier)
     })
 
     const command = {
-      description: 'Set or inspect OpenAI Fast Mode: /fast on, off, or status.',
+      description: 'Set or inspect OpenAI Fast Mode: /fast on, ultra, off, or status.',
       getArgumentCompletions(prefix: string) {
-        const items = ['on', 'off', 'status']
+        const items = ['on', 'ultra', 'off', 'status']
           .filter((value) => value.startsWith(prefix))
           .map((value) => ({ value, label: value }))
         return items.length === 0 ? null : items
       },
       async handler(args: string, ctx: ExtensionContext) {
-        const action = args.trim().toLowerCase() || 'status'
-        if (action !== 'on' && action !== 'off' && action !== 'status') {
-          ctx.ui.notify('Usage: /fast [on|off|status]', 'info')
+        const action = actions.get(args.trim().toLowerCase() || 'status')
+        if (action === undefined) {
+          ctx.ui.notify('Usage: /fast [on|ultra|off|status]', 'info')
           return
         }
-        if (action === 'on') {
-          const support = getFastSupport(ctx.model, options.catalogPath)
+        if (action === 'fast' || action === 'ultrafast') {
+          const support = getSpeedSupport(ctx.model, action, options.catalogPath)
           if (!support.supported) {
             ctx.ui.notify(support.reason, 'warning')
             return
           }
         }
         if (action !== 'status') {
-          await saveFastMode(statePath, action === 'on')
+          await saveSpeed(statePath, action)
           lastTier = undefined
         }
         stateErrorReported = false

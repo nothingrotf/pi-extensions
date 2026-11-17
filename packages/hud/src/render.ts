@@ -53,6 +53,13 @@ function color(theme: HudTheme, token: HudColor, text: string): string {
   }
 }
 
+const fastStatusLabels: ReadonlyMap<string, string> = new Map([
+  ['Fast requested', '[fast]'],
+  ['Fast unavailable', ''],
+  ['Ultrafast requested', '[ultrafast]'],
+  ['Ultrafast unavailable', ''],
+])
+
 const thinkingColors: ReadonlyMap<string, ThinkingColor> = new Map([
   ['minimal', 'thinkingMinimal'],
   ['low', 'thinkingLow'],
@@ -197,8 +204,8 @@ export function renderHud(
   const usage = usageSegment(theme, state.usage)
   const cache = color(theme, 'dim', sanitizeScalar(state.cacheLabel))
   const fastStatus = sanitizeScalar(statuses.get('fast-mode'))
-  const fastLabel = fastStatus === 'Fast unavailable' ? '' : fastStatus
-  const fast = color(theme, 'text', fastLabel === 'Fast requested' ? '[fast]' : fastLabel)
+  const fastLabel = fastStatusLabels.get(fastStatus) ?? fastStatus
+  const fast = color(theme, 'text', fastLabel)
   const effortLabel = sanitizeScalar(state.effortLabel)
   const effort = identity && effortLabel ? color(theme, 'text', `:${effortLabel}`) : ''
   const model = `${identity}${effort}${fast ? ` ${fast}` : ''}`

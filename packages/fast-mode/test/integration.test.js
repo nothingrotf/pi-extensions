@@ -86,15 +86,17 @@ async function harness(modelId, { provider = 'openai-codex', responseTier } = {}
     api: provider === 'openai' ? 'openai-responses' : 'openai-codex-responses',
     apiKey: provider === 'openai' ? 'siwc-access-token' : token,
     baseUrl,
-    models: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'not-fast'].map((id) => ({
-      id,
-      name: id,
-      reasoning: true,
-      contextWindow: 272000,
-      maxTokens: 128000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      input: ['text'],
-    })),
+    models: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6.2-sol', 'not-fast'].map(
+      (id) => ({
+        id,
+        name: id,
+        reasoning: true,
+        contextWindow: 272000,
+        maxTokens: 128000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        input: ['text'],
+      }),
+    ),
   })
   const settingsManager = SettingsManager.inMemory({
     transport: 'sse',
@@ -179,6 +181,54 @@ describe('Fast Mode through the OpenAI provider', () => {
   })
 })
 
+describe('Ultrafast Mode', () => {
+  it('requests, reports, and suspends the Ultrafast tier', async () => {
+    const instance = await harness('gpt-6.2-sol', { provider: 'openai' })
+    await instance.session.prompt('/fast ultra')
+    expect(instance.notices.at(-1)).toContain(
+      'Fast Mode: ULTRAFAST. gpt-6.2-sol: service_tier=ultrafast',
+    )
+    expect(JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8'))).toEqual({
+      speed: 'ultrafast',
+    })
+    await instance.session.prompt('Reply OK')
+    expect(instance.requests.at(-1)).toMatchObject({
+      model: 'gpt-6.2-sol',
+      service_tier: 'ultrafast',
+      reasoning: { effort: 'medium' },
+    })
+    expect(instance.statuses.at(-1)).toBe('Ultrafast requested')
+    await instance.session.setModel(instance.runtime.getModel('openai', 'gpt-6.1-terra'))
+    expect(instance.statuses.at(-1)).toBe('Ultrafast unavailable')
+    await instance.session.prompt('Reply OK again')
+    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+    await instance.session.prompt('/fast ultrafast')
+    expect(instance.notices.at(-1)).toBe('Ultrafast Mode support is unknown for this model.')
+    await instance.session.prompt('/fast on')
+    await instance.session.prompt('Reply OK once more')
+    expect(instance.requests.at(-1).service_tier).toBe('priority')
+  })
+
+  it('reports a response that the API processed at the Fast tier', async () => {
+    const instance = await harness('gpt-6.2-sol', { provider: 'openai', responseTier: 'priority' })
+    await instance.session.prompt('/fast ultra')
+    await instance.session.prompt('Reply OK')
+    expect(instance.statuses.at(-1)).toBe('Ultrafast not applied')
+  })
+
+  it('respects a Codex catalog that grants only the Fast tier', async () => {
+    const instance = await harness('gpt-6.2-sol')
+    await writeFile(
+      instance.catalogPath,
+      JSON.stringify({ models: [{ slug: 'gpt-6.2-sol', service_tiers: [{ id: 'priority' }] }] }),
+    )
+    await instance.session.prompt('/fast ultra')
+    expect(instance.notices.at(-1)).toBe('The Codex catalog does not advertise the Ultrafast tier.')
+    await instance.session.prompt('Reply OK')
+    expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
+  })
+})
+
 describe.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra'])(
   'Fast Mode through Codex with %s',
   (modelId) => {
@@ -197,9 +247,7 @@ describe.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra'])(
       })
       expect(
         JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
-      ).toEqual({
-        enabled: true,
-      })
+      ).toEqual({ speed: 'fast' })
       await instance.session.prompt('/codex-fast off')
       await instance.session.prompt('Reply OK once more')
       expect(instance.requests.at(-1)).not.toHaveProperty('service_tier')
@@ -216,9 +264,7 @@ describe.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra'])(
       await instance.session.prompt('/fast on')
       expect(
         JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
-      ).toEqual({
-        enabled: false,
-      })
+      ).toEqual({ speed: 'standard' })
       await instance.session.setModel(instance.runtime.getModel('openai-codex', modelId))
       await writeFile(
         instance.catalogPath,
@@ -227,9 +273,7 @@ describe.each(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra'])(
       await instance.session.prompt('/fast on')
       expect(
         JSON.parse(await readFile(join(instance.dir, 'state/fast-mode.json'), 'utf8')),
-      ).toEqual({
-        enabled: false,
-      })
+      ).toEqual({ speed: 'standard' })
     })
 
     it('uses the catalog tier and suspends the override when the preference becomes invalid', async () => {

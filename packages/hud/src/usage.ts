@@ -41,15 +41,15 @@ const KeychainSchema = Type.Object(
 const ClaudeWindowSchema = Type.Object(
   {
     utilization: Type.Optional(Type.Number()),
-    resets_at: Type.Optional(Type.String()),
+    resets_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   },
   { additionalProperties: true },
 )
 
 const ClaudeUsageSchema = Type.Object(
   {
-    five_hour: Type.Optional(ClaudeWindowSchema),
-    seven_day: Type.Optional(ClaudeWindowSchema),
+    five_hour: Type.Optional(Type.Union([ClaudeWindowSchema, Type.Null()])),
+    seven_day: Type.Optional(Type.Union([ClaudeWindowSchema, Type.Null()])),
   },
   { additionalProperties: true },
 )
@@ -146,7 +146,7 @@ export function parseClaudeWindows(data: ClaudeUsageData): UsageWindow[] {
     windows.push({
       label: '5h',
       usedPercent: normalizePercent(fiveHour.utilization),
-      resetsIn: resetLabel(fiveHour.resets_at),
+      resetsIn: resetLabel(fiveHour.resets_at ?? undefined),
     })
   }
   const sevenDay = data.seven_day
@@ -154,7 +154,7 @@ export function parseClaudeWindows(data: ClaudeUsageData): UsageWindow[] {
     windows.push({
       label: 'wk',
       usedPercent: normalizePercent(sevenDay.utilization),
-      resetsIn: resetLabel(sevenDay.resets_at),
+      resetsIn: resetLabel(sevenDay.resets_at ?? undefined),
     })
   }
   return windows

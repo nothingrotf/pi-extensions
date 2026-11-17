@@ -1,13 +1,16 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core'
 import type { Model, Api } from '@earendil-works/pi-ai'
 import type { ExtensionContext, ModelRuntime } from '@earendil-works/pi-coding-agent'
-import { getFastSupport } from '@nothingrotf/fast-mode/policy'
+import { getSpeedSupport, type Speed } from '@nothingrotf/fast-mode/policy'
 import { Value } from 'typebox/value'
 
 import type { RoleDefinition } from './roles.ts'
 import { EffortSchema, type Effort } from './schema.ts'
 
-const FAST_SUFFIX = ' [fast]'
+const SPEED_MARKERS = new Map<string, Speed>([
+  ['[fast]', 'fast'],
+  ['[ultrafast]', 'ultrafast'],
+])
 const RESERVED_SELECTORS = new Set(['auto', 'default', 'inherit', 'inherit-parent'])
 const LEGACY_OPENAI_PREFIX = 'openai-codex/'
 const subscriptionProviderPairs = new Map([
@@ -47,16 +50,34 @@ export function withUsableProvider<Candidate extends { id: string; provider: str
 
 export interface ResolvedModel {
   effort: Effort
-  fast: boolean
   model: Model<Api>
   modelRef: string
   selector: string
+  speed: Speed
+}
+
+export interface SpeedFields {
+  fast: boolean
+  ultrafast?: true
 }
 
 interface ParsedSelector {
   effort: Effort | undefined
-  fast: boolean
   modelRef: string
+  speed: Speed
+}
+
+export function speedFields(speed: Speed): SpeedFields {
+  return speed === 'ultrafast' ? { fast: true, ultrafast: true } : { fast: speed === 'fast' }
+}
+
+export function speedOf(fields: { fast: boolean; ultrafast?: boolean | undefined }): Speed {
+  if (fields.ultrafast === true) return 'ultrafast'
+  return fields.fast ? 'fast' : 'standard'
+}
+
+function speedSuffix(speed: Speed): string {
+  return speed === 'standard' ? '' : ` [${speed}]`
 }
 
 function modelRef(model: Model<Api>): string {
@@ -84,17 +105,18 @@ function parseSelector(selector: string, runtime: ModelRuntime): ParsedSelector 
   const trimmed = selector.trim()
   if (trimmed.length === 0) throw new Error('The model selector is empty.')
 
-  const fast = trimmed.endsWith(FAST_SUFFIX)
-  const withoutFast = fast ? trimmed.slice(0, -FAST_SUFFIX.length).trimEnd() : trimmed
-  if (withoutFast.includes('[fast]')) {
-    throw new Error('The [fast] marker must be the final model selector token.')
+  const separator = trimmed.lastIndexOf(' ')
+  const speed = separator < 0 ? undefined : SPEED_MARKERS.get(trimmed.slice(separator + 1))
+  const withoutSpeed = speed === undefined ? trimmed : trimmed.slice(0, separator).trimEnd()
+  if ([...SPEED_MARKERS.keys()].some((marker) => withoutSpeed.includes(marker))) {
+    throw new Error('The [fast] or [ultrafast] marker must be the final model selector token.')
   }
 
-  const exactModel = runtime.getModels().some((model) => modelRef(model) === withoutFast)
+  const exactModel = runtime.getModels().some((model) => modelRef(model) === withoutSpeed)
   const parsed = exactModel
-    ? { effort: undefined, modelRef: withoutFast }
-    : splitEffort(withoutFast)
-  return { ...parsed, fast }
+    ? { effort: undefined, modelRef: withoutSpeed }
+    : splitEffort(withoutSpeed)
+  return { ...parsed, speed: speed ?? 'standard' }
 }
 
 async function findExactModel(runtime: ModelRuntime, reference: string): Promise<Model<Api>> {
@@ -119,12 +141,12 @@ async function findExactModel(runtime: ModelRuntime, reference: string): Promise
   return model
 }
 
-function validateFast(model: Model<Api>, fast: boolean): void {
-  if (!fast) return
-  const support = getFastSupport(model)
+function validateSpeed(model: Model<Api>, speed: Speed): void {
+  if (speed === 'standard') return
+  const support = getSpeedSupport(model, speed)
   if (!support.supported) {
     throw new Error(
-      `Model "${modelRef(model)}" does not support the [fast] selector. ${support.reason}`,
+      `Model "${modelRef(model)}" does not support the [${speed}] selector. ${support.reason}`,
     )
   }
 }
@@ -158,18 +180,18 @@ function normalizeEffort(model: Model<Api>, effort: Effort, explicit: boolean): 
 export async function resolveStoredModel(
   reference: string,
   effort: Effort,
-  fast: boolean,
+  speed: Speed,
   runtime: ModelRuntime,
 ): Promise<ResolvedModel> {
   const model = await findExactModel(runtime, reference)
   validateEffort(model, effort)
-  validateFast(model, fast)
+  validateSpeed(model, speed)
   return {
     effort,
-    fast,
     model,
     modelRef: reference,
-    selector: `${reference}:${effort}${fast ? FAST_SUFFIX : ''}`,
+    selector: `${reference}:${effort}${speedSuffix(speed)}`,
+    speed,
   }
 }
 
@@ -181,8 +203,8 @@ export async function resolveModel(
 ): Promise<ResolvedModel> {
   const parsed = parseSelector(selector ?? 'inherit', runtime)
   const reserved = RESERVED_SELECTORS.has(parsed.modelRef)
-  if (reserved && parsed.fast) {
-    throw new Error('[fast] requires an explicit provider/model-id selector.')
+  if (reserved && parsed.speed !== 'standard') {
+    throw new Error(`[${parsed.speed}] requires an explicit provider/model-id selector.`)
   }
   if (!reserved && !parsed.modelRef.includes('/')) {
     throw new Error('The model selector must use provider/model-id syntax.')
@@ -201,15 +223,14 @@ export async function resolveModel(
     selectEffort(parsed, role, ctx),
     parsed.effort !== undefined,
   )
-  validateFast(model, parsed.fast)
+  validateSpeed(model, parsed.speed)
 
-  const normalized = `${reference}:${effort}${parsed.fast ? FAST_SUFFIX : ''}`
   return {
     effort,
-    fast: parsed.fast,
     model,
     modelRef: reference,
-    selector: normalized,
+    selector: `${reference}:${effort}${speedSuffix(parsed.speed)}`,
+    speed: parsed.speed,
   }
 }
 

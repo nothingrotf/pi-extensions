@@ -135,6 +135,59 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
     }
   })
 
+  it('applies, persists, and resumes an explicit Ultrafast selector', async () => {
+    const harness = await createHarness()
+    vi.stubEnv('CODEX_HOME', harness.dir)
+    try {
+      const payloadStart = harness.state.payloads.length
+      const result = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-6.2-sol:high [ultrafast]',
+      })
+      const id = agentId(result)
+      expect(latestState(harness).records.at(-1)).toMatchObject({
+        fast: true,
+        model: 'openai-codex/gpt-6.2-sol',
+        modelSelector: 'openai-codex/gpt-6.2-sol:high [ultrafast]',
+        ultrafast: true,
+      })
+      const payloads = harness.state.payloads
+        .slice(payloadStart)
+        .map((payload) => Value.Decode(PayloadSchema, payload))
+      expect(
+        payloads.some(
+          (payload) => payload.request === 'test' && payload.service_tier === 'ultrafast',
+        ),
+      ).toBe(true)
+
+      const downgrade = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-6.2-sol:high [fast]',
+        prompt: 'downgrade',
+        resume: id,
+      })
+      expect(downgrade).toContain('A resumed Task must preserve the original fast mode.')
+
+      const resumeStart = harness.state.payloads.length
+      const resumed = await runTask(harness, { resume: id, prompt: 'resume ultrafast' })
+      expect(agentId(resumed)).toBe(id)
+      const resumedPayloads = harness.state.payloads
+        .slice(resumeStart)
+        .map((payload) => Value.Decode(PayloadSchema, payload))
+      expect(resumedPayloads.some((payload) => payload.service_tier === 'ultrafast')).toBe(true)
+
+      const rejected = await runTask(harness, {
+        ...baseInput,
+        model: 'openai-codex/gpt-6.1-terra:high [ultrafast]',
+      })
+      expect(rejected).toContain('does not support the [ultrafast] selector')
+      expect(rejected).not.toContain('Agent ID:')
+    } finally {
+      vi.unstubAllEnvs()
+      await harness.close()
+    }
+  })
+
   it('parses colon model IDs and applies fast mode only when requested', async () => {
     const harness = await createHarness()
     try {
@@ -226,7 +279,9 @@ describe('subagent Task integration: models, aborts, and coordination', () => {
         'openai-codex/gpt-5.6-sol prefix [fast] suffix',
       ]) {
         const invalidFast = await runTask(harness, { ...baseInput, model })
-        expect(invalidFast).toContain('The [fast] marker must be the final model selector token.')
+        expect(invalidFast).toContain(
+          'The [fast] or [ultrafast] marker must be the final model selector token.',
+        )
         expect(invalidFast).not.toContain('Agent ID:')
       }
       const spacedFast = await runTask(harness, {

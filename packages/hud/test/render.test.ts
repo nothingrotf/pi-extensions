@@ -160,6 +160,21 @@ describe('compact HUD', () => {
     expect(unavailable).not.toContain('Fast unavailable')
     expect(unavailable).toContain('claude-opus-4-8:high')
 
+    const [ultraUnavailable = ''] = renderHud(
+      theme,
+      state(),
+      new Map([['fast-mode', 'Ultrafast unavailable']]),
+      180,
+    )
+    expect(ultraUnavailable).not.toContain('Ultrafast')
+    const [ultra = ''] = renderHud(
+      theme,
+      state(),
+      new Map([['fast-mode', 'Ultrafast requested']]),
+      180,
+    )
+    expect(ultra).toContain('claude-opus-4-8:high [ultrafast]')
+
     const [error = ''] = renderHud(
       theme,
       state(),

@@ -79,7 +79,13 @@ import {
   type WriterWorkspace,
 } from './isolation.ts'
 import type { MailboxEndpoint } from './mailbox.ts'
-import { resolveModel, resolveStoredModel, type ResolvedModel } from './model.ts'
+import {
+  resolveModel,
+  resolveStoredModel,
+  speedFields,
+  speedOf,
+  type ResolvedModel,
+} from './model.ts'
 import {
   evaluateGates,
   jsonEquals,
@@ -409,6 +415,7 @@ export interface RuntimeCompletedDetails {
   durationMs: number
   effort: Effort
   fast: boolean
+  ultrafast?: true
   finalMessage: string
   gateResults: GateResult[]
   inPlace?: InPlaceReceipt | undefined
@@ -433,6 +440,7 @@ export interface RuntimeBackgroundResult {
     createdAt: number
     effort: Effort
     fast: boolean
+    ultrafast?: true
     handle: SubagentHandle
     model: string
     status: 'background'
@@ -2190,7 +2198,7 @@ export class SubagentRuntime {
         description,
         effort: model.effort,
         execution: contract,
-        fast: model.fast,
+        ...speedFields(model.speed),
         model: model.modelRef,
         modelSelector: model.selector,
         itemId: prior?.itemId ?? options.taskId ?? 'task',
@@ -2322,7 +2330,7 @@ export class SubagentRuntime {
         agentId: record.agentId,
         createdAt: record.createdAt,
         effort: model.effort,
-        fast: model.fast,
+        ...speedFields(model.speed),
         handle: { ...active.handle },
         model: model.modelRef,
         role: record.role,
@@ -2521,7 +2529,7 @@ export class SubagentRuntime {
       }
       const model =
         input.model === undefined
-          ? await resolveStoredModel(prior.model, prior.effort, prior.fast, runtime)
+          ? await resolveStoredModel(prior.model, prior.effort, speedOf(prior), runtime)
           : await resolveModel(input.model, role, ctx, runtime)
       this.validateResumeSelection(prior, model)
       return { capabilities, contract, model, role }
@@ -2616,7 +2624,7 @@ export class SubagentRuntime {
       backgroundDefault: discovered?.is_background ?? false,
       capability: capabilities.contract,
       effort: model.effort,
-      fast: model.fast,
+      ...speedFields(model.speed),
       gates: input.gates ?? [],
       logicalCwd: cwd,
       model: model.modelRef,
@@ -2666,7 +2674,7 @@ export class SubagentRuntime {
     if (record.effort !== model.effort) {
       throw new Error('A resumed Task must preserve the original effort.')
     }
-    if (record.fast !== model.fast) {
+    if (speedOf(record) !== model.speed) {
       throw new Error('A resumed Task must preserve the original fast mode.')
     }
   }
@@ -3555,7 +3563,7 @@ export class SubagentRuntime {
           artifact,
           durationMs,
           effort: model.effort,
-          fast: model.fast,
+          ...speedFields(model.speed),
           finalMessage: output,
           gateResults,
           inPlace: active.inPlaceReceipt,

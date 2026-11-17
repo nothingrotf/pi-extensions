@@ -11,7 +11,7 @@ Write `~/.agents/rules/pstack-models.md`. The pstack extension reads this file a
 
 ### 1. Detect available models
 
-Run `pi --list-models` to detect available `provider/model-id` values. A concrete `Task` selector uses `provider/model-id:effort [fast]`. Use `off` when the model does not support reasoning. For reasoning models, ask for `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Add `[fast]` only when the user selects it. If detection returns no models, ask the user for available model identifiers. Never write an identifier that detection does not confirm. The aliases `inherit-parent` and `auto` are always valid.
+Run `pi --list-models` to detect available `provider/model-id` values. A concrete `Task` selector uses `provider/model-id:effort [fast]` or `provider/model-id:effort [ultrafast]`. Use `off` when the model does not support reasoning. For reasoning models, ask for `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Add `[fast]` or `[ultrafast]` only when the user selects that speed. Ultrafast requires an OpenAI model and an account that the Codex catalog grants the Ultrafast tier, such as `gpt-6.2-sol`. If detection returns no models, ask the user for available model identifiers. Never write an identifier that detection does not confirm. The aliases `inherit-parent` and `auto` are always valid.
 
 ### 2. Load current state
 
@@ -69,7 +69,7 @@ Every dispatch must pass the selected role as `Task.role`, including inherited m
 
 Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing and unknown dispatch roles fail clearly. Grouped file keys expand to exact roles. The configuration aliases `divergent` and `synthesizer` mean `reflect divergent` and `reflect synthesizer`; use the full names in Task calls.
 
-Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry allow explicit models before the agent default and parent fallback.
+Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and the `[fast]` or `[ultrafast]` speed marker. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry allow explicit models before the agent default and parent fallback.
 
 A pool with distinct choices requires an explicit selection, never first-entry selection or hidden list-size fanout. Identical choices may omit the selector. Skills own all dispatch counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
 
