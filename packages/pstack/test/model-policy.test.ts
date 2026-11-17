@@ -59,6 +59,19 @@ describe('pstack model policy parser', () => {
     expect(selectCapabilityModel([policy], 'judgment and prose', undefined)).toBe(scalar)
   })
 
+  it('keeps Fast and Ultrafast selectors distinct', () => {
+    const ultrafast = 'openai-codex/gpt-6.2-sol:high [ultrafast]'
+    const policy = parsePstackModelPolicy(`feature: ${ultrafast}`)
+    expect(policy.status).toBe('valid')
+    expect(selectCapabilityModel([policy], 'feature', undefined)).toBe(ultrafast)
+    expect(selectCapabilityModel([policy], 'feature', 'openai/gpt-6.2-sol:high [ultrafast]')).toBe(
+      'openai/gpt-6.2-sol:high [ultrafast]',
+    )
+    expect(() =>
+      selectCapabilityModel([policy], 'feature', 'openai-codex/gpt-6.2-sol:high [fast]'),
+    ).toThrow('configured selectors')
+  })
+
   it('permits a different review family without relaxing scalar implementation policy', () => {
     const implementation = 'openai-codex/gpt-5.6-sol:medium [fast]'
     const reviewer = 'anthropic/claude-fable-5-1:medium'
@@ -109,6 +122,8 @@ describe('pstack model policy parser', () => {
     'reflect judgment, divergent, synthesizer: auto\nreflect synthesizer: auto',
     'missing role: auto',
     'how explorer: auto [fast]',
+    'how explorer: provider/model:high [ultra]',
+    'how explorer: provider/model:high [fast] [ultrafast]',
     'how explorer: provider/model:ultra',
     'how explorer: provider/model:off [fast] trailing',
     'how explorer: provider/<instructions>:off',

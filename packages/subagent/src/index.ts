@@ -25,6 +25,7 @@ import { acquireSubagentHost } from './controller.ts'
 import { runBatch, type BatchItemResult } from './coordinator.ts'
 import { taskRoleLabel } from './format.ts'
 import { type JobProgressDetails, type JobSnapshot, toJobSnapshot } from './jobs.ts'
+import { speedFields, speedOf } from './model.ts'
 import { JobProgress } from './progress.ts'
 import { RailChildReporter } from './rail-children.ts'
 import { emptyRailComponent, RailBridge, railOutputText, type RailStatus } from './rail.ts'
@@ -80,6 +81,7 @@ type OperationalCompletedDetails = Pick<
   | 'durationMs'
   | 'effort'
   | 'fast'
+  | 'ultrafast'
   | 'finalMessage'
   | 'intercomUsage'
   | 'model'
@@ -159,7 +161,7 @@ function completedDetails(details: RuntimeCompletedDetails): OperationalComplete
     attempt: details.artifact.attempt,
     durationMs: details.durationMs,
     effort: details.effort,
-    fast: details.fast,
+    ...speedFields(speedOf(details)),
     finalMessage: boundedText(details.finalMessage, MAX_DETAIL_PREVIEW_BYTES),
     gateCount: details.gateResults.length,
     intercomUsage: details.intercomUsage,

@@ -11,7 +11,11 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent'
-import { applyFastTier, getFastSupport } from '@nothingrotf/fast-mode/policy'
+import {
+  applyServiceTier,
+  getSpeedSupport,
+  type AcceleratedSpeed,
+} from '@nothingrotf/fast-mode/policy'
 
 import { createDecisionTool } from './decisions.ts'
 import {
@@ -36,16 +40,18 @@ export class ChildSessionError extends Error {
   }
 }
 
-const fastModeExtension: InlineExtension = {
-  factory: (pi) => {
-    pi.on('before_provider_request', (event, ctx) => {
-      const support = getFastSupport(ctx.model)
-      if (!support.supported) throw new Error(support.reason)
-      return applyFastTier(event.payload, support.tier)
-    })
-  },
-  hidden: true,
-  name: 'subagent-fast-mode',
+function speedExtension(speed: AcceleratedSpeed): InlineExtension {
+  return {
+    factory: (pi) => {
+      pi.on('before_provider_request', (event, ctx) => {
+        const support = getSpeedSupport(ctx.model, speed)
+        if (!support.supported) throw new Error(support.reason)
+        return applyServiceTier(event.payload, support.tier)
+      })
+    },
+    hidden: true,
+    name: 'subagent-fast-mode',
+  }
 }
 
 function codemodeExtension(): InlineExtension {
@@ -135,7 +141,7 @@ export async function createChildSession(options: CreateChildOptions): Promise<A
     ],
     cwd: options.cwd,
     extensionFactories: [
-      ...(options.model.fast ? [fastModeExtension] : []),
+      ...(options.model.speed === 'standard' ? [] : [speedExtension(options.model.speed)]),
       ...(options.tools.includes('codemode') ? [codemodeExtension()] : []),
       ...options.extensions,
     ],

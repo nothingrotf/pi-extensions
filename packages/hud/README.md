@@ -12,16 +12,16 @@ The left side shows:
 - active background commands from `@nothingrotf/background-commands`, such as `⚙ 2 bg, 1 stopping`
 
 The right side shows context use, session cache percentage, and provider quota windows.
-Model labels use the model ID with lowercase effort and Fast labels, such as `gpt-6-astra:xhigh [fast]`.
+Model labels use the model ID with lowercase effort and speed labels, such as `gpt-6-astra:xhigh [fast]` or `gpt-6.2-sol:high [ultrafast]`.
 Other extension statuses, including MCP tools, stay hidden.
 Quota windows support Anthropic and OpenAI Codex authentication from Pi.
 For the `openai` provider with Sign in with ChatGPT, OpenAI documents no quota endpoint.
 The HUD reads the Codex rate-limit headers and `codex.rate_limits` stream events from each OpenAI response instead.
 The windows stay hidden until a response includes these values.
-Fast Mode uses the status from `@nothingrotf/fast-mode`. Unavailable Fast Mode stays hidden.
+Fast Mode uses the status from `@nothingrotf/fast-mode`. An unavailable Fast or Ultrafast tier stays hidden.
 Background commands use the versioned `background-commands:state` event instead of the footer status text.
 The HUD requests the current state at session start and hides the segment when no command is active.
-The footer shows `Fast not applied` when the OpenAI API processes the last Fast request at a standard tier.
+The footer shows `Fast not applied` or `Ultrafast not applied` when the OpenAI API processes the last request at another tier.
 The session cache percentage divides cache-read tokens by all input tokens on the current branch, including cache writes. It stays hidden until response usage is available.
 
 Footer groups use `·` separators. Flexible space keeps the right group aligned with the terminal edge.

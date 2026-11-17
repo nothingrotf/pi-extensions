@@ -1,6 +1,6 @@
 # @nothingrotf/fast-mode
 
-`@nothingrotf/fast-mode` requests Fast Mode for supported OpenAI models.
+`@nothingrotf/fast-mode` requests Fast or Ultrafast Mode for supported OpenAI models.
 It supports the `openai` provider, including Sign in with ChatGPT, and the legacy `openai-codex` provider.
 It changes only `service_tier` through Pi's `before_provider_request` hook.
 It preserves the provider, authentication, reasoning effort, verbosity, and other request fields.
@@ -18,28 +18,32 @@ Restart Pi after installation.
 
 ```text
 /fast on
+/fast ultra
 /fast off
 /fast status
 ```
 
+`/fast on` requests `service_tier: "priority"` or the Fast tier from the catalog.
+`/fast ultra` and `/fast ultrafast` request `service_tier: "ultrafast"`.
 `/codex-fast` is an alias.
 The package stores the preference in `<agentDir>/state/fast-mode.json`.
-The initial preference is off.
+The initial preference is off. The package also reads the legacy `{ "enabled": true }` format.
 Other sessions read preference changes before their next request.
 
-Fast Mode increases usage.
+Fast and Ultrafast Mode increase usage. Ultrafast uses more of the plan allowance than Fast.
 The public Responses API reports the tier that processed each response.
 For the `openai` provider, `/fast status` shows the tier from the last response.
-A response with a standard tier changes the status to `Fast not applied`.
+A response with another tier changes the status to `Fast not applied` or `Ultrafast not applied`.
 The Codex backend can report `default` for an accepted Fast request, so `openai-codex` status reports only the requested tier.
 `off` stops this package's tier override. It preserves tiers supplied by other request sources.
 
 ## Model support
 
 The package reads `${CODEX_HOME:-~/.codex}/models_cache.json` without network requests.
-An explicit catalog tier declaration takes precedence over the built-in compatibility list, including a declaration without a Fast tier.
+An explicit catalog tier declaration takes precedence over the built-in compatibility list, including a declaration without a Fast or Ultrafast tier.
+The Codex catalog lists Ultrafast only for accounts and models with access. The Codex backend can silently serve another tier for an account without access.
 
-The built-in list covers these model identifiers when the catalog lacks tier metadata:
+The built-in Fast list covers these model identifiers when the catalog lacks tier metadata:
 
 - `gpt-5.4`
 - `gpt-5.5`
@@ -51,8 +55,18 @@ The built-in list covers these model identifiers when the catalog lacks tier met
 - `gpt-6-sol`
 - `gpt-6.1-sol`
 - `gpt-6.1-terra`
+- `gpt-6.2-astra`
+- `gpt-6.2-sol`
 
-Unknown models require a catalog entry that advertises `priority` or `fast`.
+The built-in Ultrafast list covers these model identifiers:
+
+- `gpt-6-astra`
+- `gpt-6.1-sol`
+- `gpt-6.2-astra`
+- `gpt-6.2-sol`
+
+Unknown models require a catalog entry that advertises `priority`, `fast`, or `ultrafast`.
+An Ultrafast preference never falls back to Fast. It suspends the override for a model without Ultrafast support.
 The `openai` and `openai-codex` providers use the same catalog and compatibility list.
 The package does not apply these tier rules to other providers, such as Azure OpenAI.
 The OpenAI documentation does not list `service_tier` as an unsupported field for Sign in with ChatGPT.
@@ -63,13 +77,14 @@ An invalid preference file disables the override and reports an error.
 ## Subagents
 
 The package exports the shared capability policy through `@nothingrotf/fast-mode/policy`.
-The subagent package uses this policy for explicit `[fast]` selectors.
+The subagent package uses this policy for explicit `[fast]` and `[ultrafast]` selectors.
 Subagents do not inherit the global preference automatically.
 
 ## Sources
 
 - [Codex configuration reference](https://developers.openai.com/codex/config-reference)
 - [OpenAI Fast Mode guide](https://developers.openai.com/api/docs/guides/fast-mode)
+- [OpenAI Ultrafast Mode guide](https://developers.openai.com/api/docs/guides/ultrafast-mode)
 - [Sign in with ChatGPT preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 - [Codex speed and usage](https://learn.chatgpt.com/docs/agent-configuration/speed)
 

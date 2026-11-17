@@ -1042,7 +1042,7 @@ export function providerConfig(state: ProviderState): ProviderConfig {
         reasoning: true,
         thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high' },
       },
-      ...['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra'].map((id) => ({
+      ...['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol'].map((id) => ({
         contextWindow: 272_000,
         cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
         id,

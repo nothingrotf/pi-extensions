@@ -260,7 +260,7 @@ export async function child(h, profile, options = {}) {
     extensions: capability.extensions,
     intercom: {},
     requestParent: async () => 'Approved by real coordinator',
-    model: { model: h.model, modelRef: 'pstack-test/model', effort: 'low', fast: false },
+    model: { model: h.model, modelRef: 'pstack-test/model', effort: 'low', speed: 'standard' },
     resumeFile: undefined,
     runtime: h.modelRuntime,
     sessionManager: SessionManager.inMemory(h.dir),
