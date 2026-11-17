@@ -35,7 +35,7 @@ describe('arena', () => {
     expect(port).toContain('Use `todo_write`')
     expect(port).toContain('mark that judge `BLOCKED`')
     expect(port).toContain('Do not substitute a model.')
-    expect(port).toContain("The judge is never from the parent's model family.")
+    expect(port).toContain("The judge is never from the parent's vendor.")
     expect(port).toContain('never judges')
     expect(port).toContain('skip the judge, pick the base alone in Phase D, and say so')
     expect(port).toContain('drop that seat and say so')

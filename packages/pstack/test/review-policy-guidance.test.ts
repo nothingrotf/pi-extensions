@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vite-plus/test'
 
+import { selectCapabilityModel } from '../../subagent/src/capabilities.ts'
+import { parsePstackModelPolicy } from '../src/model-policy.ts'
+
 function read(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
 }
@@ -51,11 +54,29 @@ describe('Comment Sicko review guidance', () => {
 describe('setup pstack role guidance', () => {
   it('announces discarded known legacy roles without treating unknown roles as compatible', () => {
     const skill = read('../skills/setup-pstack/SKILL.md')
-    expect(skill).toContain(
-      '`how critics`, `code review`, `runtime verification`, and `publication` are known legacy roles',
-    )
+    for (const role of [
+      'hardest tasks',
+      'how explorer',
+      'how explainer',
+      'why investigators',
+      'why synthesizer',
+      'reflect tooling',
+      'reflect judgment',
+      'reflect divergent',
+      'reflect synthesizer',
+      'architect runners',
+      'how critics',
+      'code review',
+      'runtime verification',
+      'publication',
+    ]) {
+      expect(skill).toContain(`\`${role}\``)
+      expect(() =>
+        selectCapabilityModel([parsePstackModelPolicy(`${role}: auto`)], role, undefined),
+      ).toThrow('Unknown model policy role')
+    }
     expect(skill).toContain('accepts their valid configuration but ignores their selectors')
-    expect(skill).toContain('list each known legacy row that the rewrite will remove')
+    expect(skill).toContain('list each retired row that the rewrite will remove')
     expect(skill).toContain('Unknown roles remain errors')
     expect(skill).toContain('resolve them with the operator before confirmation or rewriting')
     expect(skill).toContain('Preserve the choices of active roles')
@@ -66,7 +87,7 @@ describe('setup pstack role guidance', () => {
     const example = skill.match(/```text\n(---[\s\S]*?)\n```/)?.[1] ?? ''
     expect(example).toContain('arena cross-judge pool: inherit-parent')
     expect(example).toContain('swarm workers: inherit-parent')
-    for (const role of ['code review', 'runtime verification', 'publication'])
+    for (const role of ['code review', 'hardest tasks', 'how explorer', 'architect runners'])
       expect(example).not.toContain(`${role}:`)
     expect(skill).toContain('Every list is an availability pool')
     expect(skill).toContain('List length never causes fanout')

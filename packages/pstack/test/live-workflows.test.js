@@ -41,9 +41,7 @@ const scenarios = [
       ? 'poteto-mode/playbooks/autopilot-full.md'
       : graph.id.startsWith('autopilot-stack')
         ? 'poteto-mode/playbooks/autopilot-stack.md'
-        : graph.id.startsWith('multi-phase')
-          ? 'poteto-mode/playbooks/multi-phase-plan.md'
-          : first.source
+        : first.source
     return { ...first, source, id: `flow-${graph.id}`, mode: 'workflow', graph: graph.id }
   }),
 ].filter((scenario) => selected === undefined || selected.includes(scenario.id))
@@ -100,12 +98,9 @@ async function fixture(directory) {
 function objective(scenario) {
   if (scenario.id.includes('eval'))
     return 'Assess whether the local environment can satisfy the Eval blinding prerequisites. Do not run an unblinded candidate as though it were blinded.'
-  if (scenario.role.startsWith('how'))
-    return 'Explain normalizeNames and the CLI call path, ownership, data flow, and edge cases. For a critic, review that architecture rather than implementing changes.'
-  if (scenario.role.startsWith('why'))
-    return 'Explain the rationale and evidence gaps for order-preserving normalization using evidence.md and local code. The root supplies the available fixture evidence. Do not claim searches of external categories.'
+  if (scenario.id.startsWith('how'))
+    return 'Explain normalizeNames and the CLI call path, ownership, data flow, and edge cases.'
   if (
-    scenario.role.startsWith('reflect') ||
     scenario.id.startsWith('automate') ||
     scenario.id.includes('recall') ||
     scenario.id.includes('trail') ||
@@ -161,7 +156,7 @@ async function inspectTranscript(path) {
 }
 
 async function historySeeds(scenario, directory, caseRoot, model, modelRuntime, boundary) {
-  if (!/automate|reflect|recall|trail|pickup|retro/.test(scenario.id)) return []
+  if (!/automate|recall|trail|pickup|retro/.test(scenario.id)) return []
   const captured = []
   for (let index = 0; index < (scenario.id.includes('automate') ? 3 : 1); index += 1) {
     const settingsManager = SettingsManager.inMemory({

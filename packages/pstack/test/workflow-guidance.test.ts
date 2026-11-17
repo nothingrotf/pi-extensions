@@ -49,8 +49,8 @@ describe('standalone pstack worker contracts', () => {
 
   it('restates the goal first and decides before measuring', () => {
     const mode = skill('poteto-mode/SKILL.md')
-    expect(mode).toContain('Your first message on a task')
-    expect(mode).toContain("open each PR's `## Summary` with it")
+    expect(mode).toContain("First message → restate the user's goal")
+    expect(mode).toContain('PR `## Summary`')
     expect(mode).toContain('Run a resume with `run_in_background: true` too')
     expect(skill('principle-explain-the-number/SKILL.md')).toContain(
       'Write the decision before you run.',
@@ -60,19 +60,15 @@ describe('standalone pstack worker contracts', () => {
   it('starts authorized autopilot babysit once the owner reports the PR URL', () => {
     const opening = skill('poteto-mode/playbooks/opening-a-pr.md')
     const babysit = skill('poteto-mode/playbooks/babysit.md')
-    for (const source of [opening, babysit]) {
-      expect(source).toContain('Autopilot-full')
-      expect(source).toContain('Autopilot-stack')
-      expect(source).toContain('explicit lifecycle assignment')
-      expect(source).not.toContain('managed')
-      expect(source).not.toContain('publication Task')
-    }
-    expect(opening).toContain('once the owner reports the PR URL')
-    expect(opening).toContain('The root owns this lifecycle, not the owner.')
-    expect(opening).not.toContain('Autopilot-stack layer PRs are the one exception.')
-    expect(babysit).toContain('one babysitter at the merge frontier')
-    expect(babysit).toContain('Route code fixes to the implementer')
-    expect(babysit).toContain('For a standalone request, fix only on the owning branch')
+    expect(opening).toContain('Opening a PR does not start a babysit.')
+    expect(babysit).toContain('Opening a PR alone does not start a babysit.')
+    expect(babysit).toContain(
+      'In Autopilot-full or Autopilot-stack, the lifecycle assignment starts it once the owner reports the PR URL.',
+    )
+    expect(babysit).toContain('The root owns the loop and the watcher.')
+    expect(babysit).toContain('a fresh owner of the owning branch makes it')
+    expect(babysit).toContain('Never rebase, retarget, or force-push.')
+    expect(babysit).toContain('Babysitting never authorizes merging.')
     const full = skill('poteto-mode/playbooks/autopilot-full.md')
     expect(full).toContain('playbooks/babysit.md')
     expect(full).toContain('git ls-remote')
@@ -88,15 +84,6 @@ describe('standalone pstack worker contracts', () => {
     expect(skill('poteto-mode/references/stack-backends.md')).toContain(
       'Use it to grow a stack one published layer at a time.',
     )
-  })
-
-  it('logs idle audits without repeating operator status', () => {
-    const source = skill('poteto-mode/playbooks/multi-phase-plan.md')
-    expect(source).toContain('not already reported')
-    expect(source).toContain('no reply text')
-    expect(source).toContain("tick's row")
-    expect(source).toContain('Record which changes the operator status covered')
-    expect(source).toContain('decision log')
   })
 
   it('retains broken WIP at pause without claiming acceptance or bypassing repository rules', () => {

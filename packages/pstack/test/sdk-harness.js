@@ -274,7 +274,7 @@ export function policyInput(overrides = {}) {
   return {
     description: 'Policy dispatch',
     prompt: 'read:policy',
-    role: 'how explorer',
+    role: 'swarm workers',
     capability_profile: 'pstack-leaf',
     subagent_type: 'generalPurpose',
     readonly: true,
@@ -367,7 +367,7 @@ export function workflowSteps(scenario, root) {
       arguments: {
         description: 'Scoped nested reviewer',
         prompt: `read:nested-${scenario.id}`,
-        role: 'how explainer',
+        role: 'judgment and prose',
         subagent_type: 'generalPurpose',
         readonly: true,
         capability_profile: 'pstack-leaf',

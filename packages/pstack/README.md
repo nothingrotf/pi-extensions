@@ -245,12 +245,26 @@ The Pi port adapts or omits these parts:
 - `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation. The skill keeps two adversaries by default and never substitutes an unconfigured model.
 - `arena` drops a rejected runner seat and marks a rejected judge `BLOCKED` instead of the upstream chain of model fallbacks. The upstream fallback chain for rejected slugs in `poteto-mode` has no counterpart.
 - PRs open their `## Summary` with the user's goal, because the `pr` template has no `## Why` heading.
-- Orchestrate keeps its state in `~/.pi/agent/poteto/orchestrate/<project-slug>/notes.md`, watches PRs with `loop_next`, and manages workers with `Task` and `TaskControl`. Cloud VMs, the Project store, and forks have no counterpart.
 - `poteto-help`, the guide, the Claude Code harness tree, and the version bumps have no local counterpart.
+
+These upstream changes through [#1249](https://github.com/cursor/plugins/pull/1249) at `2f87c854fe3e2fcda44ca86b46ede35aad3c46b7` are also synchronized:
+
+- [#1236](https://github.com/cursor/plugins/pull/1236) reduces `why` to one paragraph that answers from the commit and PR record, and `how` to one read-only explainer. It deletes their prompt and source references, fixes statechart rendering, and shortens `sharpen` and `reflect`.
+- [#1249](https://github.com/cursor/plugins/pull/1249) shortens most skills and playbooks, adds operator rules for every started agent, and reduces `reflect` and `architect` to single-agent skills. It deletes Orchestrate, `check-plan.mjs`, and the `architect`, `reflect`, and `why` reference prompts. It retires the `hardest tasks`, `how`, `why`, `reflect`, and `architect runners` roles.
+
+The Pi port adapts or omits these parts:
+
+- The upstream operator rules join `references/worker.md`, which `poteto-agent` already loads. A separate `worker.md` would load the same contract twice.
+- `how` dispatches its explainer as `judgment and prose` with `pstack-leaf`. A leaf without `Task` writes the explanation itself.
+- `reflect` recovers compacted turns with `compact_recall` and child sessions with `session_history`. It copies a skill out of `~/.pi/agent/npm/` before an edit.
+- The parser accepts retired role lines without effect, so existing policy files stay valid. Task calls with a retired role fail.
+- The Cursor model slugs, the `/setup-pstack` budget ladder, and the Opus `-fast` rule have no counterpart. Pi selectors carry effort and the `[fast]` or `[ultrafast]` marker directly.
+- `opening-a-pr` keeps the bundled `pr` skill for the body and the stack backends for follow-ups. Origin's CLI has no counterpart.
+- Multi-phase plans default to `~/.pi/agent/poteto/<project-slug>/docs/`.
 
 ## Task roles and workspace contracts
 
-Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `why synthesizer`.
+Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `judgment and prose`.
 The runner preserves this label beside the model without inferring it from the model name.
 With a pstack capability profile, the role enforces the configured model choices. It never grants capabilities.
 
@@ -261,7 +275,7 @@ Selectors for the `openai` and `openai-codex` providers match each other for the
 
 Pstack uses the upstream roles. A second opinion selects one entry of `arena cross-judge pool` from another model family. Verification uses `swarm workers`. The branch owner publishes its own PR. `judgment and prose` remains for prose and evidence synthesis.
 
-The parser ignores older `how critics`, `code review`, `runtime verification`, and `publication` lines, so those files stay valid. Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or speed settings fail affected selections.
+The parser ignores retired role lines, such as `hardest tasks`, `how explorer`, `why synthesizer`, `reflect judgment`, `architect runners`, and `code review`, so those files stay valid. Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or speed settings fail affected selections.
 
 Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 

@@ -29,66 +29,13 @@ export async function prepareLiveFixture(directory, scenario) {
   const id = scenario.id
   let base = (await execute('git', ['rev-parse', 'HEAD'], { cwd: directory })).stdout.trim()
   let goal
-  if (id.startsWith('why-') && id !== 'why-synthesis') {
-    const category = id === 'why-followup' ? 'source-control' : id.slice(4)
-    const excerpts = new Map([
-      [
-        'tickets',
-        'Fictional ticket: imported duplicate names repeat in the exported list. Request: deduplicate after trimming while retaining the first appearance. Rationale: customers arrange names before import. Sorting would discard that arrangement. This is not an authenticated issue-tracker record.',
-      ],
-      [
-        'documents',
-        'Fixture ADR: normalization must preserve input order. The export is an ordered JSON array. Stable deduplication extends the existing contract. Sorting and retaining only the last occurrence were rejected because both can change the established first-seen order.',
-      ],
-      [
-        'chat',
-        'Fictional conversation: a requester asks to remove repeated names without reordering the list. A reviewer proposes sorting. The requester rejects sorting because the supplied order encodes the intended review sequence. These are fixture statements, not messages from an external chat service.',
-      ],
-    ])
-    let evidence = excerpts.get(category)
-    if (category === 'source-control')
-      evidence = (
-        await execute('git', ['log', '--format=fuller', '-p', '--', 'names.js'], { cwd: directory })
-      ).stdout
-    if (category === 'observability' || category === 'analytics') {
-      const observed = await execute('bun', ['cli.js', 'Lin', 'Ada', 'Lin', ' Ada '], {
-        cwd: directory,
-      })
-      evidence = `Actual local command: bun cli.js Lin Ada Lin " Ada "\nObserved stdout: ${observed.stdout}\nWorkload contains four synthetic inputs and two distinct normalized names. The command preserves order but retains duplicates. This is local test evidence, not production telemetry or usage analytics.`
-    }
-    if (category === 'errors') {
-      const command =
-        'import assert from "node:assert/strict"; import {normalizeNames} from "./names.js"; assert.deepEqual(normalizeNames([" Ada ", "Ada"]), ["Ada"])'
-      evidence = await execute('node', ['--input-type=module', '-e', command], {
-        cwd: directory,
-      }).then(
-        (result) => result.stdout,
-        (failure) => `Actual local assertion failed with exit ${failure.code}:\n${failure.stderr}`,
-      )
-    }
-    if (evidence === undefined) throw new Error(`Unsupported Why category ${category}`)
-    await writeFile(
-      join(directory, 'category-evidence.md'),
-      `# ${category} evidence\n\nThis is a category-specific local fixture. No external category service was queried.\n\n${evidence}\n`,
-    )
-    goal = `Assigned Why category: ${category}. Investigate only category-evidence.md for this category, using local source only as context. Read the exact source guide linked by why/references/source-playbook.md instead of inventing filenames. Distinguish direct records, inference, and gaps. Preserve accurate file-line citations and state that external collection did not run. Do not substitute a source-control investigation for tickets, documents, chat, observability, errors, or analytics.`
-    if (id === 'why-followup')
-      goal +=
-        ' First finish one bounded investigator pass. The root must then resume that same completed agent with Task.resume and ask whether sorting would preserve the documented first-seen contract. Preserve the original agent ID, role, model, and capabilities. Audit both actual turns. Do not create a replacement investigator or report follow-up coverage without a resume call.'
-  } else if (id === 'feature-leaf' || id === 'orchestrate-worker') {
+  if (id === 'feature-leaf') {
     await writeFile(
       join(directory, 'scoped-design.md'),
       '# Supplied leaf design\n\nThis design is supplied by the harness. It does not claim that a prior How or Architect agent executed.\n\n- Scope: names.js and names.test.js only. cli.js keeps its current interface.\n- Keep normalizeNames(values) as the single exported normalization boundary.\n- Trim each input, remove blank strings, construct a Set from the cleaned sequence, and spread it into the returned array.\n- Preserve first occurrence and case sensitivity.\n- Add a regression covering spaced duplicates, blanks, order, and lowercase versus uppercase variants.\n- Reproduce the regression before implementation and verify the actual CLI afterward.\n- The leaf executes Feature step 4 against this supplied design. The root retains owner phases and mandatory independent review.\n',
     )
     goal =
       'Implement only the complete scoped leaf design in scoped-design.md. This is a Feature step 4 implementation probe, not assignment of the enclosing workflow ownership. Reproduce the regression, implement the supplied structure without new design exploration, and run the actual CLI. Return required independent review to the root. Do not claim upstream planning or the enclosing feature workflow completed.'
-  } else if (id === 'flow-how-complex') {
-    await writeFile(
-      join(directory, 'stdin.js'),
-      'import { normalizeNames } from "./names.js"\nlet input = ""\nfor await (const chunk of process.stdin) input += chunk\nconsole.log(JSON.stringify(normalizeNames(input.split("\\n"))))\n',
-    )
-    goal =
-      'Explain both independent entry points: argv through cli.js and newline-delimited stdin through stdin.js. Trace the shared normalization boundary, data flow, ownership, and edge cases. Use the complex exploration and synthesis path, not the simple explainer shortcut.'
   } else if (
     id.startsWith('flow-swarm') ||
     ['swarm-partition', 'swarm-race', 'swarm-mixed'].includes(id)
@@ -226,8 +173,7 @@ export async function prepareLiveFixture(directory, scenario) {
     id.includes('shipping') ||
     id.includes('publication') ||
     id.includes('stacker') ||
-    id.startsWith('flow-autopilot') ||
-    id === 'flow-multi-phase-thirteen-lanes'
+    id.startsWith('flow-autopilot')
   ) {
     await writeFile(join(directory, 'names.js'), correct)
     await writeFile(
@@ -240,11 +186,11 @@ export async function prepareLiveFixture(directory, scenario) {
     if (id.startsWith('flow-')) {
       await writeFile(
         join(directory, 'verification-lanes.md'),
-        '# Local verification predicates\n\nUse these thirteen bounded predicates when the requested block requires thirteen lanes.\n\n1. Trim one name.\n2. Trim several names.\n3. Remove empty strings.\n4. Remove spaces-only strings.\n5. Remove tabs-only strings.\n6. Deduplicate equal names.\n7. Deduplicate after trimming.\n8. Preserve first occurrence.\n9. Preserve case sensitivity.\n10. Preserve an empty input.\n11. Return JSON from the CLI.\n12. Keep input arrays unchanged.\n13. Probe 10000 inputs and report elapsed time without inventing a performance threshold.\n\nRun real assertions with Bun against the exact head. Keep verifier patches separate.\n',
+        '# Local verification predicates\n\nUse these thirteen bounded predicates when the requested block requires them.\n\n1. Trim one name.\n2. Trim several names.\n3. Remove empty strings.\n4. Remove spaces-only strings.\n5. Remove tabs-only strings.\n6. Deduplicate equal names.\n7. Deduplicate after trimming.\n8. Preserve first occurrence.\n9. Preserve case sensitivity.\n10. Preserve an empty input.\n11. Return JSON from the CLI.\n12. Keep input arrays unchanged.\n13. Probe 10000 inputs and report elapsed time without inventing a performance threshold.\n\nRun real assertions with Bun against the exact head. Keep verifier patches separate.\n',
       )
-      goal = `Execute only the named local verification block against the committed base/head in scope.md. Read verification-lanes.md for thirteen concrete predicates and a local performance probe. ${id === 'flow-multi-phase-thirteen-lanes' ? 'Execute the thirteen-lane verification block, not merely plan authorship. If the source first requires a plan, save it to plan.md and then execute the requested block.' : 'The implementation phase is already complete in the supplied commit. Run the full or light verification variant specified by this case.'} Run serially or in waves of at most three active children. Do not run publication or unrelated development phases.`
+      goal = `Execute only the named local verification block against the committed base/head in scope.md. Read verification-lanes.md for thirteen concrete predicates and a local performance probe. The implementation phase is already complete in the supplied commit. Run the full or light verification variant specified by this case. Run serially or in waves of at most three active children. Do not run publication or unrelated development phases.`
     }
-  } else if (id.includes('arena') || id.includes('architect')) {
+  } else if (id.includes('arena')) {
     await writeFile(
       join(directory, 'request.md'),
       'Support newline-delimited stdin with a --stdin flag alongside argv. Preserve normalization and JSON output. Choose a clear error contract for mixing --stdin and argv. Provide usage first, then design and rationale.\n',
@@ -273,15 +219,7 @@ export async function prepareLiveFixture(directory, scenario) {
     goal =
       'Migrate target.html inline styles to CSS classes without changing the rendered pixels. reference.html is immutable. Capture a local file:// baseline and target at the same viewport with agent-browser using a unique session, compare screenshots, and close only that session. No external URLs or dependencies. If a matching capture or image-diff capability fails, report the blocker rather than claiming visual parity.'
   }
-  if (
-    [
-      'how-synthesis',
-      'why-synthesis',
-      'reflect-synthesizer',
-      'trail-cross-review',
-      'pickup-reducer',
-    ].includes(id)
-  ) {
+  if (['trail-cross-review', 'pickup-reducer'].includes(id)) {
     await writeFile(
       join(directory, 'supplied-input.md'),
       '# Supplied fixture input\n\nThese are harness-authored source observations and a proposed brief, not outputs from executed upstream agents.\n\n- cli.js owns argv and prints a JSON array.\n- names.js trims each input and removes blank results.\n- Current duplicate values survive.\n- The proposed change deduplicates after trimming and preserves first occurrence and case sensitivity.\n- Acceptance requires a reproducing regression, a passing suite, actual CLI evidence, independent review, and no external actions.\n- baseline-check.json contains a real harness-executed local test receipt.\n- No ticket, chat, production trace, or remote change is supplied.\n\nResume point: implementation is not started. The next owner must inspect the contract and reproduce duplicate output. No completed implementation or review is claimed.\n',
@@ -294,9 +232,6 @@ export async function prepareLiveFixture(directory, scenario) {
   if (id.includes('automate'))
     goal =
       'Run only the three-slice history-mining phase. Use project-scoped session_history to collect the three prior local fixture sessions, exclude the current session and children, and explicitly assign oldest, middle, and newest slices. Return and cross-check evidenced preferences for this fictional fixture only. Do not ask questions, author a personal skill, or publish. Standalone slice probes analyze only their assigned slice supplied by the root.'
-  if (id.includes('reflect'))
-    goal =
-      'Reflect on the actual prior local fixture session through project-scoped session_history, preserving tool-activity evidence. Run only the assigned role or the requested judgment/tooling/divergent/synthesis workflow. Do not infer real-user preferences from fictional fixture instructions. Propose improvements but do not edit installed skills. If a required different-family reviewer is unavailable, report that exact blocked phase.'
   if (goal !== undefined) {
     if (id.includes('perf') || id.includes('hillclimb'))
       goal +=

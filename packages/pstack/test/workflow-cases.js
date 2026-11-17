@@ -10,17 +10,7 @@ function writer(id, source, role, profile = 'pstack-leaf') {
 }
 
 export const workflowCases = [
-  leaf('how-simple', skill('how'), 'how explainer'),
-  leaf('how-explorer', skill('how'), 'how explorer'),
-  leaf('how-synthesis', skill('how'), 'how explainer'),
-  ...['source-control', 'tickets', 'documents', 'chat', 'observability', 'errors', 'analytics'].map(
-    (category) => leaf(`why-${category}`, skill('why'), 'why investigators'),
-  ),
-  leaf('why-followup', skill('why'), 'why investigators'),
-  leaf('why-synthesis', skill('why'), 'why synthesizer'),
-  ...['judgment', 'tooling', 'divergent', 'synthesizer'].map((lens) =>
-    leaf(`reflect-${lens}`, skill('reflect'), `reflect ${lens}`),
-  ),
+  leaf('how-explainer', skill('how'), 'judgment and prose'),
   leaf('interrogate-reviewer', skill('interrogate'), 'interrogate reviewers', 'verifier'),
   leaf('recall-slice', skill('recall'), 'judgment and prose'),
   ...['early', 'middle', 'recent'].map((slice) =>
@@ -44,11 +34,6 @@ export const workflowCases = [
   },
   leaf('arena-judge', skill('arena'), 'arena cross-judge pool'),
   {
-    ...writer('architect-sketch', skill('architect'), 'architect runners'),
-    type: 'generalPurpose',
-    integration: 'branch',
-  },
-  {
     ...leaf('comment-cleanup', skill('no-comments'), 'arena cross-judge pool'),
     type: 'Comment Sicko',
   },
@@ -60,14 +45,8 @@ export const workflowCases = [
   writer('hillclimb', playbook('hillclimb'), 'hillclimb'),
   leaf('shipping-static', playbook('shipping'), 'swarm workers'),
   leaf('shipping-runtime', playbook('shipping'), 'swarm workers', 'verifier'),
-  writer('orchestrate-worker', playbook('orchestrate'), 'feature'),
-  writer('orchestrate-track', playbook('orchestrate'), 'hardest tasks', 'pstack-nested'),
-  leaf('orchestrate-static', playbook('orchestrate'), 'arena cross-judge pool'),
-  leaf('orchestrate-runtime', playbook('orchestrate'), 'swarm workers', 'verifier'),
   writer('autopilot-full-owner', playbook('autopilot-full'), 'feature', 'pstack-nested'),
   writer('autopilot-stack-owner', playbook('autopilot-stack'), 'feature', 'pstack-nested'),
-  leaf('multi-phase-explorer', playbook('multi-phase-plan'), 'hardest tasks'),
-  leaf('multi-phase-live-lane', playbook('multi-phase-plan'), 'swarm workers', 'verifier'),
   {
     ...writer('eval-candidate', playbook('eval'), 'arena runners'),
     type: 'generalPurpose',
@@ -115,7 +94,7 @@ export const workflowCases = [
     ),
     type: 'poteto-agent',
   },
-  writer('bespoke-worker', skill('figure-it-out'), 'hardest tasks', 'pstack-nested'),
+  writer('bespoke-worker', skill('figure-it-out'), 'feature', 'pstack-nested'),
   leaf('bespoke-judge', skill('figure-it-out'), 'judgment and prose'),
   {
     ...leaf('pickup-reducer', playbook('session-pickup'), 'judgment and prose'),

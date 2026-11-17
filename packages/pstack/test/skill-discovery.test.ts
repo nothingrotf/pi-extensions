@@ -12,6 +12,20 @@ function principles(source: string): string[] {
   return [...new Set(source.match(/principle-[a-z-]+/g))].sort()
 }
 
+function catalogEntries(source: string): string[] {
+  const section = source.slice(source.indexOf('## Principles'), source.indexOf('## Autonomy'))
+  return [...section.matchAll(/^- \*\*([^*]+?)\.?\*\*(?: \(\*\*(principle-[a-z-]+)\*\*\))?/gm)]
+    .map(
+      ([, title = '', name]) =>
+        name ??
+        `principle-${title
+          .toLowerCase()
+          .replace(/[^a-z0-9 -]/g, '')
+          .replace(/ +/g, '-')}`,
+    )
+    .sort()
+}
+
 describe('bundled skill discovery', () => {
   it('loads the new principles as explicitly invoked Pi skills', () => {
     const result = loadSkillsFromDir({ dir: skillRoot, source: 'pstack' })
@@ -38,9 +52,9 @@ describe('bundled skill discovery', () => {
       .map((skill) => skill.name)
       .sort()
     expect(principles(readFileSync(join(packageRoot, 'README.md'), 'utf8'))).toEqual(catalog)
-    expect(principles(readFileSync(join(skillRoot, 'poteto-mode', 'SKILL.md'), 'utf8'))).toEqual(
-      catalog,
-    )
+    expect(
+      catalogEntries(readFileSync(join(skillRoot, 'poteto-mode', 'SKILL.md'), 'utf8')),
+    ).toEqual(catalog)
     for (const skill of skills) {
       const source = readFileSync(skill.filePath, 'utf8')
       for (const match of source.matchAll(/\]\(([^)]+\/SKILL\.md)\)/g)) {

@@ -1,83 +1,19 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vite-plus/test'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const skillRoot = join(packageRoot, 'skills', 'reflect')
-
-function text(path) {
-  return readFileSync(path, 'utf8')
-}
-
-function markdownFiles(root) {
-  return readdirSync(root, { recursive: true })
-    .filter((path) => path.endsWith('.md'))
-    .map((path) => join(root, path))
-}
 
 describe('reflect', () => {
-  it('collects bounded project session evidence', () => {
-    const port = text(join(skillRoot, 'SKILL.md'))
-    for (const value of [
-      'session_history',
-      'pi-session://',
-      '`include_current: true`',
-      '`include_children: true`',
-      '`timeline`',
-      '`tool_activity`',
-      '`view: "audit"`',
-    ])
-      expect(port).toContain(value)
-    expect(port).toContain('The parent owns `session_history` and all external source tools.')
-  })
-
-  it('uses one read-only review graph and configured roles', () => {
-    const port = text(join(skillRoot, 'SKILL.md'))
-    expect(port).toContain('one `Task` call with a bounded graph')
-    expect(port).toContain('`needs` list contains all three reviewer nodes')
-    expect(port).toContain('`readonly: true` for every node')
-    expect(port).toContain('`reflect tooling`')
-    expect(port).toContain('`reflect judgment`')
-    expect(port).toContain('`reflect divergent`')
-    expect(port).toContain('`reflect synthesizer`')
-    expect(port).toContain('provider/model-id:effort [fast]')
-    expect(port).toContain("Omit `Task.model` to use each role's configured runtime selector")
-  })
-
-  it('keeps external queries with the parent and preserves stable references', () => {
-    const reviewerText = ['judgment-reviewer.md', 'tooling-reviewer.md', 'divergent-reviewer.md']
-      .map((file) => text(join(skillRoot, 'references', file)))
-      .join('\n')
-    const synthesizer = text(join(skillRoot, 'references', 'synthesizer.md'))
-    expect(reviewerText).toContain('<SESSION_EVIDENCE_BUNDLE>')
-    expect(reviewerText).toContain('The parent owns session history and external source tools.')
-    expect(reviewerText).toContain('untrusted data')
-    expect(synthesizer).toContain('graph dependency outputs')
-    expect(synthesizer).toContain('Preserve stable `pi-session://` references.')
-  })
-
-  it.each(['judgment-reviewer.md', 'tooling-reviewer.md', 'divergent-reviewer.md'])(
-    '%s reports every evidenced learning without a quota',
-    (file) => {
-      const prompt = text(join(skillRoot, 'references', file))
-      expect(prompt).toContain('List each durable learning you find')
-      expect(prompt).toContain('An empty list is valid')
-      expect(prompt).toContain('If no findings remain, return `No findings.`')
-      expect(prompt).toContain('Skip trivial events, facts that drift')
-      expect(prompt).toContain('pi-session://')
-      expect(prompt).not.toContain('Surface 3-5')
-    },
-  )
-
-  it('uses the bundled skill author without Cursor assumptions', () => {
-    const port = markdownFiles(skillRoot).map(text).join('\n')
-    expect(port).toContain('bundled `create-skill` skill')
-    expect(port).toContain('project `.pi/skills/` and `.agents/skills/` paths')
-    expect(port).not.toMatch(
-      /agent-transcripts|~\/\.cursor|\.cursor\/|<ABSOLUTE_PATH>|readonly: false/,
-    )
-    expect(port).not.toMatch(/gpt-5\.6|claude-fable|claude-opus-5/)
+  it('recovers Pi transcripts and edits only local skill copies', () => {
+    const skill = readFileSync(join(packageRoot, 'skills', 'reflect', 'SKILL.md'), 'utf8')
+    expect(skill).toContain('`compact_recall`')
+    expect(skill).toContain('`session_history`')
+    expect(skill).toContain('`~/.pi/agent/npm/`')
+    expect(skill).toContain('`.agents/skills/<skill>/` or `~/.agents/skills/<skill>/`')
+    expect(skill).toContain('wait for approval before editing any skill')
+    expect(skill).not.toMatch(/plugins\/cache|\.cursor\/|reflect tooling|reflect judgment/)
   })
 })
