@@ -20,11 +20,11 @@ Use `todo_write` to create one item per phase before you launch anything.
 1. State the done predicate and the artifact or report the swarm must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
 3. For ordinary workers, use the parsed `swarm workers` runtime policy in context.
-   Omit `Task.model` to select its scalar default.
+   When the role has one selector, omit `Task.model` to select it.
    Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
    If the role is absent, use inherited workers.
    For a model race, name each arm's model up front.
-   If the configured scalar policy prevents the race, request a policy change instead of bypassing it.
+   If the configured policy prevents the race, request a policy change instead of bypassing it.
 
    Verify each concrete selector against the active Pi runtime.
    If Pi rejects it, mark that arm `BLOCKED`.

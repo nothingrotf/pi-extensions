@@ -20,7 +20,7 @@ Do not add exceptions or soften the burden of proof.
 
 ## Review mode
 
-If you are already an independently assigned reviewer, including a leaf reviewer, perform the rubric inline. Do not spawn another Task or invoke `/how`, `/why`, or `/architect`. Trace direct scoped evidence first with available read-only tools. If required evidence is unavailable, return a precise blocker to the root coordinator naming the claim, symbol, and missing source. Preserve the caller's read-only, no-write, and report-only constraints.
+If you are already an independently assigned reviewer, including a leaf reviewer, perform the rubric inline. Do not spawn another Task or invoke `/how` or `/architect`. Read nearby code first. When a claim is not obvious there, trace its symbol, run `/why` from the **why** skill on it, or both. If required evidence is unavailable, return a precise blocker to the root coordinator naming the claim, symbol, and missing source. Preserve the caller's read-only, no-write, and report-only constraints.
 
 Before opening a PR, reuse the existing independent verdict when its diff and evidence remain current. Apply the checklist inline without another reviewer Task. Do not treat this check as a new independent verdict. If evidence is missing or invalidated, return to the assigned independent reviewer.
 
@@ -32,7 +32,7 @@ For a standalone invocation, launch exactly one independent reviewer selected ex
 - `model`: the selected configured entry, including explicit `auto` or `inherit-parent`; omit only when the pool is unconfigured or all choices are identical
 - `readonly`: `true`
 
-The pool is availability, not fanout. Never launch one reviewer per entry. Pass the scope and require the reviewer to read and apply `../../agents/comment-sicko.md` directly. The reviewer reports only and never edits product files.
+The pool is availability, not fanout. Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill. Never launch one reviewer per entry. Pass the scope and require the reviewer to read and apply `../../agents/comment-sicko.md` directly. The reviewer reports only and never edits product files.
 
 ## Consolidate
 

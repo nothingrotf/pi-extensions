@@ -14,7 +14,7 @@
    7. Do it cheaper.
 
    When an earlier mantra meets the target, stop.
-3. Plan the fix from the trace. Run `architect` only when the fix introduces a genuinely new or contested contract, ownership, state, or security design; crossing a function is not a design trigger. An accepted design carries its grounding, so implementation inherits it without retracing or rerunning `architect`. Delegate implementation to one `poteto-agent` with `role: "perf-issue"` and `capability_profile: "pstack-leaf"`. Omit `Task.model` to use the configured selector. Run it in place in its linked worktree per Repository writer in `references/task-contracts.md`. It runs focused checks, then the repository-required gates once on the finished head. Review the diff. A fresh owner with consolidated scope takes each correction. Capture a post-fix trace.
+3. Plan the fix from the trace. If it crosses a function boundary, `architect` first. Delegate implementation to one `poteto-agent` with `role: "perf-issue"`, per Repository writer in `references/task-contracts.md`. Pick each subagent's reasoning level for the job, per the Subagents section. Review the diff. Capture a post-fix trace.
    Apply the **sequence-verifiable-units** principle skill, verifying each attempt before trying the next.
 4. Parse and compare the artifacts (JSON to sqlite, diff). "Inconclusive" or wrong-surface is not a pass. Flag it.
 5. Cite the measurement in the PR.

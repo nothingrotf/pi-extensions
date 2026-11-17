@@ -18,7 +18,7 @@ The remaining triggers live only here:
 - First message → restate the user's goal and the smallest change that meets it, then proceed. Open each subagent brief, PR `## Summary`, and final report with the goal.
 - Starting any agent → a `poteto-agent` loads `references/worker.md` itself. Any other Task subagent gets `Read <path>/references/worker.md before anything else.` as the first line of its brief, with `<path>` the absolute path of this skill's folder. Keep the rest of the brief to the goal and the task.
 - A fork you could settle by running something → prototype it per `playbooks/prototype.md` instead of asking.
-- Code → name the data shape first. A genuinely new or contested contract, ownership, state model, or security boundary → **architect**. Crossing a function boundary is not a trigger by itself. Fan-out → **swarm**. Bakeoff → **arena**. Contested design → **interrogate**.
+- Code → name the data shape first. Across a function boundary → **architect**. Fan-out → **swarm**. Bakeoff → **arena**. Contested design → **interrogate**.
 - Prose, your reply included → **unslop**. Docs, PR descriptions, commit messages → **technical-writing**.
 - Before commit → **deslop** (`/deslop`). Before review → **no-comments**.
 - Shipping UI / IDE / CLI → **control-ui** or **control-cli**. For a bug fix, reproduce first on the same surface.
@@ -63,7 +63,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 **Delegation**
 
-- **Guard the Context Window.** Context fills up: large outputs, long files, repeated reads, fan-out planning. Keep bounded evidence and recoverable sources. Delegate only an independent slice that benefits from another context.
+- **Guard the Context Window.** Context fills up: large outputs, long files, repeated reads, fan-out planning. Route bulk to subagents, keep summaries in the main thread.
 - **Never Block on the Human.** Tempted to ask "should I do X?" on reversible work. Proceed, present the result, let the human course-correct.
 
 **Meta**
@@ -82,7 +82,7 @@ Read the leaf skill in full for any principle you apply. Each entry names when i
 
 ## Subagents
 
-Use `subagent_type: "poteto-agent"` for code delegates and ad-hoc helpers. The chat that receives `/poteto-mode` runs the playbook. Never spawn a `poteto-agent` to run the playbook itself. Routed workflow skills (`interrogate`, `swarm`) set their own `subagent_type`. Respect it. Run `how` and `why` in the current issue owner by default. Delegate only a named independent slice or an explicit user requirement.
+Use `subagent_type: "poteto-agent"` for code delegates and ad-hoc helpers. The chat that receives `/poteto-mode` runs the playbook. Never spawn a `poteto-agent` to run the playbook itself. Routed workflow skills (`interrogate`, `swarm`) set their own `subagent_type`. Respect it.
 
 Read [Task contracts](references/task-contracts.md) before dispatch. Every `Task` call sets `Task.role` to the active model-policy role and passes a pstack capability profile. Pass file pointers instead of large inline context. Use read-only mode for analysis and static review. Pass `capability_profile: "pstack-nested"` to an owner that can delegate. Leaf workers use `pstack-leaf`. A runtime verifier that needs `control-ui` or `control-cli` runs as mutable background work with `isolation: { mode: "worktree", integration: "manual" }`. Never join its incidental patch.
 
@@ -90,9 +90,11 @@ The `poteto-agent` defaults to background mode. Set `run_in_background: false` o
 
 Use `request_parent` for real coordinator decisions. `ask_parent` is advisory only.
 
-The extension supplies the parsed runtime model policy that `/setup-pstack` writes. Omit `Task.model` for a scalar role to select its configured model. Concrete selectors use `provider/model-id:effort [fast]` or `[ultrafast]` and must match the configured role. For a panel or pool, pass the selected entry explicitly, including `inherit-parent`. Never silently pick the first entry or invent a selector. Verification runs on the `swarm workers` role.
+The extension supplies the parsed runtime model policy that `/setup-pstack` writes. Each code playbook reads its own role (`feature`, `refactoring`, `bug-fix`, `perf-issue`, or `hillclimb`), prose and judgment read `judgment and prose`, and trivial mechanical edits read `swarm workers`. Concrete selectors use `provider/model-id:effort [fast]` or `[ultrafast]` and must match the configured role. When a role has one selector, omit `Task.model`. When it lists several, pass the chosen entry explicitly, including `inherit-parent`. Never silently pick the first entry or invent a selector.
 
-You own every subagent's work. Review the diff against its evidence and write your own summary. A second opinion is one read-only Task with `role: "arena cross-judge pool"` and an explicit `model` from another family than the implementation.
+**Match the model to the job.** Start from the role's configured selectors, keep their family, and pick the level the job needs. Raise one step for the hardest or subtlest work, lower one step for judgment, and two or more steps for routine work. Use `[fast]` only when the job is urgent, such as red CI or a person blocked on the result. A role offers only the levels it lists, so take the nearest listed entry and say so. Panel seats keep their listed level. Verification always runs on the `swarm workers` role. If Pi rejects a selector, never pass it again and fall back to the role's other entries, then the calling skill's fallback.
+
+You own every subagent's work. Review the diff and write your own summary. A second opinion is the same prompt on another vendor's model: one read-only Task with `role: "arena cross-judge pool"` and an explicit `model` from that pool.
 
 **Fresh subagents by default.** Give a fix round, a follow-up, a retry, or the next queue item to a fresh subagent with the original brief, every later directive, and the prior agent's report, artifact, and branch. Resume an existing subagent only when the work needs state that lives in it and is costly to move: unaccepted WIP that no retained patch captures, or a process it still runs.
 

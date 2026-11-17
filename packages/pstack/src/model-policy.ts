@@ -6,38 +6,37 @@ import type { CapabilityModelPolicy, RoleModelPolicyEntry } from '@nothingrotf/s
 
 interface PstackRole {
   role: string
-  panel: boolean
   aliases: readonly string[]
 }
 
 export const pstackRoles: readonly PstackRole[] = [
-  { role: 'feature', panel: false, aliases: [] },
-  { role: 'refactoring', panel: false, aliases: [] },
-  { role: 'bug-fix', panel: false, aliases: [] },
-  { role: 'perf-issue', panel: false, aliases: [] },
-  { role: 'hillclimb', panel: false, aliases: [] },
-  { role: 'judgment and prose', panel: false, aliases: [] },
-  { role: 'arena runners', panel: true, aliases: [] },
-  { role: 'arena cross-judge pool', panel: true, aliases: [] },
-  { role: 'swarm workers', panel: false, aliases: [] },
-  { role: 'interrogate reviewers', panel: true, aliases: [] },
+  { role: 'feature', aliases: [] },
+  { role: 'refactoring', aliases: [] },
+  { role: 'bug-fix', aliases: [] },
+  { role: 'perf-issue', aliases: [] },
+  { role: 'hillclimb', aliases: [] },
+  { role: 'judgment and prose', aliases: [] },
+  { role: 'arena runners', aliases: [] },
+  { role: 'arena cross-judge pool', aliases: [] },
+  { role: 'swarm workers', aliases: [] },
+  { role: 'interrogate reviewers', aliases: [] },
 ]
 
 const legacyPstackRoles: readonly PstackRole[] = [
-  { role: 'hardest tasks', panel: true, aliases: [] },
-  { role: 'how explorer', panel: true, aliases: [] },
-  { role: 'how explainer', panel: true, aliases: [] },
-  { role: 'why investigators', panel: true, aliases: [] },
-  { role: 'why synthesizer', panel: true, aliases: [] },
-  { role: 'reflect tooling', panel: true, aliases: [] },
-  { role: 'reflect judgment', panel: true, aliases: [] },
-  { role: 'reflect divergent', panel: true, aliases: ['divergent'] },
-  { role: 'reflect synthesizer', panel: true, aliases: ['synthesizer'] },
-  { role: 'architect runners', panel: true, aliases: [] },
-  { role: 'how critics', panel: true, aliases: [] },
-  { role: 'code review', panel: true, aliases: [] },
-  { role: 'runtime verification', panel: true, aliases: [] },
-  { role: 'publication', panel: true, aliases: [] },
+  { role: 'hardest tasks', aliases: [] },
+  { role: 'how explorer', aliases: [] },
+  { role: 'how explainer', aliases: [] },
+  { role: 'why investigators', aliases: [] },
+  { role: 'why synthesizer', aliases: [] },
+  { role: 'reflect tooling', aliases: [] },
+  { role: 'reflect judgment', aliases: [] },
+  { role: 'reflect divergent', aliases: ['divergent'] },
+  { role: 'reflect synthesizer', aliases: ['synthesizer'] },
+  { role: 'architect runners', aliases: [] },
+  { role: 'how critics', aliases: [] },
+  { role: 'code review', aliases: [] },
+  { role: 'runtime verification', aliases: [] },
+  { role: 'publication', aliases: [] },
 ]
 
 export interface PstackModelPolicyOptions {
@@ -98,8 +97,6 @@ export function parsePstackModelPolicy(content: string): CapabilityModelPolicy {
       if (role === undefined)
         return invalid(`pstack-models.md line ${index + 1} has an unknown role.`)
       if (configured.has(role.role)) return invalid(`pstack-models.md repeats role "${role.role}".`)
-      if (!role.panel && selectors.length !== 1)
-        return invalid(`pstack-models.md role "${role.role}" requires one selector.`)
       configured.set(role.role, selectors)
     }
   }
@@ -138,9 +135,9 @@ export function renderPstackModelPolicy(policy: CapabilityModelPolicy): string {
     'Every pstack Task must pass an exact role below and capability_profile pstack-leaf, pstack-sandbox for an OS-sandboxed verifier, or pstack-nested for a delegating owner. Registered pstack agents default to pstack-leaf.',
     'The configured role is mandatory. Task.model must match a configured selector, including effort and the [fast] or [ultrafast] speed marker. Unknown or missing Task.role fails for pstack capabilities. Other capabilities are unaffected.',
     'openai/ and openai-codex/ selectors match each other for the same model, effort, and speed marker. When one of these providers has no login, dispatch uses the same model on the other provider if it has a ChatGPT subscription login.',
-    'For a scalar role, omit Task.model to use its policy. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
-    'Panel and pool lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
-    'Never substitute skill defaults for configured models. Select panel and pool entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
+    'When a role has one selector, omit Task.model to use it. When it lists several, pass the entry whose effort fits the job. Unconfigured roles fall back to the agent default, then the parent. auto and inherit-parent select the parent model.',
+    'Lists never create Tasks automatically. Follow the skill for counts. For distinct choices, pass the selected entry explicitly as Task.model, including inherit-parent for an inherited entry. Never silently pick the first entry.',
+    'Never substitute skill defaults for configured models. Select list entries only from the configured list. For different-family reviews, choose a configured entry or ask the user to update the policy.',
     'A second opinion is the same review against a different model: use one entry of arena cross-judge pool from another family than the implementation. Use swarm workers for verification, and judgment and prose only for prose or evidence synthesis. The implementation owner commits, pushes, and opens its own PR.',
     'The extension reads ~/.agents/rules/pstack-models.md automatically before each root prompt and root Task call. No manual read or alwaysApply support is required. Invalid policies block fresh pstack dispatches. Resume preserves its stored model.',
   ]

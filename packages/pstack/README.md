@@ -256,6 +256,7 @@ The Pi port adapts or omits these parts:
 
 - The upstream operator rules join `references/worker.md`, which `poteto-agent` already loads. A separate `worker.md` would load the same contract twice.
 - `how` dispatches its explainer as `judgment and prose` with `pstack-leaf`. A leaf without `Task` writes the explanation itself.
+- Every role accepts a list of selectors. A list of effort levels lets the coordinator match the level to the job, as the upstream Subagents section asks. With one selector, the coordinator omits `Task.model`.
 - `reflect` recovers compacted turns with `compact_recall` and child sessions with `session_history`. It copies a skill out of `~/.pi/agent/npm/` before an edit.
 - The parser accepts retired role lines without effect, so existing policy files stay valid. Task calls with a retired role fail.
 - The Cursor model slugs, the `/setup-pstack` budget ladder, and the Opus `-fast` rule have no counterpart. Pi selectors carry effort and the `[fast]` or `[ultrafast]` marker directly.

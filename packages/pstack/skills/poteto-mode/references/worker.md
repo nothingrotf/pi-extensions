@@ -26,9 +26,9 @@ A bounded worker does not need the coordinator's complete routing catalog.
 Reuse required documents already read in this session while their contents and governing policy remain unchanged.
 An explicit requirement to reread still applies.
 
-Run `how` and `why` in this session by default. Neither skill requires Task delegation for ordinary investigation.
+`how` dispatches one read-only explainer when you hold `Task`. Without `Task`, explore and write the explanation yourself. `why` runs in this session.
 Use independent tool calls in parallel when their inputs permit it.
-Delegate only a named independent slice or an explicitly required perspective, and only with granted nested capabilities.
+Delegate other work only with granted nested capabilities.
 Return missing capabilities or contested design decisions to the actual coordinator.
 Do not silently skip required review or reopen an accepted design for an ordinary local implementation choice.
 

@@ -130,9 +130,20 @@ describe('pstack model policy parser', () => {
     ])
   })
 
+  it('lets an implementation role list effort levels for explicit selection', () => {
+    const low = 'provider/model:low'
+    const high = 'provider/model:high [fast]'
+    const policy = parsePstackModelPolicy(`feature: ${low}, ${high}`)
+    expect(policy.status).toBe('valid')
+    expect(() => selectCapabilityModel([policy], 'feature', undefined)).toThrow('distinct choices')
+    expect(selectCapabilityModel([policy], 'feature', high)).toBe(high)
+    expect(() => selectCapabilityModel([policy], 'feature', 'provider/model:xhigh')).toThrow(
+      'outside configured selectors',
+    )
+  })
+
   it.each([
     'swarm workers: ',
-    'swarm workers: auto, inherit-parent',
     'arena runners: auto,',
     'arena runners: ,auto',
     'feature, feature: auto',

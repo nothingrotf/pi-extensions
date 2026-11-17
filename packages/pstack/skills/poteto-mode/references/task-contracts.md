@@ -16,7 +16,7 @@ Use one entry of `arena cross-judge pool` for an independent second opinion and 
 
 Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
-The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a parsed runtime policy to root and nested context. Do not rely on an `alwaysApply` loader or copy raw file text into prompts. Omit `model` for scalar roles to use the configured selector. Configured selectors are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution.
+The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a parsed runtime policy to root and nested context. Do not rely on an `alwaysApply` loader or copy raw file text into prompts. Omit `model` for a role with one selector to use it. When a role lists several effort levels, pass the entry the job needs. Configured selectors are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution.
 
 For a panel or pool with distinct choices, pass the selected entry explicitly, including `model: "inherit-parent"` or `model: "auto"` for an inherited entry. Never silently use the first entry. Identical choices may omit `model`. The skill determines counts; the runtime never creates a panel or fans out.
 
@@ -50,8 +50,8 @@ If a script fails after earlier calls execute, inspect the retained results inst
 
 For routed `generalPurpose` workers, pass `capability_profile: "pstack-leaf"`. This adds planning tools without shell access to read-only workers.
 
-Run `how` and `why` inside the current owner with `pstack-leaf` by default. Neither workflow requires delegation for ordinary investigation.
-If an owner must execute `architect` or another explicitly delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
+`how` dispatches one read-only explainer, and `why` runs in the current session. An owner that runs `how` needs `pstack-nested`. A `pstack-leaf` worker without `Task` writes the explanation itself.
+If an owner must execute `arena` or another explicitly delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
 
 Check the remaining depth before composing owners. A three-level budget cannot support an arbitrary chain of owners before its leaf workers. When a routed workflow needs more levels, return that workflow to the root coordinator for a fresh dispatch.
 
