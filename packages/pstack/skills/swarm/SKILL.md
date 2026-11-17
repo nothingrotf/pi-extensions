@@ -19,96 +19,22 @@ Use `todo_write` to create one item per phase before you launch anything.
 
 1. State the done predicate and the artifact or report the swarm must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
-3. For ordinary workers, use the parsed `swarm workers` runtime policy in context.
-   Omit `Task.model` to select its scalar default.
-   Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
-   If the role is absent, use inherited workers.
-   For a model race, name each arm's model up front.
-   If the configured scalar policy prevents the race, request a policy change instead of bypassing it.
-
-   Verify each concrete selector against the active Pi runtime.
-   If Pi rejects it, mark that arm `BLOCKED`.
-   Do not substitute a model.
-4. Give each worker its own writable output when it writes. For repository writers, use `isolation: { mode: "worktree", integration: "branch" }`. For other artifacts, use `/tmp/swarm-<slug>/worker-<n>/` or another distinct output directory.
+3. Pick the worker model from the parsed `swarm workers` runtime policy. When the role has one selector or is absent, omit `model`. When it lists several, pass the chosen entry. If Pi rejects a selector, use another configured entry and say so. For a model race, name each arm's model up front. Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill.
+4. Give each worker its own writable output when it writes: `isolation: { mode: "worktree", integration: "branch" }` for a repository writer, or its own `/tmp/swarm-<slug>/worker-<n>/` directory. When workers verify or measure commits, each brief names the exact SHAs. A measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
 
 ## Phase B: Fan out
 
-Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch.
-Set `Task.role` to `swarm workers`.
-Pass `capability_profile: "pstack-leaf"` for leaves or `pstack-nested` for owners whose workflow requires delegation.
-Retain the declared worker count, never the pool size.
+Spawn all N workers in one message with parallel `Task` calls: `subagent_type: "generalPurpose"`, `role: "swarm workers"`, `capability_profile: "pstack-leaf"`, `run_in_background: true`, and the step 3 model. Use `readonly: true` for static work. A worker that runs shell verification uses `isolation: { mode: "worktree", integration: "manual" }`, and its patch is never joined. Follow [Task contracts](../poteto-mode/references/task-contracts.md).
 
-Spawn all N workers in one message with parallel `Task` calls. Use `subagent_type: "generalPurpose"` and `run_in_background: true`. Native `Task` notifications report completion. Do not poll. If you are blocked with no other work, call `TaskControl` with `action: "wait"`.
+When a worker must start from a non-default branch, set its `cwd` to a worktree of that branch.
 
-Use `readonly: true` for static analysis. A worker that runs shell verification must be mutable with `isolation: { mode: "worktree", integration: "manual" }`. Never join its incidental patch. Keep repository writers separate from runtime verifiers.
-
-Every brief stands alone.
-Include the goal, scope, exact slice or race arm, verification method, and report contract.
-
-Report contract:
-
-- Require `outputSchema` with `schemaMode: "strict"`.
-- The schema contains `status` with `PASS`, `ISSUES`, or `BLOCKED`, plus `summary`, `evidence`, and `gaps`.
-- Require an output artifact and status, schema-valid, artifact-present, and `/status` membership gates.
-
-## Verifiable work contract
-
-Apply these requirements only when the brief verifies or measures a product. Never invent SHAs or a benchmark method for generation or writing work.
-
-Name the exact product under test in the brief.
-For a committed artifact, give base and head SHAs.
-For an uncommitted artifact, give the base, result tree, and patch digest.
-A branch name that can move is not an identity.
-Require the same identity in the result, backed by recorded evidence rather than copied from the brief.
-
-For measurements, define the number of samples, what one sample is, and the order or interleaving of arms.
-Name the runtime and conditions that affect the result.
-Require the report to state the method it actually used.
-Verification without measurement does not require benchmark metadata.
-
-For independent proof reports, add a required structured `subject` field to the strict output schema.
-It records the requested identity and observed identity plus a Boolean `established` field.
-Use `established: false` when identity cannot be established.
-The `observed` field is an empty string when unavailable, never a fabricated identity.
-Use this schema for the `subject` property:
-
-```json
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["requested", "observed", "established"],
-  "properties": {
-    "requested": { "type": "string" },
-    "observed": { "type": "string" },
-    "established": { "type": "boolean" }
-  }
-}
-```
-
-For measurements, also require a structured `method` field next to `subject` in the report schema.
-Include sample count, sample definition, order, runtime, and conditions.
-The `summary`, `evidence`, and `gaps` state the assigned contract.
-Name the actual checks and results, not a generic `evidence` field.
-The `evidence` field cites the checks and receipts that support each claim.
-The `gaps` field lists every unmet part of the contract.
-
-Missing or incompatible identity is a gap, never `PASS`.
-An unestablished identity is missing proof, even when the schema passes.
-Missing or incompatible method is a gap, never `PASS`, when measurement is assigned.
-Return `ISSUES` for demonstrated discrepancies or `BLOCKED` for unavailable required proof.
+Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
 
 If a worker drops out, proceed with N-1 and note it.
 
 ## Phase C: Aggregate
 
-After native notifications arrive, inspect each terminal result with `TaskControl` `status`. Check the structured output, artifacts, gates, and isolation receipt. Schema gates prove shape, not semantic truth. Audit each result against its assigned requirements.
-
-For product proof, match the observed identity and any required method to the brief.
-Check that recorded evidence supports the verdict. Keep every demonstrated defect, not only the first.
-
-If the proof exists with receipts intact and only the report is defective, correct the report from the retained receipts without a new Task or model run. Missing execution needs real proof, not repair. Obtain it through an authorized execution. Existing diagnoses still apply.
-
-For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
+Read the terminal results. Drop a result that does not record the SHAs and method its brief names, and respawn that worker once. After a second miss, record a gap. A gap does not count as a pass. For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
 
 ## Phase D: Report
 

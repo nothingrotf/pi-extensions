@@ -5,40 +5,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vite-plus/test'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const skillRoot = join(packageRoot, 'skills', 'architect')
-
-function text(path) {
-  return readFileSync(path, 'utf8')
-}
 
 describe('architect', () => {
-  it('ships complete design references', () => {
-    expect(text(join(skillRoot, 'references', 'design-red-flags.md'))).toContain(
-      '# Design red flags',
-    )
-    expect(text(join(skillRoot, 'references', 'rationale-template.md'))).toContain(
-      '# Rationale template',
-    )
-  })
-
-  it('uses the ported model and todo contracts', () => {
-    const skill = text(join(skillRoot, 'SKILL.md'))
-    expect(skill).toContain('Use `todo_write`')
-    expect(skill).toContain('parsed `architect runners` runtime policy')
-    expect(skill).toContain('provider/model-id:effort [fast]')
-    expect(skill).toContain('pass each selected `Task.model` explicitly')
-    expect(skill).toContain('availability for selection, never a dispatch count')
-    expect(skill).toContain('at least two structurally distinct candidates')
-    expect(skill).not.toContain('use four inherited runners')
-    expect(skill).not.toMatch(/~\/\.cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
-  })
-
-  it('uses isolated runners without generated code comments', () => {
-    const prompt = text(join(skillRoot, 'references', 'runner-prompt.md'))
-    expect(prompt).toContain('isolated `Task` worktree')
-    expect(prompt).toContain('separate pseudocode blocks')
-    expect(prompt).toContain('independently configured runners')
-    expect(prompt).not.toContain('// TODO')
-    expect(prompt).not.toContain('doc comments')
+  it('routes large designs to arena without retired runner policy', () => {
+    const skill = readFileSync(join(packageRoot, 'skills', 'architect', 'SKILL.md'), 'utf8')
+    expect(skill).toContain('run the **arena** skill')
+    expect(skill).not.toContain('architect runners')
+    expect(skill).not.toMatch(/~\/\.cursor|claude-fable|claude-opus-5/)
   })
 })

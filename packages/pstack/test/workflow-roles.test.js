@@ -64,19 +64,19 @@ describe('pstack executable workflow roles', () => {
   it('rejects misspelled literals and config aliases only when used as Task roles', () => {
     const text = [
       'reflect judgment, divergent, synthesizer: inherit-parent',
-      'Pass `role: "how explorerr"`.',
+      'Pass `role: "swarm workerz"`.',
       '- `role`: `divergent`',
       '{ "role": "synthesizer" }',
-      'Set `Task.role` to `reflect judgment`, `reflect toolng`, or `reflect synthesizer`.',
+      'Set `Task.role` to `arena runners`, `arena runerz`, or `swarm workers`.',
       '| Lens | Role |',
-      '| Tooling | `reflect toolng` |',
+      '| Tooling | `reflect tooling` |',
     ].join('\n')
     expect(unknownRoles(literalRoles(text)).map((entry) => entry.role)).toEqual([
-      'how explorerr',
+      'swarm workerz',
       'divergent',
       'synthesizer',
-      'reflect toolng',
-      'reflect toolng',
+      'arena runerz',
+      'reflect tooling',
     ])
   })
 })

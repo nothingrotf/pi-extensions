@@ -14,7 +14,7 @@ describe('pstack SDK child bootstrap', () => {
   it.each([true, false])(
     'scopes root policy to explicit pstack activation in either load order (%s)',
     async (first) => {
-      const h = await harness(first, new Map(), 'how explorer: pstack-test/configured:off')
+      const h = await harness(first, new Map(), 'swarm workers: pstack-test/configured:off')
       try {
         const prompt = h.inventories.find((entry) => entry.action === 'seed:parent').prompt
         expect(prompt).toContain('Pstack is opt-in, not the default workflow.')
@@ -45,7 +45,7 @@ describe('pstack SDK child bootstrap', () => {
       const h = await harness(
         first,
         new Map(),
-        '---\ndescription: RAW_METADATA_SENTINEL\nalwaysApply: true\n---\n# RAW_COMMENT_SENTINEL\nhow explorer: pstack-test/configured:off\n',
+        '---\ndescription: RAW_METADATA_SENTINEL\nalwaysApply: true\n---\n# RAW_COMMENT_SENTINEL\nswarm workers: pstack-test/configured:off\n',
       )
       try {
         const result = await h.runtime.run({
@@ -53,7 +53,7 @@ describe('pstack SDK child bootstrap', () => {
           input: {
             description: 'Configured explorer',
             prompt: 'read:configured',
-            role: 'how explorer',
+            role: 'swarm workers',
             capability_profile: 'pstack-leaf',
             subagent_type: 'generalPurpose',
             readonly: true,
@@ -71,7 +71,7 @@ describe('pstack SDK child bootstrap', () => {
           h.inventories.find((entry) => entry.action === 'read:configured').tools,
         ).not.toContain('bash')
         expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).toContain(
-          'how explorer: pstack-test/configured:off',
+          'swarm workers: pstack-test/configured:off',
         )
         expect(h.inventories.find((entry) => entry.action === 'seed:parent').prompt).not.toContain(
           'RAW_METADATA_SENTINEL',
@@ -120,7 +120,7 @@ describe('pstack SDK child bootstrap', () => {
         expect(inventory.prompt).toContain(
           'Resolve every skill pointer below against that canonical base',
         )
-        expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/references/worker.md`)
+        expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/worker.md`)
         expect(inventory.prompt).toContain('ask_parent is advisory only')
         expect(inventory.prompt).not.toContain('{{PSTACK_SKILLS_ROOT}}')
         await h.session.prompt('read:parent')
@@ -140,7 +140,7 @@ describe('pstack SDK child bootstrap', () => {
           ctx: h.ctx,
           input: {
             description: 'Explicit tools',
-            role: 'why synthesizer',
+            role: 'judgment and prose',
             prompt: 'read:restricted',
             subagent_type: 'poteto-agent',
             tools,
@@ -159,7 +159,7 @@ describe('pstack SDK child bootstrap', () => {
           'request_parent',
         ])
         expect(inventory.prompt).toContain((await loadPstackBootstrap()).root)
-        expect(result.details.role).toBe('why synthesizer')
+        expect(result.details.role).toBe('judgment and prose')
         const resumed = await h.runtime.run({
           ctx: h.ctx,
           input: {
@@ -172,7 +172,7 @@ describe('pstack SDK child bootstrap', () => {
           },
         })
         expect(resumed.kind).toBe('completed')
-        expect(resumed.details.role).toBe('why synthesizer')
+        expect(resumed.details.role).toBe('judgment and prose')
         expect(
           h.inventories.find((entry) => entry.action === 'read:resumed-restricted').tools,
         ).toEqual(inventory.tools)
@@ -223,7 +223,7 @@ describe('pstack SDK child bootstrap', () => {
         ctx: h.ctx,
         input: {
           description: 'Nested owner',
-          role: 'hardest tasks',
+          role: 'feature',
           prompt: 'seed:owner',
           subagent_type: 'generalPurpose',
           capability_profile: 'pstack-nested',
@@ -338,7 +338,7 @@ describe('pstack runtime model policy', () => {
   })
 
   it.each([
-    ['role', { role: 'how explorerr' }, 'Unknown model policy role'],
+    ['role', { role: 'swarm workerz' }, 'Unknown model policy role'],
     ['model', { model: 'pstack-test/missing:off' }, 'not available'],
     ['panel', { role: 'arena runners' }, 'distinct choices'],
   ])(
@@ -403,25 +403,31 @@ describe('pstack runtime model policy', () => {
     [undefined, undefined, 'pstack-test/model', 'off', false],
     ['', undefined, 'pstack-test/model', 'off', false],
     ['bug-fix: pstack-test/configured:high', undefined, 'pstack-test/model', 'off', false],
-    ['how explorer: auto', undefined, 'pstack-test/model', 'off', false],
-    ['how explorer: inherit-parent', undefined, 'pstack-test/model', 'off', false],
-    ['how explorer: pstack-test/configured:max', undefined, 'pstack-test/configured', 'max', false],
+    ['swarm workers: auto', undefined, 'pstack-test/model', 'off', false],
+    ['swarm workers: inherit-parent', undefined, 'pstack-test/model', 'off', false],
     [
-      'how explorer: openai-codex/gpt-5.4:high [fast]',
+      'swarm workers: pstack-test/configured:max',
+      undefined,
+      'pstack-test/configured',
+      'max',
+      false,
+    ],
+    [
+      'swarm workers: openai-codex/gpt-5.4:high [fast]',
       undefined,
       'openai-codex/gpt-5.4',
       'high',
       true,
     ],
     [
-      'how explorer: pstack-test/configured:low',
+      'swarm workers: pstack-test/configured:low',
       'pstack-test/configured:low',
       'pstack-test/configured',
       'low',
       false,
     ],
     [
-      'how explorer: openai-codex/gpt-5.4:high [fast]',
+      'swarm workers: openai-codex/gpt-5.4:high [fast]',
       'openai/gpt-5.4:high [fast]',
       'openai/gpt-5.4',
       'high',
@@ -447,17 +453,17 @@ describe('pstack runtime model policy', () => {
   )
 
   it.each([
-    ['how explorer: pstack-test/configured:high', 'inherit-parent', 'configured'],
-    ['how explorer: pstack-test/missing:high', 'pstack-test/configured:low', 'configured'],
-    ['how explorer: nonsense', undefined, 'invalid'],
-    ['how explorer: nonsense', 'inherit-parent', 'invalid'],
-    ['how explorer: pstack-test/model', undefined, 'invalid'],
-    ['how explorer: auto\nhow explorer: auto', undefined, 'repeats role'],
+    ['swarm workers: pstack-test/configured:high', 'inherit-parent', 'configured'],
+    ['swarm workers: pstack-test/missing:high', 'pstack-test/configured:low', 'configured'],
+    ['swarm workers: nonsense', undefined, 'invalid'],
+    ['swarm workers: nonsense', 'inherit-parent', 'invalid'],
+    ['swarm workers: pstack-test/model', undefined, 'invalid'],
+    ['swarm workers: auto\nswarm workers: auto', undefined, 'repeats role'],
     ['feature, refactoring: auto\nfeature: auto', undefined, 'repeats role'],
     ['how typo: auto', undefined, 'unknown role'],
-    ['how explorer: pstack-test/missing:off', undefined, 'not available'],
-    ['how explorer: pstack-test/model:high', undefined, 'does not support reasoning'],
-    ['how explorer: pstack-test/configured:high [fast]', undefined, 'does not support the [fast]'],
+    ['swarm workers: pstack-test/missing:off', undefined, 'not available'],
+    ['swarm workers: pstack-test/model:high', undefined, 'does not support reasoning'],
+    ['swarm workers: pstack-test/configured:high [fast]', undefined, 'does not support the [fast]'],
     ['---\nalwaysApply: true', undefined, 'unterminated'],
   ])(
     'fails affected dispatch without harming generic sessions (%s)',
@@ -481,7 +487,7 @@ describe('pstack runtime model policy', () => {
   )
 
   it('uses configured roles before agent defaults and unconfigured explicit selections', async () => {
-    const h = await harness(true, new Map(), 'how explorer: pstack-test/model:off')
+    const h = await harness(true, new Map(), 'swarm workers: pstack-test/model:off')
     try {
       h.api.events.emit('@nothingrotf/subagent/register-agents', {
         sourceId: 'policy-agent-fixture',
@@ -496,7 +502,7 @@ describe('pstack runtime model policy', () => {
         ],
       })
       for (const [role, model, expected] of [
-        ['how explorer', undefined, 'pstack-test/model'],
+        ['swarm workers', undefined, 'pstack-test/model'],
         ['feature', 'pstack-test/configured:high', 'pstack-test/configured'],
         ['feature', undefined, 'pstack-test/configured'],
       ]) {
@@ -525,7 +531,7 @@ describe('pstack runtime model policy', () => {
     }
   })
 
-  it.each([undefined, 'how explorerr', 'divergent'])(
+  it.each([undefined, 'swarm workerz', 'divergent'])(
     'rejects missing and unknown dispatch roles (%s)',
     async (role) => {
       const h = await harness(true)
@@ -591,7 +597,7 @@ describe('pstack runtime model policy', () => {
     },
   )
 
-  it('applies grouped keys and aliases through a real Task batch', async () => {
+  it('applies grouped keys and ignores retired aliases through a real Task batch', async () => {
     const plans = new Map()
     const h = await harness(
       true,
@@ -599,13 +605,7 @@ describe('pstack runtime model policy', () => {
       'feature, refactoring: pstack-test/configured:low\nreflect judgment, divergent, synthesizer: pstack-test/configured:high',
     )
     try {
-      const roles = [
-        'feature',
-        'refactoring',
-        'reflect judgment',
-        'reflect divergent',
-        'reflect synthesizer',
-      ]
+      const roles = ['feature', 'refactoring']
       const result = await invoke(h, plans, 'policy-batch', 'Task', {
         tasks: roles.map((role, index) => {
           const { run_in_background: _background, ...input } = policyInput({
@@ -630,16 +630,16 @@ describe('pstack runtime model policy', () => {
     'refreshes policy without reload in either extension order (%s)',
     async (pstackFirst) => {
       const plans = new Map()
-      const h = await harness(pstackFirst, plans, 'how explorer: pstack-test/configured:high')
+      const h = await harness(pstackFirst, plans, 'swarm workers: pstack-test/configured:high')
       try {
         const original = await invoke(h, plans, 'original-policy', 'Task', policyInput())
         expect(h.runtime.getRecord(original.agentId).model).toBe('pstack-test/configured')
-        await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+        await writeFile(join(h.dir, 'pstack-models.md'), 'swarm workers: inherit-parent')
         const fresh = await invoke(h, plans, 'fresh-policy', 'Task', policyInput())
         expect(h.runtime.getRecord(fresh.agentId).model).toBe('pstack-test/model')
         const prompt = h.inventories.find((entry) => entry.action === 'read:fresh-policy').prompt
-        expect(prompt).toContain('how explorer: inherit-parent')
-        expect(prompt).not.toContain('how explorer: pstack-test/configured:high')
+        expect(prompt).toContain('swarm workers: inherit-parent')
+        expect(prompt).not.toContain('swarm workers: pstack-test/configured:high')
       } finally {
         await h.close()
       }
@@ -651,7 +651,7 @@ describe('pstack runtime model policy', () => {
     const h = await harness(
       true,
       plans,
-      'how explorer: pstack-test/configured:high',
+      'swarm workers: pstack-test/configured:high',
       (pi, path) => {
         pi.registerTool({
           name: 'change_policy',
@@ -659,7 +659,7 @@ describe('pstack runtime model policy', () => {
           description: 'Change the fixture policy.',
           parameters: { type: 'object', properties: {} },
           async execute() {
-            await writeFile(path, 'how explorer: inherit-parent')
+            await writeFile(path, 'swarm workers: inherit-parent')
             return { content: [{ type: 'text', text: 'Policy changed' }], details: {} }
           },
         })
@@ -673,12 +673,12 @@ describe('pstack runtime model policy', () => {
       await h.session.prompt('read:edit-policy')
       await h.session.agent.waitForIdle()
       expect(await readFile(join(h.dir, 'pstack-models.md'), 'utf8')).toBe(
-        'how explorer: inherit-parent',
+        'swarm workers: inherit-parent',
       )
       const result = lastToolResult(h.session, 'Task')
       expect(h.runtime.getRecord(result.agentId).model).toBe('pstack-test/model')
       expect(h.inventories.find((entry) => entry.action === 'read:policy').prompt).toContain(
-        'how explorer: inherit-parent',
+        'swarm workers: inherit-parent',
       )
     } finally {
       await h.close()
@@ -687,7 +687,7 @@ describe('pstack runtime model policy', () => {
 
   it('fails closed on an invalid edit and recovers without reload', async () => {
     const plans = new Map()
-    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    const h = await harness(true, plans, 'swarm workers: pstack-test/configured:high')
     try {
       await writeFile(join(h.dir, 'pstack-models.md'), 'malformed policy')
       plans.set('read:invalid-policy', [{ name: 'Task', arguments: policyInput() }])
@@ -699,7 +699,7 @@ describe('pstack runtime model policy', () => {
       expect(result.details.status).toBe('error')
       expect(JSON.stringify(result.content)).toContain('invalid')
       expect(h.runtime.listSnapshots()).toEqual([])
-      await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+      await writeFile(join(h.dir, 'pstack-models.md'), 'swarm workers: inherit-parent')
       const recovered = await invoke(h, plans, 'recovered-policy', 'Task', policyInput())
       expect(h.runtime.getRecord(recovered.agentId).model).toBe('pstack-test/model')
     } finally {
@@ -709,7 +709,7 @@ describe('pstack runtime model policy', () => {
 
   it('rejects an explicit model outside the configured role before a child starts', async () => {
     const plans = new Map()
-    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    const h = await harness(true, plans, 'swarm workers: pstack-test/configured:high')
     try {
       plans.set('read:policy-conflict', [
         { name: 'Task', arguments: policyInput({ model: 'inherit-parent' }) },
@@ -730,17 +730,17 @@ describe('pstack runtime model policy', () => {
 
   it('reloads the actual extension policy while preserving stored resume models', async () => {
     const plans = new Map()
-    const h = await harness(true, plans, 'how explorer: pstack-test/configured:high')
+    const h = await harness(true, plans, 'swarm workers: pstack-test/configured:high')
     try {
       await h.session.bindExtensions({ shutdownHandler: () => undefined })
       const original = await invoke(h, plans, 'before-reload', 'Task', policyInput())
       expect(h.runtime.getRecord(original.agentId).model).toBe('pstack-test/configured')
-      await writeFile(join(h.dir, 'pstack-models.md'), 'how explorer: inherit-parent')
+      await writeFile(join(h.dir, 'pstack-models.md'), 'swarm workers: inherit-parent')
       await h.session.reload()
       const fresh = await invoke(h, plans, 'after-reload', 'Task', policyInput())
       expect(h.runtime.getRecord(fresh.agentId).model).toBe('pstack-test/model')
       expect(h.inventories.find((entry) => entry.action === 'read:after-reload').prompt).toContain(
-        'how explorer: inherit-parent',
+        'swarm workers: inherit-parent',
       )
       await writeFile(join(h.dir, 'pstack-models.md'), 'malformed file')
       await h.session.reload()
@@ -768,7 +768,7 @@ describe('pstack runtime model policy', () => {
     const h = await harness(
       true,
       plans,
-      'feature: pstack-test/configured:high\nhow explorer: pstack-test/model:off',
+      'feature: pstack-test/configured:high\nswarm workers: pstack-test/model:off',
     )
     try {
       plans.set('read:owner-policy', [

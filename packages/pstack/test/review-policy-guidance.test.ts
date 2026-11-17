@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vite-plus/test'
 
+import { selectCapabilityModel } from '../../subagent/src/capabilities.ts'
+import { parsePstackModelPolicy } from '../src/model-policy.ts'
+
 function read(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
 }
@@ -15,47 +18,48 @@ const exceptions = [
 ]
 
 describe('Comment Sicko review guidance', () => {
-  it('preserves exact exceptions across agent and inline skill', () => {
+  it('keeps the exact exception list in the agent', () => {
     const agent = read('../agents/comment-sicko.md')
-    const skill = read('../skills/no-comments/SKILL.md')
-    for (const exception of exceptions) {
-      expect(agent).toContain(exception)
-      expect(skill).toContain(exception)
-    }
+    for (const exception of exceptions) expect(agent).toContain(exception)
+    expect(agent).toContain('run `/why` from the **why** skill on it')
+    expect(agent).toContain('I never write application code.')
   })
 
-  it('supports leaf inline review without recursive delegation', () => {
-    const agent = read('../agents/comment-sicko.md')
+  it('spawns one isolated Comment Sicko and joins only an accepted diff', () => {
     const skill = read('../skills/no-comments/SKILL.md')
-    expect(skill).toContain('including a leaf reviewer, perform the rubric inline')
-    expect(skill).toContain('Do not spawn another Task or invoke `/how`, `/why`, or `/architect`')
-    expect(agent).toContain('Trace direct scoped evidence before judging the claim')
-    expect(agent).toContain('return a precise blocker to the root coordinator')
-    expect(agent).toContain("Respect the caller's scope and permissions")
-  })
-
-  it('selects one report-only code reviewer without pool fanout', () => {
-    const skill = read('../skills/no-comments/SKILL.md')
-    expect(skill).toContain('launch exactly one independent reviewer')
-    expect(skill).toContain('`role`: `arena cross-judge pool`')
-    expect(skill).toContain('`readonly`: `true`')
-    expect(skill).toContain('The pool is availability, not fanout')
-    expect(skill).toContain('Consolidation never authorizes the reviewer to edit product files')
-    expect(skill).toContain('Before opening a PR, reuse the existing independent verdict')
-    expect(read('../skills/deslop/SKILL.md')).toContain(
-      'report findings without edits or another Task',
-    )
+    expect(skill).toContain('`subagent_type: "comment-sicko"`')
+    expect(skill).toContain('`isolation: { mode: "worktree", integration: "apply" }`')
+    expect(skill).toContain('Call `TaskControl` with `action: "join"` only for an accepted diff')
+    expect(skill).toContain('Do not restate its rules.')
   })
 })
 
 describe('setup pstack role guidance', () => {
   it('announces discarded known legacy roles without treating unknown roles as compatible', () => {
     const skill = read('../skills/setup-pstack/SKILL.md')
-    expect(skill).toContain(
-      '`how critics`, `code review`, `runtime verification`, and `publication` are known legacy roles',
-    )
+    for (const role of [
+      'hardest tasks',
+      'how explorer',
+      'how explainer',
+      'why investigators',
+      'why synthesizer',
+      'reflect tooling',
+      'reflect judgment',
+      'reflect divergent',
+      'reflect synthesizer',
+      'architect runners',
+      'how critics',
+      'code review',
+      'runtime verification',
+      'publication',
+    ]) {
+      expect(skill).toContain(`\`${role}\``)
+      expect(() =>
+        selectCapabilityModel([parsePstackModelPolicy(`${role}: auto`)], role, undefined),
+      ).toThrow('Unknown model policy role')
+    }
     expect(skill).toContain('accepts their valid configuration but ignores their selectors')
-    expect(skill).toContain('list each known legacy row that the rewrite will remove')
+    expect(skill).toContain('list each retired row that the rewrite will remove')
     expect(skill).toContain('Unknown roles remain errors')
     expect(skill).toContain('resolve them with the operator before confirmation or rewriting')
     expect(skill).toContain('Preserve the choices of active roles')
@@ -66,10 +70,9 @@ describe('setup pstack role guidance', () => {
     const example = skill.match(/```text\n(---[\s\S]*?)\n```/)?.[1] ?? ''
     expect(example).toContain('arena cross-judge pool: inherit-parent')
     expect(example).toContain('swarm workers: inherit-parent')
-    for (const role of ['code review', 'runtime verification', 'publication'])
+    for (const role of ['code review', 'hardest tasks', 'how explorer', 'architect runners'])
       expect(example).not.toContain(`${role}:`)
-    expect(skill).toContain('Every list is an availability pool')
-    expect(skill).toContain('List length never causes fanout')
+    expect(skill).toContain('so the list length sets the fan-out')
     expect(skill).toContain('`judgment and prose` is only for prose or evidence synthesis')
     expect(skill).toContain('Markdown comments (`<!-- ... -->`) are ignored')
   })

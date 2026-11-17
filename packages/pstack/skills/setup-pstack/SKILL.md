@@ -17,18 +17,18 @@ Run `pi --list-models` to detect available `provider/model-id` values. A concret
 
 The default role-to-model mapping is the rule shape shown in step 5 below. If `~/.agents/rules/pstack-models.md` already exists, read it and treat its values as the current choices. Otherwise start from those defaults.
 
-`how critics`, `code review`, `runtime verification`, and `publication` are known legacy roles.
+These roles are retired: `hardest tasks`, `how explorer`, `how explainer`, `why investigators`, `why synthesizer`, `reflect tooling`, `reflect judgment`, `reflect divergent`, `reflect synthesizer`, `architect runners`, `how critics`, `code review`, `runtime verification`, and `publication`. The aliases `divergent` and `synthesizer` are retired too.
 The runtime accepts their valid configuration but ignores their selectors and publishes no dispatch role for them.
-Before confirmation, list each known legacy row that the rewrite will remove and explain that it has no runtime effect.
+Before confirmation, list each retired row that the rewrite will remove and explain that it has no runtime effect.
 Preserve the choices of active roles.
 Unknown roles remain errors, not legacy compatibility.
 If unknown roles occur, report the errors and resolve them with the operator before confirmation or rewriting.
 
 ### 3. Map and confirm
 
-Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Every list is an availability pool. The dispatching skill owns its count and explicitly selects each required entry when choices differ, including `model: "inherit-parent"` for an inherited entry. List length never causes fanout or sets a skill's count. Prefer AskQuestion over free text.
+Show every role with its current model. Mark each concrete selector whose `provider/model-id` is absent from the detected set. Ask whether to accept the valid choices or change specific roles. Offer concrete selectors plus `inherit-parent` and `auto`. Both aliases run the role on the parent model. Scalar dispatches can omit `Task.model`. Any role can list several effort levels of one model, such as `openai/gpt-6:medium, openai/gpt-6:xhigh`, so the coordinator matches the level to the job. Outside the panels, a list is a set of choices. The dispatching skill owns its count and explicitly selects each required entry when choices differ, including `model: "inherit-parent"` for an inherited entry. In the `arena runners` and `interrogate reviewers` panels, each entry is one seat, alias entries included, so the list length sets the fan-out. Prefer AskQuestion over free text.
 
-`judgment and prose` is only for prose or evidence synthesis, never code review or verification. A second opinion comes from `arena cross-judge pool` and verification from `swarm workers`. `arena cross-judge pool`, `arena runners`, `architect runners`, and `interrogate reviewers` are availability pools whose skills own selection and count. Arena runs one cross-judge. It tries only `arena cross-judge pool` entries from a family other than the parent's, in list order, so order the list by preference. An `inherit-parent` or `auto` entry never judges. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
+`judgment and prose` is only for prose or evidence synthesis, never code review or verification. A second opinion comes from `arena cross-judge pool` and verification from `swarm workers`. Arena runs one cross-judge. It tries only `arena cross-judge pool` entries from a family other than the parent's, in list order, so order the list by preference. An `inherit-parent` or `auto` entry is the parent model. `swarm workers` is the default model for each worker unless a race or comparison explicitly selects another configured entry per arm.
 
 ### 4. Validate
 
@@ -47,17 +47,9 @@ bug-fix: inherit-parent
 perf-issue: inherit-parent
 hillclimb: inherit-parent
 judgment and prose: inherit-parent
-hardest tasks: inherit-parent
-how explorer: inherit-parent
-how explainer: inherit-parent
-why investigators: inherit-parent
-why synthesizer: inherit-parent
-reflect tooling: inherit-parent
-reflect judgment, divergent, synthesizer: inherit-parent
 arena runners: inherit-parent
 arena cross-judge pool: inherit-parent
 swarm workers: inherit-parent
-architect runners: inherit-parent
 interrogate reviewers: inherit-parent
 ```
 
@@ -65,13 +57,13 @@ interrogate reviewers: inherit-parent
 
 After the updated extension is loaded, rule edits apply before the next root prompt or root `Task` call without another reload. Re-running this skill updates it.
 
-Every dispatch must pass the selected role as `Task.role`, including inherited models. Use `feature` or `refactoring` for the active grouped role. Use `why synthesizer`, `how explorer`, or another exact role label for routed workers.
+Every dispatch must pass the selected role as `Task.role`, including inherited models. Use `feature` or `refactoring` for the active grouped role. Use `judgment and prose`, `swarm workers`, or another exact role label for routed workers.
 
-Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing and unknown dispatch roles fail clearly. Grouped file keys expand to exact roles. The configuration aliases `divergent` and `synthesizer` mean `reflect divergent` and `reflect synthesizer`; use the full names in Task calls.
+Every pstack Task must select `pstack-leaf`, or `pstack-nested` for a delegating owner, and pass an exact role. Registered pstack agents default to `pstack-leaf`. Missing, unknown, and retired dispatch roles fail clearly. Grouped file keys expand to exact roles.
 
-Omit `Task.model` for scalar roles to use the runtime policy. Configured choices are mandatory, including effort and the `[fast]` or `[ultrafast]` speed marker. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry allow explicit models before the agent default and parent fallback.
+Omit `Task.model` for a role with one selector to use the runtime policy. Configured choices are mandatory, including effort and the `[fast]` or `[ultrafast]` speed marker. An explicit selector outside the configured choices fails before execution. For different-family reviews, choose a configured entry or ask the user to update the policy. Roles without an explicit entry allow explicit models before the agent default and parent fallback.
 
-A pool with distinct choices requires an explicit selection, never first-entry selection or hidden list-size fanout. Identical choices may omit the selector. Skills own all dispatch counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
+A pool with distinct choices requires an explicit selection, never first-entry selection. Identical choices may omit the selector. Panel lists set their skill's fan-out. Other skills own their dispatch counts. Duplicate role definitions and invalid selectors make the file invalid. Resume preserves the stored model and role. Policy edits do not require reload.
 
 The runtime preserves the role through execution and display. A role never grants capabilities or comes from a guessed model name.
 

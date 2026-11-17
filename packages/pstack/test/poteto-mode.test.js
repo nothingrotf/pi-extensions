@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -69,11 +70,9 @@ describe('poteto-mode', () => {
   it('ships every playbook and the retained runtime scripts', () => {
     expect(
       readdirSync(join(skillRoot, 'playbooks')).filter((name) => name.endsWith('.md')),
-    ).toHaveLength(23)
+    ).toHaveLength(22)
     for (const path of [
-      'scripts/check-plan.mjs',
       'scripts/worktree-audit.sh',
-      'scripts/release-worktree.sh',
       'scripts/watch-pr/watch-pr',
       'scripts/watch-pr/watch-pr.bundle',
     ])
@@ -121,219 +120,40 @@ describe('poteto-mode', () => {
     expect(skill).toContain('name: poteto-mode')
     expect(skill).toContain('Use `subagent_type: "poteto-agent"`')
     expect(skill).toContain('capability_profile: "pstack-nested"')
-    const orchestrate = text(join(skillRoot, 'playbooks', 'orchestrate.md'))
-    expect(orchestrate).toContain('Use `subagent_type: "poteto-agent"`')
-    expect(orchestrate).toContain(
-      'Give `capability_profile: "pstack-nested"` only to owners that must delegate.',
-    )
-    expect(orchestrate).toContain('Call no bookkeeping scripts')
-    expect(orchestrate).toContain('`TaskControl`')
-    expect(orchestrate).not.toMatch(/\borch\b|environment: "cloud"|Project store/)
     expect(skill).toContain('`TaskControl`')
-    expect(skill).toContain('`AskQuestion`')
-    expect(skill).toContain('**create-skill**')
+    expect(skill).toContain('`Read <path>/worker.md before anything else.`')
     expect(skill).toContain('**deslop**')
     expect(skill).toContain('**control-cli**')
     expect(skill).toContain('**control-ui**')
-    expect(skill).toContain('provider/model-id:effort [fast]')
-    expect(skill).toContain('Omit `Task.model`')
-    expect(skill).toContain('with `todo_write`')
-    expect(skill).toContain('gt or github/gh-stack')
-    expect(skill).not.toMatch(/Cursor|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5|todolist/)
-    const backends = text(join(skillRoot, 'references', 'stack-backends.md'))
-    expect(backends).toContain('ask whether to install `github/gh-stack` with `AskQuestion`')
-    expect(backends).toContain('gh stack submit --auto --open')
-    expect(backends).toContain('gh stack merge --yes')
-    expect(backends).toContain('The `auto` default prefers GitHub')
-    expect(backends).toContain('--no-stack')
-    expect(backends).toContain('Never pass a numeric target.')
-    expect(backends).toContain('Never install an extension without approval.')
+    expect(skill).toContain('`provider/model-id:effort [fast]` or `[ultrafast]`')
+    expect(skill).toContain('When a role has one selector, omit `Task.model`.')
+    expect(skill).toContain('**Match the model to the job.**')
+    expect(skill).toContain('Across a function boundary → **architect**')
+    expect(skill).toContain('`todo_write`')
+    expect(skill).not.toMatch(
+      /Cursor|cursor-team-kit|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5|todolist|Orchestrate/,
+    )
+    for (const name of readdirSync(join(skillRoot, 'playbooks'))) {
+      const playbook = text(join(skillRoot, 'playbooks', name))
+      expect(playbook, name).not.toMatch(/cursor-team-kit|origin pr|~\/\.cursor|orchestrate\.md/)
+    }
+    const worker = text(join(skillRoot, 'worker.md'))
+    expect(worker).toContain('Open every PR ready for review, never as a draft.')
+    expect(worker).toContain('PR body: follow the bundled `pr` skill.')
+    expect(text(join(skillRoot, 'references', 'task-contracts.md'))).toContain(
+      '`how` dispatches one read-only explainer',
+    )
+    expect(existsSync(join(skillRoot, 'references', 'stack-backends.md'))).toBe(false)
     const shipping = text(join(skillRoot, 'playbooks', 'shipping.md'))
-    expect(shipping).toContain('Merge only a fully verified GitHub stack')
-    expect(shipping).toContain('git patch-id --stable')
-    expect(shipping).toContain('--queued-stack --stack-prs <bottom-to-top-prs>')
-    expect(shipping).not.toMatch(/gh stack merge [^\n]*<[^\n]*>/)
+    expect(shipping).toContain('git patch-id')
+    expect(shipping).toContain('gh pr merge <pr> --squash')
     const opening = text(join(skillRoot, 'playbooks', 'opening-a-pr.md'))
-    expect(opening).toContain('gh pr create --attach <file>')
-    expect(opening).toContain('gh pr edit <number> --attach <file>')
-    expect(opening).toContain('gh stack submit` does not accept `--attach')
-    expect(opening).toContain('partial success')
-    expect(opening).toContain('Load the bundled `pr` skill from `../pr/SKILL.md`')
-    expect(opening).not.toContain('~/.agents/skills/pr')
-    expect(opening).toContain('The owner commits, pushes its own branch, and opens the PR')
+    expect(opening).toContain('load the bundled `pr` skill from `../pr/SKILL.md`')
     expect(opening).not.toContain('`## What changed`')
-    const plan = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    expect(plan).toContain('Lane 1. Regression lane against trunk')
-    expect(plan).toContain('If not, use absolute measurements and limits.')
     const babysit = text(join(skillRoot, 'playbooks', 'babysit.md'))
-    expect(babysit).toContain('gh api --input')
+    expect(babysit).toContain('scripts/watch-pr/watch-pr')
     const typeScript = text(join(packageRoot, 'skills', 'typescript-best-practices', 'SKILL.md'))
     expect(typeScript).toContain('Schemas before guards')
-  })
-
-  it('validates the bundled plan template', () => {
-    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    const plan = playbook.split('````markdown\n')[1].split('\n````')[0]
-    const path = join(tmpdir(), `poteto-plan-${process.pid}.md`)
-    writeFileSync(path, plan)
-    const result = run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
-    rmSync(path, { force: true })
-    expect(result.stderr).toBe('')
-    expect(result.status).toBe(0)
-    expect(result.stdout).toContain('1 PR sections, 0 problems')
-  })
-
-  it('respects fenced code blocks in plan checks', () => {
-    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    const plan = playbook.split('````markdown\n')[1].split('\n````')[0]
-    const path = join(tmpdir(), `poteto-plan-fence-${process.pid}.md`)
-    const check = (example) => {
-      writeFileSync(path, `${plan}\n\n${example}`)
-      return run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
-    }
-    const appendix = '"## Example only" after Close the program is not an appendix'
-    try {
-      for (const example of [
-        ...['', ' ', '  ', '   '].map(
-          (indent) => `${indent}\`\`\`markdown\n## Example only\n${indent}\`\`\`\n`,
-        ),
-        '```markdown\n## Example only\n````\n',
-        '````markdown\n```markdown\n## Example only\n```\n````\n',
-        '~~~markdown `info`\n## Example only\n ~~~\n',
-        '````markdown\n~~~\n## Example only\n````\n',
-        '````markdown\n```\n## Example only\n````\n',
-        '````markdown\n``` info\n## Example only\n````\n',
-      ]) {
-        const accepted = check(example)
-        expect({ example, stderr: accepted.stderr, status: accepted.status }).toEqual({
-          example,
-          stderr: '',
-          status: 0,
-        })
-      }
-      for (const suffix of ['  ', '\t']) {
-        const heading = check(`\`\`\`markdown\n## Example only\n\`\`\`${suffix}\n## Example only\n`)
-        expect(heading.status).toBe(1)
-        expect(heading.stderr).toContain(appendix)
-      }
-      const backtickInfo = check('```markdown `invalid`\n## Example only\n```\n')
-      expect(backtickInfo.status).toBe(1)
-      expect(backtickInfo.stderr).toContain(appendix)
-      const prose = check(
-        '```markdown\nThis prose has a mid-sentence colon: inside code\n```\nThis prose has a mid-sentence colon: bad.\n',
-      )
-      expect(prose.status).toBe(1)
-      expect(prose.stderr.match(/mid-sentence colon/g)).toHaveLength(1)
-    } finally {
-      rmSync(path, { force: true })
-    }
-  })
-
-  it('matches inline code spans by delimiter length in plan checks', () => {
-    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    const plan = playbook.split('````markdown\n')[1].split('\n````')[0]
-    const path = join(tmpdir(), `poteto-plan-span-${process.pid}.md`)
-    const check = (line) => {
-      writeFileSync(path, `${plan}\n\n${line}\n`)
-      return run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
-    }
-    try {
-      for (const count of [2, 3, 4]) {
-        const delimiter = '`'.repeat(count)
-        const inside = check(
-          `Use ${delimiter}echo \`x\`: \u201cquoted\u201d \u2014 example${delimiter}.`,
-        )
-        expect({ count, stderr: inside.stderr, status: inside.status }).toEqual({
-          count,
-          stderr: '',
-          status: 0,
-        })
-      }
-      for (const line of ['Use ``echo `x`: y``. Bad: prose.', 'Use ``unclosed: bad` here.']) {
-        const outside = check(line)
-        expect(outside.status).toBe(1)
-        expect(outside.stderr).toContain('mid-sentence colon')
-      }
-    } finally {
-      rmSync(path, { force: true })
-    }
-  })
-
-  it('rejects a plan that does not arm the hourly audit loop', () => {
-    const playbook = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    const plan = playbook
-      .split('````markdown\n')[1]
-      .split('\n````')[0]
-      .replace('`/loop 1h`', '`/loop 30m`')
-    const path = join(tmpdir(), `poteto-plan-loop-${process.pid}.md`)
-    writeFileSync(path, plan)
-    const result = run('node', [join(skillRoot, 'scripts', 'check-plan.mjs'), path])
-    rmSync(path, { force: true })
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('Program checklist lacks "/loop 1h"')
-  })
-
-  it('releases only a published clean destination worktree', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-release-')))
-    const release = join(skillRoot, 'scripts', 'release-worktree.sh')
-    const repo = join(root, 'repo')
-    const lane = join(root, 'lane')
-    const git = (args, cwd = repo) => run('git', args, { cwd })
-    try {
-      expect(run('git', ['init', '--quiet', '--bare', join(root, 'remote.git')]).status).toBe(0)
-      expect(run('git', ['clone', '--quiet', join(root, 'remote.git'), repo]).status).toBe(0)
-      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-      writeFileSync(join(repo, '.gitignore'), 'node_modules/\n')
-      writeFileSync(join(repo, 'main.txt'), 'main\n')
-      expect(git(['add', '.']).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
-      expect(git(['push', '--quiet', 'origin', 'HEAD:main']).status).toBe(0)
-      expect(git(['worktree', 'add', '--quiet', '-b', 'stack/one', lane]).status).toBe(0)
-      writeFileSync(join(lane, 'one.txt'), 'one\n')
-      expect(git(['add', 'one.txt'], lane).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'one'], lane).status).toBe(0)
-      mkdirSync(join(lane, 'node_modules'))
-      writeFileSync(join(lane, 'node_modules', 'large.bin'), 'dependency\n')
-
-      const unpublished = run('bash', [release, lane])
-      expect(unpublished.status).toBe(1)
-      expect(unpublished.stdout).toBe(
-        `held\t${lane}\tremote branch origin/stack/one is unavailable\n`,
-      )
-
-      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
-      writeFileSync(join(lane, 'one.txt'), 'local edit\n')
-      const dirty = run('bash', [release, lane])
-      expect(dirty.status).toBe(1)
-      expect(dirty.stdout).toBe(`held\t${lane}\tuncommitted or untracked changes\n`)
-      expect(git(['checkout', '--quiet', '--', 'one.txt'], lane).status).toBe(0)
-
-      writeFileSync(join(lane, 'two.txt'), 'two\n')
-      expect(git(['add', 'two.txt'], lane).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'two'], lane).status).toBe(0)
-      const ahead = run('bash', [release, lane])
-      expect(ahead.status).toBe(1)
-      expect(ahead.stdout).toBe(`held\t${lane}\tHEAD is not on origin/stack/one\n`)
-      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
-
-      const main = run('bash', [release, repo])
-      expect(main.status).toBe(1)
-      expect(main.stdout).toBe(`held\t${repo}\tmain worktree\n`)
-
-      const released = run('bash', [release, lane])
-      expect(released.stderr).toBe('')
-      expect(released.status).toBe(0)
-      expect(released.stdout).toMatch(
-        new RegExp(`^released\\t${lane}\\tstack/one\\torigin/stack/one\\t\\d+\\n$`),
-      )
-      expect(() => readdirSync(lane)).toThrow(/ENOENT/)
-      expect(git(['branch', '--list', 'stack/one']).stdout).toBe('')
-      expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(lane)
-      expect(git(['ls-remote', 'origin', 'refs/heads/stack/one']).stdout).not.toBe('')
-    } finally {
-      rmSync(root, { force: true, recursive: true })
-    }
   })
 
   it('audits merged worktrees against the remote default branch or an explicit base', () => {
@@ -400,9 +220,6 @@ describe('poteto-mode', () => {
   it('loads the bundled watcher and parses the audit script', () => {
     const watcher = run(join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'), ['--help'])
     const audit = run('bash', ['-n', join(skillRoot, 'scripts', 'worktree-audit.sh')])
-    const release = run('bash', [join(skillRoot, 'scripts', 'release-worktree.sh')])
-    expect(release.status).toBe(2)
-    expect(release.stderr).toContain('usage: release-worktree.sh <worktree>')
     expect(watcher.status).toBe(0)
     expect(watcher.stdout).toContain('Watch one pull request')
     expect(audit.status).toBe(0)

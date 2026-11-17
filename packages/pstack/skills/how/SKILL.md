@@ -1,51 +1,23 @@
 ---
 name: how
-description: "Explains runtime behavior, subsystem architecture, and ownership. Use for 'how does X work', code walkthroughs, or placement questions. Use why for motivation."
+description: "Use for \"how does X work\", code walkthroughs before changing something, and placement / ownership / layering questions (\"where should this live\", \"which package owns this\", \"is this the right layer\"). Explains subsystem architecture, runtime flow, onboarding mental models. Use why for motivation."
 disable-model-invocation: true
 ---
 
 # How
 
-Build the mental model in the agent that needs it.
-Run this skill in the current session by default, including inside a leaf Task.
-Do not create an explainer merely to read code or rewrite findings.
-An accepted design carries its grounding. Revisit only stale, missing, or contested evidence.
+Explore the codebase to answer "how does X work?" questions.
 
-## 1. Frame
+If the scope is ambiguous, state your interpretation and explore. The user can redirect.
 
-State the question, relevant entrypoints, and unresolved decisions.
-For a narrow question, inspect the smallest relevant surface.
-For a subsystem, identify its independent boundaries before deciding whether delegation helps.
-Keep the existing issue owner through investigation and implementation.
+## 1. Explain
 
-## 2. Trace
+Spawn one read-only Task that explores and explains in one pass. Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch. Use `subagent_type: "generalPurpose"`, `capability_profile: "pstack-leaf"`, `role: "judgment and prose"`, and `readonly: true`. Omit `Task.model` to use the configured selector. Give it the user's question and this brief:
 
-Use `find`, `grep`, and `read` to trace inputs, decisions, state changes, failures, and observable results.
-Run independent tool calls in parallel when their inputs do not depend on each other.
-Keep decisive evidence and rejected explanations with source references, not only a summary.
-If runtime behavior matters, execute the smallest representative probe within the current authorization.
-Read-only investigations do not authorize code changes.
+> You are writing an architectural explanation for a senior engineer. Explore the codebase and write an explanation that a senior engineer unfamiliar with this area could read and walk away with a solid mental model. They should understand the architecture well enough to start working in it confidently. You have read-only access to the codebase.
 
-## 3. Delegate only independent work
+When you run as a leaf Task without `Task` access, explore and write the explanation yourself in the current session.
 
-Delegate only when a named independent slice exceeds the owner's practical context or benefits from parallel investigation.
-State the slice, expected evidence, and reason before dispatch.
-A large model pool or multiple source files does not establish that reason.
-Preserve an explicit user request for parallel perspectives.
-If required delegation is unavailable, report the missing capability instead of silently replacing the requested review.
+## 2. Present
 
-Before dispatch, read [Task contracts](../poteto-mode/references/task-contracts.md).
-Use `subagent_type: "generalPurpose"`, `capability_profile: "pstack-leaf"`, `role: "how explorer"`, and `readonly: true` for explorers.
-Omit `Task.model` for the scalar policy. Concrete selectors use `provider/model-id:effort [fast]` and must match the configured role.
-Use `references/explorer-prompt.md` for the bounded question, relevant paths, and evidence requirements.
-The current owner checks the returned evidence and writes the synthesis without another Task.
-The `how explainer` role remains available for explicitly delegated standalone explanations, not automatic synthesis stages.
-Use [Explainer prompt](references/explainer-prompt.md) for that explicit assignment.
-
-## 4. Explain
-
-Write Overview, Key Concepts, How It Works, Where Things Live, and Gotchas when those sections help.
-Link claims to source ranges or executed evidence. Distinguish observations from inferences and unresolved questions.
-Use a diagram when it clarifies ownership or data flow.
-Do not dump annotated source or duplicate the complete investigation transcript.
-For a pending change, retain the original question, decisive evidence, constraints, and open questions for the issue owner's next round.
+Present the subagent's output. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.

@@ -142,7 +142,6 @@ The Pi port adapts these commits:
 - A fix round, a follow-up, a retry, and the next queue item go to a fresh agent with consolidated scope.
 - Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
 - Each owner works in place in a linked worktree on its own branch, so it pushes and opens its own PR.
-- The root removes each linked worktree after its PR lands or closes with `scripts/release-worktree.sh`.
 - The built-in PR tool rule is omitted because Pi has no built-in PR tool.
 - The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
 
@@ -242,15 +241,31 @@ These upstream changes through [#1043](https://github.com/cursor/plugins/pull/10
 The Pi port adapts or omits these parts:
 
 - The `statechart` package test runs the upstream `node:test` suite with `fast-check` from the package development dependencies. TLC cases skip when neither `TLA2TOOLS` nor mise can supply TLC.
-- `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation. The skill keeps two adversaries by default and never substitutes an unconfigured model.
-- `arena` drops a rejected runner seat and marks a rejected judge `BLOCKED` instead of the upstream chain of model fallbacks. The upstream fallback chain for rejected slugs in `poteto-mode` has no counterpart.
+- `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation, one per configured entry.
+- `arena` falls back across configured Pi selectors instead of the upstream chain of Cursor slugs.
 - PRs open their `## Summary` with the user's goal, because the `pr` template has no `## Why` heading.
-- Orchestrate keeps its state in `~/.pi/agent/poteto/orchestrate/<project-slug>/notes.md`, watches PRs with `loop_next`, and manages workers with `Task` and `TaskControl`. Cloud VMs, the Project store, and forks have no counterpart.
 - `poteto-help`, the guide, the Claude Code harness tree, and the version bumps have no local counterpart.
+
+These upstream changes through [#1249](https://github.com/cursor/plugins/pull/1249) at `2f87c854fe3e2fcda44ca86b46ede35aad3c46b7` are also synchronized:
+
+- [#1236](https://github.com/cursor/plugins/pull/1236) reduces `why` to one paragraph that answers from the commit and PR record, and `how` to one read-only explainer. It deletes their prompt and source references, fixes statechart rendering, and shortens `sharpen` and `reflect`.
+- [#1249](https://github.com/cursor/plugins/pull/1249) shortens most skills and playbooks, adds operator rules for every started agent, and reduces `reflect` and `architect` to single-agent skills. It deletes Orchestrate, `check-plan.mjs`, and the `architect`, `reflect`, and `why` reference prompts. It retires the `hardest tasks`, `how`, `why`, `reflect`, and `architect runners` roles.
+
+The Pi port adapts or omits these parts:
+
+- `poteto-mode/worker.md` holds the upstream operator rules. Its PR body rule points to the bundled `pr` skill.
+- `how` dispatches its explainer as `judgment and prose` with `pstack-leaf`. A leaf without `Task` writes the explanation itself.
+- Every role accepts a list of selectors. A list of effort levels lets the coordinator match the level to the job, as the upstream Subagents section asks. With one selector, the coordinator omits `Task.model`.
+- `reflect` recovers compacted turns with `compact_recall` and child sessions with `session_history`. It copies a skill out of `~/.pi/agent/npm/` before an edit.
+- The parser accepts retired role lines without effect, so existing policy files stay valid. Task calls with a retired role fail.
+- The Cursor model slugs, the `/setup-pstack` budget ladder, and the Opus `-fast` rule have no counterpart. Pi selectors carry effort and the `[fast]` or `[ultrafast]` marker directly.
+- `opening-a-pr` keeps the bundled `pr` skill for the body. Origin's CLI has no counterpart.
+- Skills, playbooks, and agents now follow the upstream text. Local differences only bind upstream mechanics to Pi: `Task` roles and capability profiles, `session_history` for transcripts, the `loop` skill for `/loop`, local worktrees for cloud agents, and the bundled `pr` skill.
+- The Graphite and GitHub stack backends, `release-worktree.sh`, and the local count rules for `arena` and `interrogate` are removed. Panels run one Task per configured entry.
 
 ## Task roles and workspace contracts
 
-Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `why synthesizer`.
+Each workflow passes an explicit `Task.role`, such as `feature`, `refactoring`, or `judgment and prose`.
 The runner preserves this label beside the model without inferring it from the model name.
 With a pstack capability profile, the role enforces the configured model choices. It never grants capabilities.
 
@@ -261,7 +276,7 @@ Selectors for the `openai` and `openai-codex` providers match each other for the
 
 Pstack uses the upstream roles. A second opinion selects one entry of `arena cross-judge pool` from another model family. Verification uses `swarm workers`. The branch owner publishes its own PR. `judgment and prose` remains for prose and evidence synthesis.
 
-The parser ignores older `how critics`, `code review`, `runtime verification`, and `publication` lines, so those files stay valid. Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or speed settings fail affected selections.
+The parser ignores retired role lines, such as `hardest tasks`, `how explorer`, `why synthesizer`, `reflect judgment`, `architect runners`, and `code review`, so those files stay valid. Missing files and absent documented roles fall back to the agent default, then the parent. Fresh pstack dispatches require an exact `role` and a pstack capability profile. Registered pstack agents default to `pstack-leaf`. Unknown roles, malformed files, and duplicate role definitions fail clearly. Invalid files do not kill root sessions or affect unrelated Tasks. Unavailable models and unsupported effort or speed settings fail affected selections.
 
 Use `/setup-pstack` to configure the file. For different-family reviews, select a permitted entry from another family than the implementation model. If no permitted model qualifies, report a blocker and request a policy update. Unconfigured roles allow explicit models before the agent default and parent fallback. Resume preserves the stored model rather than applying a newer policy.
 
@@ -322,9 +337,7 @@ Autopilot-full and Autopilot-stack follow their upstream playbooks with these ow
 
 The remote stack holds delivered state. Local worktrees, branches, and services exist only while an issue is in flight.
 
-Release a linked worktree with `scripts/release-worktree.sh` from the `poteto-mode` skill after its PR lands or closes.
-That script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
-Otherwise, it prints `held` with the reason and exits with status 1.
+Remove a linked worktree with `git worktree remove <path>` after its PR lands or closes.
 
 `scripts/worktree-audit.sh` compares merge state with `origin/HEAD`, then `origin/main`, then `origin/master`. Pass `-b <ref>` when pull requests target another branch.
 
@@ -389,19 +402,3 @@ A second table runs a real session with a local fake model for each codemode mod
 
 It counts the declarations and the system prompt that the model request actually carries.
 Compare the totals before you change the `codemode.mode` setting.
-
-## Stack backends
-
-Poteto supports Graphite `gt` and GitHub `github/gh-stack`.
-
-If only `gh` exists, Poteto asks for approval before it runs:
-
-```sh
-gh extension install github/gh-stack
-```
-
-Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers GitHub when both exist. Graphite remains an explicit selection and an automatic fallback.
-
-The merge frontier needs neither backend. `gh pr list` reads the pull request base chain of stacks from both backends.
-
-GitHub stack workflows require GitHub Stacked Pull Requests on the repository.

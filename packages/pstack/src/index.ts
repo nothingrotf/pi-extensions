@@ -96,7 +96,7 @@ export default async function pstack(
     if (event.toolName === 'Task') await refreshPolicy()
   })
   const definitions = await Promise.all([
-    loadAgent('../agents/comment-sicko.md', 'Comment Sicko', bootstrap.root),
+    loadAgent('../agents/comment-sicko.md', 'comment-sicko', bootstrap.root),
     loadAgent('../agents/poteto-agent.md', 'poteto-agent', bootstrap.root),
   ])
   const publishCapabilities = () => {

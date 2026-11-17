@@ -108,30 +108,6 @@ it('documents all executable local maintenance routes without claiming deduplica
   expect(duplicates).toContain(checked.stdout.trim())
 })
 
-it('isolates ticket and chat evidence instead of repeating source-control input', async () => {
-  const ticket = await base()
-  const chat = await base()
-  const ticketGoal = await prepareLiveFixture(ticket, { id: 'why-tickets' })
-  const chatGoal = await prepareLiveFixture(chat, { id: 'why-chat' })
-  const ticketEvidence = await readFile(join(ticket, 'category-evidence.md'), 'utf8')
-  const chatEvidence = await readFile(join(chat, 'category-evidence.md'), 'utf8')
-  expect(ticketEvidence).toContain('Fictional ticket')
-  expect(chatEvidence).toContain('Fictional conversation')
-  expect(ticketEvidence).not.toBe(chatEvidence)
-  expect(ticketGoal).toContain('Assigned Why category: tickets')
-  expect(chatGoal).toContain('Assigned Why category: chat')
-  expect(ticketEvidence).toContain('No external category service was queried')
-})
-
-it('captures a real local failing assertion for the error investigator', async () => {
-  const directory = await base()
-  await prepareLiveFixture(directory, { id: 'why-errors' })
-  const evidence = await readFile(join(directory, 'category-evidence.md'), 'utf8')
-  expect(evidence).toContain('Actual local assertion failed with exit 1')
-  expect(evidence).toContain('ERR_ASSERTION')
-  expect(evidence).toContain('Ada')
-})
-
 it('bounds bulk evidence while preserving actual error positions', async () => {
   const directory = await base()
   await prepareLiveFixture(directory, { id: 'bulk-parser' })

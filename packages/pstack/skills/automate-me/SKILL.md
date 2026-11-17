@@ -1,113 +1,104 @@
 ---
 name: automate-me
-description: "Use for 'automate me', 'create, update, or refresh my -mode skill', 'capture my preferences or working style', or wanting agents to follow how the user works. Drafts or revises a personal -mode skill through create-skill and unslop, with optional evidence from recent Pi sessions."
+description: "Use for \"automate me\", \"create/update/refresh my -mode skill\", \"turn/capture my preferences or working style into a skill\", or wanting agents to follow how the user works. Drafts or revises a personal -mode skill via create-skill + unslop, optionally pulling fresh evidence from recent Pi sessions."
 disable-model-invocation: true
 ---
 
 # Automate me
 
-Turn the user's working conventions into one `-mode` skill, such as `jay-mode` or `priya-mode`.
+A guided flow for turning the user's working conventions into a skill agents will follow. The output is one `-mode` skill tailored to them (e.g. `jay-mode`, `priya-mode`).
 
-This skill coordinates a session evidence pass, the bundled `create-skill` skill, and the **unslop** skill. It sequences them and does not replace them.
+This skill orchestrates three others: an inline mining pass (see step 1), the bundled `create-skill` skill (authoring), and the **unslop** skill (prose discipline). It sequences them. It doesn't replace them.
 
 ## Flow
 
 ### 0. Check for an existing skill
 
-Search project `.pi/skills/` and `.agents/skills/` recursively for `*-mode/SKILL.md`. Search user `~/.pi/agent/skills/` and `~/.agents/skills/` when the user requests a personal skill. Match the user's handle. Mode skills can live in a category directory.
+Look recursively for `.pi/skills/**/*-mode/SKILL.md`, `.agents/skills/**/*-mode/SKILL.md`, `~/.pi/agent/skills/*-mode/SKILL.md`, and `~/.agents/skills/*-mode/SKILL.md` matching the user's handle. Mode skills can live in a personal category directory (`.pi/skills/<handle>/`), not only at the top level. If one exists, confirm intent with `AskQuestion` (unless they already said "update my skill" or similar):
 
-If one exists, use `AskQuestion` unless the user already requested an update. Offer:
+- Update the existing skill (default for repeat runs)
+- Start fresh (rare, ask why before doing it)
 
-- Update the existing skill.
-- Start fresh and state why.
+Update mode changes the rest of the flow:
+- Step 1 mines only history since the skill was last edited (`git log -1 --format=%cI <path>`).
+- Step 2 asks what's changed or missing, not what to capture from zero.
+- Step 4 edits the existing file in place. Preserve sections the user hasn't contradicted. Revise ones with new evidence. Add new sections only for genuinely new rules.
 
-Update mode changes the flow:
+### 1. Mine their history
 
-- Step 1 searches only sessions after `git log -1 --format=%cI <path>` when Git tracks the skill.
-- Step 2 asks what changed or remains absent.
-- Step 4 edits the existing file. Preserve rules that new evidence does not contradict.
+Locate this project's sessions before fanning out with `session_history` (`list`, `search`, and `read` with `view: "audit"`), which is project-scoped. Never read guessed session file paths or another project's sessions. That reads private chats from unrelated projects.
 
-### 1. Mine session history
+Survey recent agent conversations within that scope for recurring patterns. Run multiple parallel subagents across slices of history (e.g. last 2-4 weeks, split into 3 slices so each has enough material). Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill. A `Task` child has no `session_history`, so the parent passes each read-only slice subagent (`subagent_type: "generalPurpose"`, `readonly: true`, `role: "judgment and prose"`, `capability_profile: "pstack-leaf"`) the bounded session records with their `pi-session://` references. Each slice mining subagent reads the records it was given, looks for the signals below, and returns a short structured list of patterns it saw with evidence pointers. Default signals worth hunting:
 
-The parent uses project-scoped `session_history`. Never inspect guessed physical session paths.
+- Response preferences (length, tone, format, "dumb it down" corrections)
+- Delegation habits (subagents, models, specialized workflows, parallelism)
+- Verification posture (what "done" means, unit tests vs live repro, reviewers)
+- Code and prose discipline (style, principles cited, lint/format tools)
+- Process conventions (worktrees, commits, PRs, review/merge tooling)
+- Meta preferences (fixing skills mid-task, proposing new ones)
 
-Set a recent window, usually two to four weeks. Use `list` and `search`, then bounded `read` calls with `view: "audit"`. Use `timeline` and `tool_activity` when they provide decision or execution evidence. Exclude the current session and child sessions. Preserve `pi-session://` references.
-
-For a large result set, split bounded evidence into three time slices. Launch parallel `Task` children with `subagent_type: "generalPurpose"` and `readonly: true`. Pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. Resolve the configured model through [Task contracts](../poteto-mode/references/task-contracts.md). Children analyze supplied evidence only. They do not access session files or ambient source tools.
-
-Each child returns a short structured list with evidence references. Search for:
-
-- Response length, tone, and format preferences
-- Delegation and parallelism habits
-- Verification requirements
-- Code and prose discipline
-- Worktree, commit, PR, review, and merge conventions
-- Skill maintenance preferences
-
-Cross-check slices. Treat patterns from two or more slices as high confidence. Drop lone signals unless the user confirms them. If `session_history` is unavailable, skip mining only when the user supplies enough direct evidence. Otherwise return `BLOCKED`.
+Cross-check across slices before elevating a signal. Patterns seen in 2+ slices are high-confidence. Lone signals are weak and usually get dropped.
 
 ### 2. Ask the user directly
 
-Use `AskQuestion` with `allowMultiple: true` for category choices. Ask one or two questions with four to six options. Start with the areas that matter most. Follow with specific choices for selected areas. Ask one short free-form question only when the structured answers leave a material gap.
+Mining misses intent that hasn't come up yet. Use the `AskQuestion` tool (structured multi-choice) rather than asking the user to type from scratch.
 
-Do not ask for facts that repository or session tools can discover.
+Shape: one or two questions with 4-6 options each, `allowMultiple: true` for category questions. Start broad ("Which areas matter most?"), then follow up on selected areas with specific options. After the structured rounds, one free-form chat question catches anything the options missed.
+
+Don't dump 20 questions.
 
 ### 3. Cluster findings
 
-Group confirmed signals into only the sections that apply:
+Group the combined signals into sections. Common ones (use only what applies):
 
-- **Response style**
-- **Autonomy**
-- **Understand first**
-- **Subagents**
-- **Prose and code discipline**
-- **Review and verify**
-- **Process**
-- **Skills**
+- **Response style**: length, tone, format.
+- **Autonomy**: how much to do without asking, MCP tool use.
+- **Understand first**: which skills to reach for when scoping or investigating a change.
+- **Subagents**: default, parallelism, model-to-task, specialized workflows.
+- **Prose / code discipline**: principles, lint tools, style guides.
+- **Review and verify**: repro posture, verification skills, live-testing tools.
+- **Process**: git worktrees, commits, PRs, review/merge tooling.
+- **Skills**: skill-authoring habits, fix-the-skill-first, proposing new skills.
 
-Read **poteto-mode** for granularity. Do not copy its content.
+The **poteto-mode** skill shows the shape. Read it for granularity. Don't copy its content. The user's rules are not the same as poteto-mode's.
 
 ### 4. Draft the skill
 
-Load and follow the bundled `create-skill` skill.
+Use the bundled `create-skill` skill to author the skill. Placement:
 
-For an existing mode, preserve its project or user location. For a new project mode, use `.pi/skills/<handle>/<handle>-mode/SKILL.md` when a personal category exists. Otherwise use `.pi/skills/<handle>-mode/SKILL.md`. Use `.agents/skills/` only when project policy selects that location. For a user skill, use the matching user skill root after user approval.
-
-Use the user's chosen handle. Make the frontmatter description trigger on the handle, `/<handle>-mode`, and work in that user's style. Do not use generic triggers.
-
-Set `disable-model-invocation: true` by default. Change it only when the user explicitly wants automatic invocation.
+- Path: preserve an existing mode skill's category. For a new mode, use `.pi/skills/<handle>/<handle>-mode/SKILL.md` when the repo has an established personal category for that handle. Otherwise default to `.pi/skills/<handle>-mode/SKILL.md` in the project (or `~/.agents/skills/<handle>-mode/` if the user prefers a personal skill).
+- Handle: the user's first name or chosen identifier.
+- Frontmatter `description`: trigger on their name + `/<handle>-mode` + "work in their style", not on generic keywords like "write code" or "review PR".
+- Frontmatter formatting: follow `create-skill`'s YAML rules. Keep `description` as one YAML scalar. Quote it or use `description: >-` with indented continuation lines when punctuation or wrapping requires it.
+- Frontmatter `disable-model-invocation: true` by default. Opt out only if the user explicitly wants their mode to apply on every turn.
 
 ### 5. Iterate on prose
 
-Apply **unslop** and the writing guidance from `create-skill` to every line.
+Apply the **unslop** skill and `create-skill`'s writing guidelines to every line.
 
-Show the draft to the user and apply feedback. Keep the mode skill short and operational.
+Show the draft to the user and take feedback. Expect multiple iterations. Cut ruthlessly. A mode skill is not a manual.
 
 ### 6. Land it
 
-For a repository skill, work in an isolated branch or worktree from the repository's main branch. Commit and open one PR for review. Do not push directly to the main branch.
-
-For a user skill outside a repository, apply only after explicit approval. Report the final path and verification result.
+Work in a worktree off main. Commit and open a PR. Don't push to main directly.
 
 ## Guardrails
 
-- **Do not overfit one conversation.** Require repeated evidence or explicit confirmation.
-- **Do not restate other skills.** Reference them.
-- **Keep sections minimal.** Add only specific non-default rules.
-- **Use generic instruction nouns.** Use "the user" or "the human" in rules.
-- **Do not force symmetry.** Omit sections without real preferences.
+- **Don't overfit to one conversation.** A preference stated once and contradicted another time is noise. Require multiple instances before codifying it.
+- **Don't be clever.** Restating other skills' contents, inventing metaphors, or writing "poetic" prose for an agent reader is cost without benefit. Keep it operational.
+- **Reference, don't inline.** Other skills the user relies on should appear as path references, not pasted excerpts. Same for any principle docs they maintain elsewhere.
+- **Keep sections minimal.** Only add a section if the user has a specific, non-default rule there. "Communicate clearly" is not a section. "Short paragraphs. Tables when comparing options. Bullets only when items are genuinely parallel." is.
+- **Name conventions generic.** Use "the user" or "the human" in imperatives, not the author's first name.
+- **Don't force symmetry.** If a user has no process rules worth writing down, skip the Process section entirely.
 
 ## Evaluation
 
-A `-mode` skill is subjective. Ask whether the draft reads like the user and misses any important rule. Use a description optimization pass only after trigger accuracy fails in practice.
+A `-mode` skill is subjective output. A `create-skill`-style test/iterate benchmark loop isn't useful here. Vibe-check with the user: does it read like them? Did it miss anything? Then ship.
+
+Run a description-optimization loop only if the skill's trigger accuracy turns out to be a problem in practice.
 
 ## When not to use
 
-- For a task-specific skill, use `create-skill` without mode mining.
-- For one narrow workflow, create a regular skill.
+- User wants a task-specific skill (not working conventions): `create-skill` alone, no mining required.
+- User wants to capture one narrow workflow (e.g. "how I write commit messages"). That's a regular skill, not a mode skill.
 
-## References
-
-- **poteto-mode** for output granularity
-- **unslop** for prose discipline
-- The bundled `create-skill` skill for authoring and verification

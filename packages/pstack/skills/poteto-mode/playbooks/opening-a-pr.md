@@ -2,30 +2,8 @@
 
 Invoked at the end of every other playbook.
 
-**Worktree.** Follow Repository writer in [Task contracts](../references/task-contracts.md). The owner commits, pushes its own branch, and opens the PR from its linked worktree. Never publish synthetic snapshot history or reset unrelated work. If the destination contains unrelated changes, create a clean destination worktree without deleting the original. Release each linked worktree after its PR lands or closes with `scripts/release-worktree.sh <path>`.
+Work from a git worktree off trunk, and keep unrelated work out of it. Rebase into small, landable commits. Run `/deslop` over the diff before commit.
 
-**Commits.** Commit liberally. Rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit. New commit when separable. Commit bodies don't restate the subject.
+Title: `type(scope): subject`, naming a real symbol when one carries the change. Body: load the bundled `pr` skill from `../pr/SKILL.md` and follow its template and evidence rules.
 
-**PRs.** Run `/deslop` over the diff before commit and `/no-comments` before review. Write every PR title, description, and commit body with `/technical-writing` (every layer except Diátaxis, and apply the STE vocabulary rules: one word per action, keep articles, a plain verb over `-ing` where one works), then apply `/unslop`.
-
-**Titles.** Conventional Commits `type(scope): subject`, no trailing period. Type such as `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, or `perf`. Scope is the area, such as `pstack` or `poteto-mode`. Subject is short, imperative, and names a real symbol when one carries the change, for example `fix(pstack): retarget opening-a-pr babysit trigger`.
-
-**Descriptions.** Load the bundled `pr` skill from `../pr/SKILL.md` before you write or update a PR body. Follow its workflow, template, evidence rules, and screenshot reference for every PR body and PR media attachment. The `pr` skill owns the body structure. Do not add a separate pstack body template.
-
-Do not paste full SHAs, swarm or arena lane recitals, lever-correction essays, file-by-file checklists, or "CLEAN" verdicts. Put these details in a linked artifact. Use native `gh --attach` for local proof assets. Repeat `--attach` for each file, with a maximum of 50 files. Use `<file>#<alt text>` for image alt text, and quote the argument. Put a local Markdown reference in the body when placement matters. `gh` replaces that reference with the uploaded asset. It appends an asset that the body does not reference.
-
-Use `gh pr create --attach <file>` for a new independent PR. Use `gh pr edit <number> --attach <file>` for an existing or stacked PR. Use `gh pr comment <number> --attach <file>` for later evidence. `gh stack submit` does not accept `--attach`, so attach assets after submission. Do not use `--attach` with `--web` or `--dry-run` during creation.
-
-An upload can fail after a partial success. `gh` preserves successful uploads, prints a recoverable URL, and exits with a nonzero status. Inspect the PR before a retry so that the retry does not duplicate assets.
-
-**Size and stacks.** Prefer five narrow PRs to one large PR. Stack follow-ups through `../references/stack-backends.md`, and keep the ordered stack visible to reviewers. Never accumulate layers locally for a later split. Branch from main only for independent work. Rebase on `main` before substantial stack work.
-
-**Readiness.** Open every PR ready, never as a draft. Set `draft: false` on API or tool calls. Omit `--draft` from `gh pr create`. If a PR still opens as a draft, run `gh pr ready <number>`. Run `gh pr view <number>` before you refer to PR status.
-
-**Babysit.** Opening a PR alone does not authorize babysit.
-For ordinary publication, return the URL and continue the build until a separate user request starts babysit.
-In Autopilot-full or Autopilot-stack, an explicit lifecycle assignment authorizes the root to start babysit once the owner reports the PR URL.
-Follow `playbooks/babysit.md` for the active frontier and watcher ownership.
-Do not wait for unrelated PRs or the whole stack when that assignment already authorizes the loop.
-The root owns this lifecycle, not the owner.
-Push back when feedback drifts from intent.
+Stack follow-ups by base branch. Open PRs ready: use `gh pr create` without `--draft`. Opening a PR does not start a babysit.

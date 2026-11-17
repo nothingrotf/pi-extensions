@@ -10,17 +10,17 @@ Pass scope, design, evidence, and acceptance context inside `prompt`, never as i
 
 Set `Task.role` to the role whose model policy selected this worker. Keep `subagent_type` as the executable agent definition.
 
-Use the labels from `setup-pstack`, including `feature`, `refactoring`, `how explorer`, and `why synthesizer`. Split grouped configuration labels into the active role.
+Use the labels from `setup-pstack`, including `feature`, `refactoring`, `judgment and prose`, and `swarm workers`. Split grouped configuration labels into the active role.
 
-Use one entry of `arena cross-judge pool` for an independent second opinion and `swarm workers` for verification. The branch owner commits, pushes, and opens its own PR. Reserve `judgment and prose` for prose and evidence synthesis. For a complex workflow owner without another named policy, use `hardest tasks`. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
+Use one entry of `arena cross-judge pool` for an independent second opinion and `swarm workers` for verification. The branch owner commits, pushes, and opens its own PR. Reserve `judgment and prose` for prose and evidence synthesis. A workflow owner uses the implementation role of the work it owns, `feature` by default. Repository implementation keeps its active `feature`, `bug-fix`, `refactoring`, `perf-issue`, or `hillclimb` policy.
 
 Set an exact `role` and `capability_profile` on every pstack Task, including inherited selections. Use `pstack-leaf` for leaves and `pstack-nested` for delegating owners. Registered pstack agents default to `pstack-leaf`.
 
-The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a parsed runtime policy to root and nested context. Do not rely on an `alwaysApply` loader or copy raw file text into prompts. Omit `model` for scalar roles to use the configured selector. Configured selectors are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution.
+The pstack extension loads `~/.agents/rules/pstack-models.md` and supplies a parsed runtime policy to root and nested context. Do not rely on an `alwaysApply` loader or copy raw file text into prompts. Omit `model` for a role with one selector to use it. When a role lists several effort levels, pass the entry the job needs. Configured selectors are mandatory, including effort and fast mode. An explicit selector outside the configured choices fails before execution.
 
 For a panel or pool with distinct choices, pass the selected entry explicitly, including `model: "inherit-parent"` or `model: "auto"` for an inherited entry. Never silently use the first entry. Identical choices may omit `model`. The skill determines counts; the runtime never creates a panel or fans out.
 
-Missing files and unconfigured documented roles fall back to the agent default, then the parent. Unknown or missing dispatch roles fail for pstack capabilities. Configuration shorthand `divergent` and `synthesizer` expands to `reflect divergent` and `reflect synthesizer`; Task roles always use the full names. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
+Missing files and unconfigured documented roles fall back to the agent default, then the parent. Unknown, retired, or missing dispatch roles fail for pstack capabilities. Retired configuration rows have no runtime effect. Duplicate keys or malformed files block fresh pstack dispatches even with an explicit override. Unrelated Tasks remain unaffected.
 
 For different-family reviews, choose a configured entry from another family than the implementation model. Independent context alone does not provide model-family diversity. If no permitted model meets the requirement, return `BLOCKED` and request a policy update. Review and verification pools supply availability, not fanout. Select one reviewer for bounded work. Unconfigured roles allow explicit models before the agent default and parent fallback. Unavailable models and unsupported effort or fast settings fail selection.
 
@@ -28,7 +28,7 @@ The extension refreshes the policy before each root prompt and root `Task` call 
 
 Choose effort from the configured role policy, not the apparent importance of its title.
 Before proposing higher effort, identify the unresolved reasoning failure and rule out missing context, unavailable tools, and environment failures.
-Keep the active role when escalating implementation, review, or verification; never relabel that work as `hardest tasks` to bypass policy.
+Keep the active role when escalating implementation, review, or verification; never relabel that work as another role to bypass policy.
 If the role permits no suitable selector, request a policy update instead of silently increasing effort.
 A changed selector requires a fresh agent with the retained brief, artifact, harness, and evidence.
 
@@ -50,8 +50,8 @@ If a script fails after earlier calls execute, inspect the retained results inst
 
 For routed `generalPurpose` workers, pass `capability_profile: "pstack-leaf"`. This adds planning tools without shell access to read-only workers.
 
-Run `how` and `why` inside the current owner with `pstack-leaf` by default. Neither workflow requires delegation for ordinary investigation.
-If an owner must execute `architect` or another explicitly delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
+`how` dispatches one read-only explainer, and `why` runs in the current session. An owner that runs `how` needs `pstack-nested`. A `pstack-leaf` worker without `Task` writes the explanation itself.
+If an owner must execute `arena` or another explicitly delegating workflow, pass `capability_profile: "pstack-nested"`. The profile permits three Task levels.
 
 Check the remaining depth before composing owners. A three-level budget cannot support an arbitrary chain of owners before its leaf workers. When a routed workflow needs more levels, return that workflow to the root coordinator for a fresh dispatch.
 
@@ -62,14 +62,14 @@ A leaf must not silently skip a required delegation. Return the missing capabili
 Neither profile grants `session_history`, MCP, Loop, or ambient source tools. The root coordinator collects external evidence and supplies bounded bundles before delegation. Owners that need unavailable evidence return a blocker with the required queries. Never impersonate the root through advisory intercom.
 
 Use the canonical skill location supplied by the registered pstack agent. Never search unrelated directories or substitute a discarded skill copy.
-Scoped workers read `worker.md` and their assigned workflow. Full coordinators read `../SKILL.md`.
+Every agent reads `../worker.md` first. A `poteto-agent` then reads `../SKILL.md` in full.
 Reuse unchanged readings within the same session when policy permits. Preserve explicit requirements to reread.
 
 ## Repository writer
 
 Create a linked worktree on the issue branch before dispatch, such as `git worktree add -b <branch> <path> <base>`. Prepare its dependencies per the repository's setup.
 Create the worktree in one tool call and dispatch the owner in a later call. A Task in the same parallel batch can start before the worktree exists.
-Reuse that worktree across correction rounds. After the PR lands or closes, release it with `scripts/release-worktree.sh <path>` from the poteto-mode skill.
+Reuse that worktree across correction rounds. After the PR lands or closes, remove it with `git worktree remove <path>`.
 
 Dispatch the owner in place there. A mutable Task with its `cwd` in a linked worktree outside the session repository runs in place by default.
 It commits, pushes its own branch, and opens its PR per Opening a PR. Its writes stay in the worktree without a join.
@@ -100,7 +100,7 @@ A writer that does not publish, such as an arena candidate, can run in a private
   "description": "Sketch one candidate design",
   "prompt": "Read the brief. Build the candidate in the effective workspace. Return the diff and evidence.",
   "subagent_type": "poteto-agent",
-  "role": "architect runners",
+  "role": "arena runners",
   "model": "<one configured entry>",
   "capability_profile": "pstack-leaf",
   "run_in_background": true,

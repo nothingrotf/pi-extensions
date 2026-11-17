@@ -33,7 +33,7 @@ describe('pstack model policy parser', () => {
     if (parsed.status !== 'valid') throw new Error(parsed.error)
     expect(parsed.roles).toHaveLength(pstackRoles.length)
     expect(parsed.roles.every((entry) => entry.selectors.length > 0)).toBe(true)
-    expect(parsed.roles.find((entry) => entry.role === 'reflect divergent')?.selectors).toEqual([
+    expect(parsed.roles.find((entry) => entry.role === 'swarm workers')?.selectors).toEqual([
       'inherit-parent',
     ])
   })
@@ -99,35 +99,64 @@ describe('pstack model policy parser', () => {
     )
   })
 
-  it('accepts legacy how critics configuration without publishing the obsolete role', () => {
+  it('accepts retired workflow roles without publishing them', () => {
     const parsed = parsePstackModelPolicy(
-      'how critics: inherit-parent, provider/model:high\nhow explorer: inherit-parent',
+      [
+        'how critics: inherit-parent, provider/model:high',
+        'hardest tasks: provider/model:max',
+        'how explorer, how explainer: inherit-parent',
+        'why investigators, why synthesizer: auto',
+        'reflect tooling: inherit-parent',
+        'reflect judgment, divergent, synthesizer: inherit-parent',
+        'architect runners: inherit-parent, provider/model:high',
+        'swarm workers: inherit-parent',
+      ].join('\n'),
     )
     expect(parsed.status).toBe('valid')
     if (parsed.status !== 'valid') throw new Error(parsed.error)
-    expect(parsed.roles).toHaveLength(pstackRoles.length)
-    expect(parsed.roles.some((entry) => entry.role === 'how critics')).toBe(false)
-    expect(parsed.roles.find((entry) => entry.role === 'how explorer')?.selectors).toEqual([
+    expect(parsed.roles.map((entry) => entry.role)).toEqual(pstackRoles.map((entry) => entry.role))
+    for (const role of [
+      'how critics',
+      'hardest tasks',
+      'how explorer',
+      'reflect divergent',
+      'architect runners',
+    ])
+      expect(() => selectCapabilityModel([parsed], role, undefined)).toThrow(
+        'Unknown model policy role',
+      )
+    expect(parsed.roles.find((entry) => entry.role === 'swarm workers')?.selectors).toEqual([
       'inherit-parent',
     ])
   })
 
+  it('lets an implementation role list effort levels for explicit selection', () => {
+    const low = 'provider/model:low'
+    const high = 'provider/model:high [fast]'
+    const policy = parsePstackModelPolicy(`feature: ${low}, ${high}`)
+    expect(policy.status).toBe('valid')
+    expect(() => selectCapabilityModel([policy], 'feature', undefined)).toThrow('distinct choices')
+    expect(selectCapabilityModel([policy], 'feature', high)).toBe(high)
+    expect(() => selectCapabilityModel([policy], 'feature', 'provider/model:xhigh')).toThrow(
+      'outside configured selectors',
+    )
+  })
+
   it.each([
-    'how explorer: ',
-    'how explorer: auto, inherit-parent',
+    'swarm workers: ',
     'arena runners: auto,',
     'arena runners: ,auto',
     'feature, feature: auto',
     'reflect divergent: auto\ndivergent: auto',
     'reflect judgment, divergent, synthesizer: auto\nreflect synthesizer: auto',
     'missing role: auto',
-    'how explorer: auto [fast]',
-    'how explorer: provider/model:high [ultra]',
-    'how explorer: provider/model:high [fast] [ultrafast]',
-    'how explorer: provider/model:ultra',
-    'how explorer: provider/model:off [fast] trailing',
-    'how explorer: provider/<instructions>:off',
-    `how explorer: provider/${'a'.repeat(1024)}:off`,
+    'swarm workers: auto [fast]',
+    'swarm workers: provider/model:high [ultra]',
+    'swarm workers: provider/model:high [fast] [ultrafast]',
+    'swarm workers: provider/model:ultra',
+    'swarm workers: provider/model:off [fast] trailing',
+    'swarm workers: provider/<instructions>:off',
+    `swarm workers: provider/${'a'.repeat(1024)}:off`,
     'x'.repeat(65537),
   ])('rejects malformed or duplicate configuration (%s)', (content) => {
     expect(parsePstackModelPolicy(content).status).toBe('invalid')
@@ -137,7 +166,7 @@ describe('pstack model policy parser', () => {
     const rendered = renderPstackModelPolicy(parsePstackModelPolicy('feature: inherit-parent'))
     expect(rendered).toContain('feature: inherit-parent')
     expect(rendered).toContain(
-      'how explorer: unconfigured; agent default then parent; skill owns count',
+      'swarm workers: unconfigured; agent default then parent; skill owns count',
     )
     expect(rendered).not.toContain('inherit-parent (unconfigured')
     expect(rendered).toContain('use one entry of arena cross-judge pool')
@@ -148,11 +177,11 @@ describe('pstack model policy parser', () => {
 
   it('ignores metadata and comments rather than injecting raw policy text', () => {
     const parsed = parsePstackModelPolicy(
-      `---\ndescription: RAW_METADATA_SENTINEL\nalwaysApply: true\n---\n# RAW_COMMENT_SENTINEL\nhow explorer: ${scalar}\n`,
+      `---\ndescription: RAW_METADATA_SENTINEL\nalwaysApply: true\n---\n# RAW_COMMENT_SENTINEL\nswarm workers: ${scalar}\n`,
     )
     expect(parsed.status).toBe('valid')
     const rendered = renderPstackModelPolicy(parsed)
-    expect(rendered).toContain(`how explorer: ${scalar}`)
+    expect(rendered).toContain(`swarm workers: ${scalar}`)
     expect(rendered).not.toContain('RAW_METADATA_SENTINEL')
     expect(rendered).not.toContain('RAW_COMMENT_SENTINEL')
     const invalid = renderPstackModelPolicy(parsePstackModelPolicy('RAW_INVALID_SENTINEL'))
@@ -165,7 +194,7 @@ describe('pstack model policy parser', () => {
         '---',
         'description: models',
         '---',
-        `how explorer: ${scalar}`,
+        `judgment and prose: ${scalar}`,
         '<!--feature: not a selector-->',
         '<!--',
         'hillclimb: not a selector',
@@ -179,7 +208,7 @@ describe('pstack model policy parser', () => {
       scalar,
     ])
     expect(parsed.roles.find((entry) => entry.role === 'hillclimb')?.selectors).toEqual([])
-    expect(parsePstackModelPolicy(`<!--\nhow explorer: ${scalar}\n`)).toEqual({
+    expect(parsePstackModelPolicy(`<!--\nswarm workers: ${scalar}\n`)).toEqual({
       status: 'invalid',
       error: 'pstack-models.md line 1 opens an unterminated comment.',
     })
@@ -195,15 +224,15 @@ describe('pstack model policy parser', () => {
       await mkdir(path)
       expect((await loadPstackModelPolicy({ modelPolicyPath: path })).status).toBe('invalid')
       await rm(path, { recursive: true })
-      await writeFile(path, `how explorer: ${scalar}`)
+      await writeFile(path, `swarm workers: ${scalar}`)
       expect(await loadPstackModelPolicy({ modelPolicyPath: path })).toEqual(
-        parsePstackModelPolicy(`how explorer: ${scalar}`),
+        parsePstackModelPolicy(`swarm workers: ${scalar}`),
       )
       const previous = process.env['PSTACK_MODEL_POLICY']
       process.env['PSTACK_MODEL_POLICY'] = path
       try {
         expect(await loadPstackModelPolicy()).toEqual(
-          parsePstackModelPolicy(`how explorer: ${scalar}`),
+          parsePstackModelPolicy(`swarm workers: ${scalar}`),
         )
       } finally {
         if (previous === undefined) delete process.env['PSTACK_MODEL_POLICY']
@@ -217,7 +246,7 @@ describe('pstack model policy parser', () => {
 
 describe('generic capability model policy boundary', () => {
   it('decodes, snapshots and resolves policy through the existing registration', () => {
-    const policy = parsePstackModelPolicy(`how explorer: ${scalar}`)
+    const policy = parsePstackModelPolicy(`swarm workers: ${scalar}`)
     const publication = decodeCapabilityPublication({
       sourceId: 'fixture',
       registrations: [
@@ -230,11 +259,11 @@ describe('generic capability model policy boundary', () => {
     registry.registerProfiles([{ id: 'fixture', registrations: ['policy'] }])
     registry.registerCapabilities(publication.registrations)
     if (policy.status === 'valid') {
-      const entry = policy.roles.find((role) => role.role === 'how explorer')
+      const entry = policy.roles.find((role) => role.role === 'swarm workers')
       if (entry !== undefined) entry.selectors = ['auto']
     }
     const resolved = registry.resolve('fixture')
-    expect(selectCapabilityModel(resolved.modelPolicies, 'how explorer', undefined)).toBe(scalar)
+    expect(selectCapabilityModel(resolved.modelPolicies, 'swarm workers', undefined)).toBe(scalar)
     expect(registry.resolve(undefined).modelPolicies).toEqual([])
   })
 

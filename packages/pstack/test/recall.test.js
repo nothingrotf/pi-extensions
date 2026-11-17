@@ -24,16 +24,15 @@ describe('recall', () => {
       'pi-session://',
     ])
       expect(port).toContain(value)
-    expect(port).toContain('Keep the current session and child sessions excluded.')
+    expect(port).toContain('skip the current session plus obvious noise')
     expect(port).toContain('`view: "audit"`')
   })
 
   it('keeps evidence collection with the parent', () => {
     const port = skill()
-    expect(port).toContain('parent prepares bounded evidence slices')
-    expect(port).toContain('`readonly: true`')
-    expect(port).toContain('do not receive physical session paths or ambient source tools')
-    expect(port).toContain('Do not treat an assistant statement as proof.')
+    expect(port).toContain('A `Task` child has no `session_history`')
+    expect(port).toContain('A `Task` child does not inherit MCP or extension tools')
+    expect(port).toContain('`capability_profile: "pstack-leaf"`')
   })
 
   it('contains no Cursor transcript assumptions', () => {

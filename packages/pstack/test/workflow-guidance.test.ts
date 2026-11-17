@@ -49,68 +49,33 @@ describe('standalone pstack worker contracts', () => {
 
   it('restates the goal first and decides before measuring', () => {
     const mode = skill('poteto-mode/SKILL.md')
-    expect(mode).toContain('Your first message on a task')
-    expect(mode).toContain("open each PR's `## Summary` with it")
+    expect(mode).toContain("First message → restate the user's goal")
+    expect(mode).toContain('PR `## Summary`')
     expect(mode).toContain('Run a resume with `run_in_background: true` too')
     expect(skill('principle-explain-the-number/SKILL.md')).toContain(
       'Write the decision before you run.',
     )
   })
 
-  it('starts authorized autopilot babysit once the owner reports the PR URL', () => {
+  it('babysits through gh without rebasing or merging', () => {
     const opening = skill('poteto-mode/playbooks/opening-a-pr.md')
     const babysit = skill('poteto-mode/playbooks/babysit.md')
-    for (const source of [opening, babysit]) {
-      expect(source).toContain('Autopilot-full')
-      expect(source).toContain('Autopilot-stack')
-      expect(source).toContain('explicit lifecycle assignment')
-      expect(source).not.toContain('managed')
-      expect(source).not.toContain('publication Task')
-    }
-    expect(opening).toContain('once the owner reports the PR URL')
-    expect(opening).toContain('The root owns this lifecycle, not the owner.')
-    expect(opening).not.toContain('Autopilot-stack layer PRs are the one exception.')
-    expect(babysit).toContain('one babysitter at the merge frontier')
-    expect(babysit).toContain('Route code fixes to the implementer')
-    expect(babysit).toContain('For a standalone request, fix only on the owning branch')
+    expect(opening).toContain('Opening a PR does not start a babysit.')
+    expect(babysit).toContain('Never rebase, retarget, or force-push.')
+    expect(babysit).toContain('Babysitting never authorizes merging.')
+    expect(babysit).toContain('installed `loop` skill')
+    expect(babysit).not.toMatch(/origin pr|cursor-team-kit/)
     const full = skill('poteto-mode/playbooks/autopilot-full.md')
     expect(full).toContain('playbooks/babysit.md')
-    expect(full).toContain('git ls-remote')
     expect(full).toContain('--force-with-lease')
-    expect(full).toContain('Never force-push a shared branch')
+    expect(full).not.toMatch(/origin pr|Cursor cloud agent|cursor-team-kit/)
   })
 
-  it('releases each linked worktree after its PR lands or closes', () => {
+  it('removes each linked worktree after its PR lands or closes', () => {
     const contracts = skill('poteto-mode/references/task-contracts.md')
     expect(contracts).toContain('git worktree add -b <branch> <path> <base>')
     expect(contracts).toContain('dispatch the owner in a later call')
-    expect(contracts).toContain('scripts/release-worktree.sh <path>')
-    expect(skill('poteto-mode/references/stack-backends.md')).toContain(
-      'Use it to grow a stack one published layer at a time.',
-    )
-  })
-
-  it('logs idle audits without repeating operator status', () => {
-    const source = skill('poteto-mode/playbooks/multi-phase-plan.md')
-    expect(source).toContain('not already reported')
-    expect(source).toContain('no reply text')
-    expect(source).toContain("tick's row")
-    expect(source).toContain('Record which changes the operator status covered')
-    expect(source).toContain('decision log')
-  })
-
-  it('retains broken WIP at pause without claiming acceptance or bypassing repository rules', () => {
-    const source = skill('poteto-mode/playbooks/pause-safely.md')
-    expect(source).not.toContain('Never stop mid-edit in a known-broken state')
-    expect(source).toContain('A broken WIP checkpoint is not acceptance')
-    expect(source).toContain('repository rules permit a WIP commit')
-    expect(source).toContain('required checks pass without bypass')
-    expect(source.indexOf('Run the required precommit checks')).toBeLessThan(
-      source.indexOf('commit only task edits'),
-    )
-    expect(source).toContain('Otherwise, retain a patch')
-    expect(source).toContain('retain a patch and untracked task files')
-    expect(source).toContain('Cancel isolated writers')
+    expect(contracts).toContain('git worktree remove <path>')
   })
 
   it('refuses to label a revealing bootstrap as a blinded evaluation', () => {

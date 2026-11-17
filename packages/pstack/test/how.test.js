@@ -5,36 +5,28 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vite-plus/test'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const skillRoot = join(packageRoot, 'skills', 'how')
 
-function text(path) {
-  return readFileSync(path, 'utf8')
+function text(...path) {
+  return readFileSync(join(packageRoot, 'skills', ...path), 'utf8')
 }
 
 describe('how', () => {
-  it('uses Pi tools and Task model selectors', () => {
-    const port = [
-      text(join(skillRoot, 'SKILL.md')),
-      text(join(skillRoot, 'references', 'explorer-prompt.md')),
-      text(join(skillRoot, 'references', 'explainer-prompt.md')),
-    ].join('\n')
-    expect(port).toContain('provider/model-id:effort [fast]')
-    expect(port).toContain('`find`')
-    expect(port).toContain('`grep`')
-    expect(port).toContain('`read`')
-    expect(port).not.toMatch(/grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
-    expect(port).not.toContain('Use Glob')
-    expect(port).not.toContain('Use Read, Grep, and Glob')
+  it('dispatches one read-only explainer through an active policy role', () => {
+    const skill = text('how', 'SKILL.md')
+    expect(skill).toContain('`role: "judgment and prose"`')
+    expect(skill).toContain('`capability_profile: "pstack-leaf"`')
+    expect(skill).toContain('`readonly: true`')
+    expect(skill).toContain('without `Task` access, explore and write the explanation yourself')
+    expect(skill).not.toMatch(/how explorer|how explainer|claude-fable|claude-opus-5/)
   })
 
-  it('keeps inherited model aliases outside concrete selectors', () => {
-    const setup = text(join(packageRoot, 'skills', 'setup-pstack', 'SKILL.md'))
-    expect(setup).toContain('provider/model-id:effort [fast]')
-    expect(setup).toContain('how explorer: inherit-parent')
+  it('writes only active roles in the setup example', () => {
+    const setup = text('setup-pstack', 'SKILL.md')
     const policy = setup.match(/```text\n([\s\S]*?)\n```/)?.[1]
-    expect(policy).toBeDefined()
-    expect(policy).not.toContain('how critics')
+    expect(policy).toContain('swarm workers: inherit-parent')
+    expect(policy).not.toMatch(
+      /how critics|how explorer|why synthesizer|reflect|architect runners|hardest tasks/,
+    )
     expect(setup).toContain('Scalar dispatches can omit `Task.model`')
-    expect(setup).not.toMatch(/grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5/)
   })
 })

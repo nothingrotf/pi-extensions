@@ -33,7 +33,7 @@ describe('pstack executable Task contracts', () => {
     })
     expect(isolated).toMatchObject({
       isolation: { integration: 'apply', mode: 'worktree' },
-      role: 'architect runners',
+      role: 'arena runners',
       subagent_type: 'poteto-agent',
     })
     expect(verifier).toMatchObject({

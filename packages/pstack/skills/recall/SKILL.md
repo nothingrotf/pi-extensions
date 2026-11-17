@@ -6,29 +6,30 @@ disable-model-invocation: true
 
 # Recall
 
-**Before you start or resume work, rebuild the user's recent working context. Return a tight capsule of the current state and next action.**
+**Before you start or resume work, you rebuild the user's recent working context and hand back a tight capsule of where things stand now and what to do next.**
 
-Keep it tight and on-topic. Read only what the in-scope threads need, then stop. The heavy review can fan out to parallel read-only subagents. The main thread keeps only findings and the final brief.
+Keep it tight and on-topic. Read only what the in-scope threads need, then stop.
 
-Context lives in two records. Project-scoped Pi session history holds prior work and decisions. The shared record holds related reports, fixes, incidents, and current errors. The **why** skill searches the shared record through parent-owned source tools.
+Your context lives in two records. Your own chat history holds what you did and decided. The shared record holds everything that happened around the same code under other names: the symptoms users keep reporting, the fixes that shipped and got reverted, the errors still firing in prod. That second record lives in source control, the issue tracker, chat and issue channels, long-form docs, and error tracking. A feature with a long bug tail keeps most of its story there, so don't reconstruct it from your transcripts alone.
 
-1. Classify, then route. One specific prior chat to resume belongs to the `session-pickup` playbook. Turning habits into a durable skill belongs to `automate-me`. Recall loads context across recent sessions. If the user supplied a complete state capsule, use it and skip the mining.
-2. Lock the scope before searching. Pin the time window, topic, and workspace. The default window is seven days. The default workspace is the active project. State the scope. Never turn "all" into a recent subset.
-3. Search project sessions. Use `session_history` `list` and `search`. Keep the current session and child sessions excluded. Order sessions by returned modification time, not by identifier. Search the topic first. Use bounded `read` calls with `view: "audit"` only for relevant regions. Use `timeline` for flow and `tool_activity` for command evidence. Preserve each `pi-session://` reference. If `session_history` is unavailable, return `BLOCKED`.
-4. Fan out only when the result set is large. The parent prepares bounded evidence slices. Spawn parallel `Task` children with `subagent_type: "generalPurpose"` and `readonly: true`. Pass `role: "judgment and prose"` and `capability_profile: "pstack-leaf"`. Resolve the configured model through [Task contracts](../poteto-mode/references/task-contracts.md). Children analyze supplied evidence only. They do not receive physical session paths or ambient source tools. Each returns one block per session: topic, user goal, decisions, open threads, struggles, corrections, and artifacts. Require stable session references. For one or two sessions, analyze directly.
-5. Sweep the shared record whenever the topic names a feature, file, subsystem, area, or bug. Use the **why** skill with this question: "What is the current state, what failed before, and what do users still report?" Run this sweep in parallel with session review. Preserve its source gaps and citations. Skip it only for pure activity recall without a named target.
-6. Verify against live state. History is not current truth. Check surfaced pull requests, branches, and tickets with available parent tools such as `git`, `gh`, and issue tools. Use recorded `tool_activity` results when the answer depends on prior execution. Do not treat an assistant statement as proof.
-7. Write the brief to the contract below. Group by thread. Stay on the named topic.
+Your chat history lives in project-scoped Pi sessions. Read it with `session_history` (`list`, `search`, `timeline`, `tool_activity`, and `read` with `view: "audit"`), and cite each session by its `pi-session://` reference.
+
+1. Classify, then route. One specific prior chat to resume is the `session-pickup` playbook, not this. Turning habits into a durable skill is `automate-me`. A human-readable summary of your work is a different task. Recall loads working context across recent chats before you act. If the user already gave you a full state capsule (paths, branch, the change), use it and skip the mining.
+2. Lock the scope before searching. Pin the window ("recent" is a real range, default the last 7 days), the topic if named, and the workspace (default the active one. Never read another project's sessions without being asked). State the scope back. Never quietly turn "all" into "recent N".
+3. Fan out across your chat history. A `Task` child has no `session_history`, so you order candidates by real modification time, never by identifier, search the topic first, and skip the current session plus obvious noise (child, eval, and test sessions). Then spawn parallel read-only subagents with `subagent_type: "generalPurpose"`, `role: "judgment and prose"` at its lowest configured level, and `capability_profile: "pstack-leaf"`, each taking a bounded slice of only the matching sessions and their relevant regions. Each returns the same schema, one block per chat: topic, the user's goal, decisions, open threads, struggles and corrections, and artifacts (PRs, tickets, branches), each citing the `pi-session://` reference. For one or two sessions, skip the fan-out and search directly. The raw sessions stay in the subagents. The main thread gets only their findings. Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill.
+4. Sweep the shared record whenever the topic names a feature, file, subsystem, area, or bug. This is the default, not a judgment call, and "my work on X" does not exempt it. Use one investigator per source. A `Task` child does not inherit MCP or extension tools, so you run each source's queries with your own tools and hand the bounded results to one read-only investigator subagent per source, asking "what's the current state, what's been tried and didn't hold, and what are users still reporting". Run them in parallel with the chat-history mining. Null results are findings. Skip an unavailable source and say so. Fold what comes back into the brief. Skip this step only for pure activity recall with no named target ("what did I do this week"), where your own history and live state are the entire answer.
+5. Verify against live state. Take the PRs, branches, and tickets that the mining and the sweep surfaced and check them with `git` and `gh`. When the answer hinges on what an agent actually did (the tools it ran, files it read, errors it hit), read the full session through `session_history`, not just a trimmed summary.
+6. Write the brief to the contract below. Group by thread. Stay on the named topic.
 
 ## Output contract
 
-Lead with the capsule, then thread status, problems, and the next move.
+Lead with the capsule, then the thread status, then the problems, then the next move. Deeper detail goes below or gets cut.
 
-- **Capsule.** Use at most five bullets. State what the work is and where it stands.
-- **Threads.** Prefix each line with `[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, `[verified, uncommitted]`, `[reverted #N]`, or `[planned, not started]`.
-- **Problems.** Use at most five recurring problems. Include recurring symptoms and reverted fixes.
-- **Next move.** State the single most useful concrete action.
+- **Capsule.** At most 5 bullets. What this work is and where it stands overall.
+- **Threads.** One line each, prefixed with exactly one status tag: `[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, `[verified, uncommitted]`, `[reverted #N]`, or `[planned, not started]`. A thread with no tag is not done yet, so tag it.
+- **Problems.** At most 5, the recurring ones. Include the symptoms users keep reporting and any fix that shipped and was reverted, so the next attempt starts where the last one failed.
+- **Next move.** The single most useful next action, concrete.
 
-Exclude adjacent work unless it blocks the named topic. Cut detail before you cut threads. Apply the **unslop** skill. Cite session findings with `pi-session://` references. Cite shared-record findings with their source identifiers. Sanitize private context before public output.
+An adjacent feature or ticket stays out unless it blocks this one. When the capsule and thread lines outgrow a screen, cut detail before you cut threads. Write the brief through the **unslop** skill, cite chat findings by `pi-session://` reference and shared-record findings by their source (PR #, ticket ID, chat permalink, error-tracker issue), and sanitize private context before any public output.
 
 **Reply:** the brief, to the contract above.

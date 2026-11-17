@@ -101,14 +101,9 @@ describe('show-me-your-work', () => {
   it('scopes append-only audits to identified session runs', () => {
     const skill = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8')
     expect(skill).toContain('A run is one Pi session')
-    expect(skill).toContain(
-      "Before the first row, resolve this run's stable `pi-session://` reference",
-    )
-    expect(skill).toContain('recorded reference supplied by the parent')
-    expect(skill).toContain('keep a separate log until the parent binds it')
-    expect(skill).toContain('Do not append to a shared log without that identity')
+    expect(skill).toContain('by its `pi-session://` reference from `session_history`')
     expect(skill).toContain('phase `start`')
-    expect(skill).toContain('Never edit or remove a row during the audit')
+    expect(skill).toContain('The audit never edits or removes a row')
     expect(skill).toContain("this run's rows")
     expect(skill).not.toContain('Cut invented or aspirational entries')
     expect(skill).not.toContain('Drop padding')
