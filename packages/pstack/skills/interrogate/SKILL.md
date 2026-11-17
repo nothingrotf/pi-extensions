@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Interrogate
 
-Adversaries try to break a change or a design. A finding survives only when a run proves it. Report the findings. Do not apply fixes. After you present them, wait for explicit user approval before any fix work.
+Adversaries try to break a change or a design. A finding survives only when a run proves it. Report the findings. Do not apply fixes.
 
 ## Frame
 
@@ -16,8 +16,8 @@ The scope is what the user names. Otherwise it is the branch diff from its merge
 
 Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispatch. Run Phase A steps 3 and 4 and Phase B of the **arena** skill, with these changes:
 
-- Read the parsed `interrogate reviewers` runtime policy in place of `arena runners`. It is an availability pool. Never launch one adversary per list entry. Run TWO distinct, independently executed adversaries by default, and prefer distinct configured models. Use more only when the user gives an explicit count or when you state a concrete coverage justification before dispatch. If the role is absent, run exactly two inherited adversaries. There is no four-adversary inherited fallback.
-- Concrete configured models use `provider/model-id:effort [fast]`. Never invent or substitute an unconfigured selector. Pass each selected entry explicitly when the pool has distinct choices, including `inherit-parent` or `auto`. If Pi rejects a selected concrete model, mark that adversary `BLOCKED`, report the invalid configuration, and continue with the rest.
+- Read the parsed `interrogate reviewers` runtime policy in place of `arena runners`. One adversary runs per entry, so the list length sets the count. If the role is absent, run three adversaries on the parent model.
+- Each adversary passes its entry as `Task.model`, including `inherit-parent` or `auto`. A rejected selector follows arena step 3.
 - Dispatch each adversary with `role: "interrogate reviewers"`, `capability_profile: "pstack-leaf"`, `subagent_type: "generalPurpose"`, `readonly: false`, `run_in_background: true`, and `isolation: { mode: "worktree", integration: "manual" }`. Set its `cwd` to the checkout that holds the scope, so its private worktree carries the uncommitted changes. Never join its incidental patch.
 - In place of the arena task and rationale, give each adversary the scope, the intent, and this brief:
 
@@ -25,13 +25,12 @@ Read [Task contracts](../poteto-mode/references/task-contracts.md) before dispat
 
 ## Verify
 
-Verify each finding per arena Phase F by rerunning its command against the scope. Keep a finding when the output shows the failure and the failure breaks the intent. Drop the rest. Merge findings that share a root cause.
+Verify each finding per arena Phase F by rerunning its command. Keep a finding when the output shows the failure and the failure breaks the intent. Drop the rest. Merge findings that share a root cause.
 
 Skip arena Phases C, D, and E. Adversaries find different failures, so the verdict keeps every verified finding, not one adversary's list.
 
 ## Output
 
 - **Intent**: the restatement.
-- **Adversaries**: each adversary's model, its finding count, and any `BLOCKED` seat.
 - **Findings**: for each verified finding, the command, its output, how it breaks the intent, and the adversaries that found it. Say "no verified findings" when none survive.
 - **Dropped**: for each adversary, the count of dropped findings and why.

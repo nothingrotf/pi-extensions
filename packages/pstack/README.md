@@ -142,7 +142,6 @@ The Pi port adapts these commits:
 - A fix round, a follow-up, a retry, and the next queue item go to a fresh agent with consolidated scope.
 - Autopilots arm `/loop 1h` with event watchers instead of `/goal`.
 - Each owner works in place in a linked worktree on its own branch, so it pushes and opens its own PR.
-- The root removes each linked worktree after its PR lands or closes with `scripts/release-worktree.sh`.
 - The built-in PR tool rule is omitted because Pi has no built-in PR tool.
 - The guide, the swarm respawn wording, and the plain-words autonomy default have no local counterpart.
 
@@ -242,8 +241,8 @@ These upstream changes through [#1043](https://github.com/cursor/plugins/pull/10
 The Pi port adapts or omits these parts:
 
 - The `statechart` package test runs the upstream `node:test` suite with `fast-check` from the package development dependencies. TLC cases skip when neither `TLA2TOOLS` nor mise can supply TLC.
-- `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation. The skill keeps two adversaries by default and never substitutes an unconfigured model.
-- `arena` drops a rejected runner seat and marks a rejected judge `BLOCKED` instead of the upstream chain of model fallbacks. The upstream fallback chain for rejected slugs in `poteto-mode` has no counterpart.
+- `interrogate` adversaries run as `interrogate reviewers` with `pstack-leaf` and manual worktree isolation, one per configured entry.
+- `arena` falls back across configured Pi selectors instead of the upstream chain of Cursor slugs.
 - PRs open their `## Summary` with the user's goal, because the `pr` template has no `## Why` heading.
 - `poteto-help`, the guide, the Claude Code harness tree, and the version bumps have no local counterpart.
 
@@ -254,14 +253,15 @@ These upstream changes through [#1249](https://github.com/cursor/plugins/pull/12
 
 The Pi port adapts or omits these parts:
 
-- The upstream operator rules join `references/worker.md`, which `poteto-agent` already loads. A separate `worker.md` would load the same contract twice.
+- `poteto-mode/worker.md` holds the upstream operator rules. Its PR body rule points to the bundled `pr` skill.
 - `how` dispatches its explainer as `judgment and prose` with `pstack-leaf`. A leaf without `Task` writes the explanation itself.
 - Every role accepts a list of selectors. A list of effort levels lets the coordinator match the level to the job, as the upstream Subagents section asks. With one selector, the coordinator omits `Task.model`.
 - `reflect` recovers compacted turns with `compact_recall` and child sessions with `session_history`. It copies a skill out of `~/.pi/agent/npm/` before an edit.
 - The parser accepts retired role lines without effect, so existing policy files stay valid. Task calls with a retired role fail.
 - The Cursor model slugs, the `/setup-pstack` budget ladder, and the Opus `-fast` rule have no counterpart. Pi selectors carry effort and the `[fast]` or `[ultrafast]` marker directly.
-- `opening-a-pr` keeps the bundled `pr` skill for the body and the stack backends for follow-ups. Origin's CLI has no counterpart.
-- Multi-phase plans default to `~/.pi/agent/poteto/<project-slug>/docs/`.
+- `opening-a-pr` keeps the bundled `pr` skill for the body. Origin's CLI has no counterpart.
+- Skills, playbooks, and agents now follow the upstream text. Local differences only bind upstream mechanics to Pi: `Task` roles and capability profiles, `session_history` for transcripts, the `loop` skill for `/loop`, local worktrees for cloud agents, and the bundled `pr` skill.
+- The Graphite and GitHub stack backends, `release-worktree.sh`, and the local count rules for `arena` and `interrogate` are removed. Panels run one Task per configured entry.
 
 ## Task roles and workspace contracts
 
@@ -337,9 +337,7 @@ Autopilot-full and Autopilot-stack follow their upstream playbooks with these ow
 
 The remote stack holds delivered state. Local worktrees, branches, and services exist only while an issue is in flight.
 
-Release a linked worktree with `scripts/release-worktree.sh` from the `poteto-mode` skill after its PR lands or closes.
-That script removes the worktree and its local branch only when the worktree is clean and the remote branch contains `HEAD`.
-Otherwise, it prints `held` with the reason and exits with status 1.
+Remove a linked worktree with `git worktree remove <path>` after its PR lands or closes.
 
 `scripts/worktree-audit.sh` compares merge state with `origin/HEAD`, then `origin/main`, then `origin/master`. Pass `-b <ref>` when pull requests target another branch.
 
@@ -404,19 +402,3 @@ A second table runs a real session with a local fake model for each codemode mod
 
 It counts the declarations and the system prompt that the model request actually carries.
 Compare the totals before you change the `codemode.mode` setting.
-
-## Stack backends
-
-Poteto supports Graphite `gt` and GitHub `github/gh-stack`.
-
-If only `gh` exists, Poteto asks for approval before it runs:
-
-```sh
-gh extension install github/gh-stack
-```
-
-Set `POTETO_STACK_BACKEND=graphite` or `POTETO_STACK_BACKEND=github` to select a backend. The automatic mode prefers GitHub when both exist. Graphite remains an explicit selection and an automatic fallback.
-
-The merge frontier needs neither backend. `gh pr list` reads the pull request base chain of stacks from both backends.
-
-GitHub stack workflows require GitHub Stacked Pull Requests on the repository.

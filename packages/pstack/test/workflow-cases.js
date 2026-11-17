@@ -34,8 +34,8 @@ export const workflowCases = [
   },
   leaf('arena-judge', skill('arena'), 'arena cross-judge pool'),
   {
-    ...leaf('comment-cleanup', skill('no-comments'), 'arena cross-judge pool'),
-    type: 'Comment Sicko',
+    ...writer('comment-cleanup', skill('no-comments'), 'swarm workers'),
+    type: 'comment-sicko',
   },
   writer('feature-leaf', playbook('feature'), 'feature'),
   writer('feature-owner', playbook('feature'), 'feature', 'pstack-nested'),

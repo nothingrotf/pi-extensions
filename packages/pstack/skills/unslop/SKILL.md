@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Unslop
 
-Edit text to remove AI patterns. Scan for the patterns below, then rewrite. Preserve meaning and match the intended tone. Then ask what makes the text obviously AI generated, and fix the remaining tells.
+Edit text to remove AI patterns. Scan for the patterns below, then rewrite. Preserve meaning and match the intended tone.
 
 Rule numbers are stable ids that other skills cite. A removed rule leaves a gap.
 

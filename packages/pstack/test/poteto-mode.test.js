@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -72,7 +73,6 @@ describe('poteto-mode', () => {
     ).toHaveLength(22)
     for (const path of [
       'scripts/worktree-audit.sh',
-      'scripts/release-worktree.sh',
       'scripts/watch-pr/watch-pr',
       'scripts/watch-pr/watch-pr.bundle',
     ])
@@ -121,7 +121,7 @@ describe('poteto-mode', () => {
     expect(skill).toContain('Use `subagent_type: "poteto-agent"`')
     expect(skill).toContain('capability_profile: "pstack-nested"')
     expect(skill).toContain('`TaskControl`')
-    expect(skill).toContain('`references/worker.md`')
+    expect(skill).toContain('`Read <path>/worker.md before anything else.`')
     expect(skill).toContain('**deslop**')
     expect(skill).toContain('**control-cli**')
     expect(skill).toContain('**control-ui**')
@@ -130,7 +130,6 @@ describe('poteto-mode', () => {
     expect(skill).toContain('**Match the model to the job.**')
     expect(skill).toContain('Across a function boundary → **architect**')
     expect(skill).toContain('`todo_write`')
-    expect(skill).toContain('gt or github/gh-stack')
     expect(skill).not.toMatch(
       /Cursor|cursor-team-kit|grok-4\.6|gpt-5\.6|claude-fable|claude-opus-5|todolist|Orchestrate/,
     )
@@ -138,99 +137,23 @@ describe('poteto-mode', () => {
       const playbook = text(join(skillRoot, 'playbooks', name))
       expect(playbook, name).not.toMatch(/cursor-team-kit|origin pr|~\/\.cursor|orchestrate\.md/)
     }
-    const worker = text(join(skillRoot, 'references', 'worker.md'))
-    expect(worker).toContain('## Operator rules')
+    const worker = text(join(skillRoot, 'worker.md'))
     expect(worker).toContain('Open every PR ready for review, never as a draft.')
-    expect(worker).not.toContain('AskQuestion')
-    for (const contract of [worker, text(join(skillRoot, 'references', 'task-contracts.md'))])
-      expect(contract).toContain('`how` dispatches one read-only explainer')
-    expect(skill).not.toContain('Run `how` and `why` in the current issue owner')
-    const backends = text(join(skillRoot, 'references', 'stack-backends.md'))
-    expect(backends).toContain('ask whether to install `github/gh-stack` with `AskQuestion`')
-    expect(backends).toContain('gh stack submit --auto --open')
-    expect(backends).toContain('gh stack merge --yes')
-    expect(backends).toContain('The `auto` default prefers GitHub')
-    expect(backends).toContain('--no-stack')
-    expect(backends).toContain('Never pass a numeric target.')
-    expect(backends).toContain('Never install an extension without approval.')
+    expect(worker).toContain('PR body: follow the bundled `pr` skill.')
+    expect(text(join(skillRoot, 'references', 'task-contracts.md'))).toContain(
+      '`how` dispatches one read-only explainer',
+    )
+    expect(existsSync(join(skillRoot, 'references', 'stack-backends.md'))).toBe(false)
     const shipping = text(join(skillRoot, 'playbooks', 'shipping.md'))
-    expect(shipping).toContain('git patch-id --stable')
-    expect(shipping).not.toMatch(/gh stack merge [^\n]*<[^\n]*>/)
+    expect(shipping).toContain('git patch-id')
+    expect(shipping).toContain('gh pr merge <pr> --squash')
     const opening = text(join(skillRoot, 'playbooks', 'opening-a-pr.md'))
     expect(opening).toContain('load the bundled `pr` skill from `../pr/SKILL.md`')
-    expect(opening).toContain('commits, pushes its own branch, and opens the PR')
-    expect(opening).toContain('../references/stack-backends.md')
     expect(opening).not.toContain('`## What changed`')
-    const plan = text(join(skillRoot, 'playbooks', 'multi-phase-plan.md'))
-    expect(plan).toContain('~/.pi/agent/poteto/<project-slug>/docs/')
     const babysit = text(join(skillRoot, 'playbooks', 'babysit.md'))
-    expect(babysit).toContain('gh api --method POST')
-    expect(babysit).toContain('installed `loop` skill')
+    expect(babysit).toContain('scripts/watch-pr/watch-pr')
     const typeScript = text(join(packageRoot, 'skills', 'typescript-best-practices', 'SKILL.md'))
     expect(typeScript).toContain('Schemas before guards')
-  })
-
-  it('releases only a published clean destination worktree', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'poteto-release-')))
-    const release = join(skillRoot, 'scripts', 'release-worktree.sh')
-    const repo = join(root, 'repo')
-    const lane = join(root, 'lane')
-    const git = (args, cwd = repo) => run('git', args, { cwd })
-    try {
-      expect(run('git', ['init', '--quiet', '--bare', join(root, 'remote.git')]).status).toBe(0)
-      expect(run('git', ['clone', '--quiet', join(root, 'remote.git'), repo]).status).toBe(0)
-      expect(git(['config', 'user.name', 'Poteto Test']).status).toBe(0)
-      expect(git(['config', 'user.email', 'poteto@example.com']).status).toBe(0)
-      writeFileSync(join(repo, '.gitignore'), 'node_modules/\n')
-      writeFileSync(join(repo, 'main.txt'), 'main\n')
-      expect(git(['add', '.']).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'main']).status).toBe(0)
-      expect(git(['push', '--quiet', 'origin', 'HEAD:main']).status).toBe(0)
-      expect(git(['worktree', 'add', '--quiet', '-b', 'stack/one', lane]).status).toBe(0)
-      writeFileSync(join(lane, 'one.txt'), 'one\n')
-      expect(git(['add', 'one.txt'], lane).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'one'], lane).status).toBe(0)
-      mkdirSync(join(lane, 'node_modules'))
-      writeFileSync(join(lane, 'node_modules', 'large.bin'), 'dependency\n')
-
-      const unpublished = run('bash', [release, lane])
-      expect(unpublished.status).toBe(1)
-      expect(unpublished.stdout).toBe(
-        `held\t${lane}\tremote branch origin/stack/one is unavailable\n`,
-      )
-
-      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
-      writeFileSync(join(lane, 'one.txt'), 'local edit\n')
-      const dirty = run('bash', [release, lane])
-      expect(dirty.status).toBe(1)
-      expect(dirty.stdout).toBe(`held\t${lane}\tuncommitted or untracked changes\n`)
-      expect(git(['checkout', '--quiet', '--', 'one.txt'], lane).status).toBe(0)
-
-      writeFileSync(join(lane, 'two.txt'), 'two\n')
-      expect(git(['add', 'two.txt'], lane).status).toBe(0)
-      expect(git(['commit', '--quiet', '-m', 'two'], lane).status).toBe(0)
-      const ahead = run('bash', [release, lane])
-      expect(ahead.status).toBe(1)
-      expect(ahead.stdout).toBe(`held\t${lane}\tHEAD is not on origin/stack/one\n`)
-      expect(git(['push', '--quiet', 'origin', 'stack/one'], lane).status).toBe(0)
-
-      const main = run('bash', [release, repo])
-      expect(main.status).toBe(1)
-      expect(main.stdout).toBe(`held\t${repo}\tmain worktree\n`)
-
-      const released = run('bash', [release, lane])
-      expect(released.stderr).toBe('')
-      expect(released.status).toBe(0)
-      expect(released.stdout).toMatch(
-        new RegExp(`^released\\t${lane}\\tstack/one\\torigin/stack/one\\t\\d+\\n$`),
-      )
-      expect(() => readdirSync(lane)).toThrow(/ENOENT/)
-      expect(git(['branch', '--list', 'stack/one']).stdout).toBe('')
-      expect(git(['worktree', 'list', '--porcelain']).stdout).not.toContain(lane)
-      expect(git(['ls-remote', 'origin', 'refs/heads/stack/one']).stdout).not.toBe('')
-    } finally {
-      rmSync(root, { force: true, recursive: true })
-    }
   })
 
   it('audits merged worktrees against the remote default branch or an explicit base', () => {
@@ -297,9 +220,6 @@ describe('poteto-mode', () => {
   it('loads the bundled watcher and parses the audit script', () => {
     const watcher = run(join(skillRoot, 'scripts', 'watch-pr', 'watch-pr'), ['--help'])
     const audit = run('bash', ['-n', join(skillRoot, 'scripts', 'worktree-audit.sh')])
-    const release = run('bash', [join(skillRoot, 'scripts', 'release-worktree.sh')])
-    expect(release.status).toBe(2)
-    expect(release.stderr).toContain('usage: release-worktree.sh <worktree>')
     expect(watcher.status).toBe(0)
     expect(watcher.stdout).toContain('Watch one pull request')
     expect(audit.status).toBe(0)

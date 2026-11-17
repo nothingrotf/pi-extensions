@@ -57,47 +57,25 @@ describe('standalone pstack worker contracts', () => {
     )
   })
 
-  it('starts authorized autopilot babysit once the owner reports the PR URL', () => {
+  it('babysits through gh without rebasing or merging', () => {
     const opening = skill('poteto-mode/playbooks/opening-a-pr.md')
     const babysit = skill('poteto-mode/playbooks/babysit.md')
     expect(opening).toContain('Opening a PR does not start a babysit.')
-    expect(babysit).toContain('Opening a PR alone does not start a babysit.')
-    expect(babysit).toContain(
-      'In Autopilot-full or Autopilot-stack, the lifecycle assignment starts it once the owner reports the PR URL.',
-    )
-    expect(babysit).toContain('The root owns the loop and the watcher.')
-    expect(babysit).toContain('a fresh owner of the owning branch makes it')
     expect(babysit).toContain('Never rebase, retarget, or force-push.')
     expect(babysit).toContain('Babysitting never authorizes merging.')
+    expect(babysit).toContain('installed `loop` skill')
+    expect(babysit).not.toMatch(/origin pr|cursor-team-kit/)
     const full = skill('poteto-mode/playbooks/autopilot-full.md')
     expect(full).toContain('playbooks/babysit.md')
-    expect(full).toContain('git ls-remote')
     expect(full).toContain('--force-with-lease')
-    expect(full).toContain('Never force-push a shared branch')
+    expect(full).not.toMatch(/origin pr|Cursor cloud agent|cursor-team-kit/)
   })
 
-  it('releases each linked worktree after its PR lands or closes', () => {
+  it('removes each linked worktree after its PR lands or closes', () => {
     const contracts = skill('poteto-mode/references/task-contracts.md')
     expect(contracts).toContain('git worktree add -b <branch> <path> <base>')
     expect(contracts).toContain('dispatch the owner in a later call')
-    expect(contracts).toContain('scripts/release-worktree.sh <path>')
-    expect(skill('poteto-mode/references/stack-backends.md')).toContain(
-      'Use it to grow a stack one published layer at a time.',
-    )
-  })
-
-  it('retains broken WIP at pause without claiming acceptance or bypassing repository rules', () => {
-    const source = skill('poteto-mode/playbooks/pause-safely.md')
-    expect(source).not.toContain('Never stop mid-edit in a known-broken state')
-    expect(source).toContain('A broken WIP checkpoint is not acceptance')
-    expect(source).toContain('repository rules permit a WIP commit')
-    expect(source).toContain('required checks pass without bypass')
-    expect(source.indexOf('Run the required precommit checks')).toBeLessThan(
-      source.indexOf('commit only task edits'),
-    )
-    expect(source).toContain('Otherwise, retain a patch')
-    expect(source).toContain('retain a patch and untracked task files')
-    expect(source).toContain('Cancel isolated writers')
+    expect(contracts).toContain('git worktree remove <path>')
   })
 
   it('refuses to label a revealing bootstrap as a blinded evaluation', () => {

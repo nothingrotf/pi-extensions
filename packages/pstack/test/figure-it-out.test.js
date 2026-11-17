@@ -17,7 +17,7 @@ describe('figure-it-out', () => {
     expect(port).toContain('name: figure-it-out')
     expect(port).toContain('disable-model-invocation: true')
     expect(port).toContain('Use `todo_write`')
-    expect(port).toContain('full **poteto-mode** skill')
+    expect(port).toContain('**poteto-mode**')
     expect(port).not.toMatch(/todolist|~\/\.cursor|cloud worker/)
   })
 
@@ -40,9 +40,8 @@ describe('figure-it-out', () => {
 
   it('requires isolated work and an honest judge', () => {
     const port = skill()
-    expect(port).toContain('its own worktree or branch')
-    expect(port).toContain('return `BLOCKED`')
-    expect(port).toContain('Do not substitute a model.')
+    expect(port).toContain('**arena**')
+    expect(port).toContain('separate-before-serializing-shared-state')
   })
 
   it('ships all direct sibling skills', () => {

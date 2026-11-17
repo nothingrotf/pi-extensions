@@ -14,27 +14,18 @@ function skill() {
 describe('automate-me', () => {
   it('mines bounded Pi session evidence', () => {
     const port = skill()
-    for (const value of [
-      'session_history',
-      '`list`',
-      '`search`',
-      '`read`',
-      '`timeline`',
-      '`tool_activity`',
-      'pi-session://',
-    ])
+    for (const value of ['session_history', '`list`', '`search`', '`read`', 'pi-session://'])
       expect(port).toContain(value)
-    expect(port).toContain('three time slices')
     expect(port).toContain('`readonly: true`')
-    expect(port).toContain('Children analyze supplied evidence only.')
+    expect(port).toContain('A `Task` child has no `session_history`')
   })
 
   it('uses Pi questions and skill locations', () => {
     const port = skill()
     expect(port).toContain('`AskQuestion`')
     expect(port).toContain('`allowMultiple: true`')
-    expect(port).toContain('`.pi/skills/` and `.agents/skills/`')
-    expect(port).toContain('`~/.pi/agent/skills/` and `~/.agents/skills/`')
+    expect(port).toContain('`.pi/skills/**/*-mode/SKILL.md`')
+    expect(port).toContain('`~/.agents/skills/*-mode/SKILL.md`')
     expect(port).not.toMatch(/\.cursor\/skills|~\/\.cursor|agent-transcripts/)
   })
 
@@ -42,8 +33,7 @@ describe('automate-me', () => {
     const port = skill()
     expect(port).toContain('bundled `create-skill` skill')
     expect(port).toContain('**unslop**')
-    expect(port).toContain('isolated branch or worktree')
-    expect(port).toContain('Do not push directly to the main branch.')
-    expect(port).toContain('only after explicit approval')
+    expect(port).toContain('Work in a worktree off main.')
+    expect(port).toContain("Don't push to main directly.")
   })
 })

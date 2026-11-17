@@ -131,9 +131,9 @@ function handle(input: unknown) {
 
 External sources include RPC payloads, `JSON.parse`, `postMessage`, IPC, file contents, environment variables, database results.
 
-## Schemas before hand-written guards
+## Schemas before hand-rolled guards
 
-Before writing a property-by-property type guard for external data, find the repository's runtime schema library and existing schemas. Let one schema own validation and derive the TypeScript type from it. Do not maintain a schema, a duplicate interface, and a guard that can drift apart.
+Before writing a property-by-property type guard for external data, look for the repository's runtime schema library and existing schemas. Let one schema own validation and derive the TypeScript type from it. Do not maintain a schema, a duplicate interface, and a guard that can drift apart.
 
 ```ts
 import { z } from "zod";
@@ -150,7 +150,7 @@ function parseUser(input: unknown): User {
 }
 ```
 
-Use `safeParse` when failure is an expected branch. Use the equivalent inference helper for another schema library. Do not add a schema dependency for one guard. Use the schema system that the repository already trusts.
+Use `safeParse` when failure is an expected branch. Use the equivalent inference helper when the repository uses another schema library. Do not add a new schema dependency for one guard. This rule prefers the schema system the codebase already trusts.
 
 ## No `as` casts
 

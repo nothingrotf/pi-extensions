@@ -21,7 +21,7 @@ Copy `references/decision-log-template.tsv` (the header row) to start a clean lo
 - **evidence.** A link or path that proves it: commit SHA, PR number, `file:line`, or an artifact, trace, or screenshot path. Never a paragraph.
 - **result.** The outcome or predicate state: `tests green`, `reverted`, `pixel-diff 0`, `INCONCLUSIVE`, `open`.
 
-An example, plain-spoken so a reviewer reads it at a glance. This is illustration only. Don't copy these rows into a real log.
+An example, plain-spoken so a reviewer reads it at a glance.
 
 ```
 ts	phase	decision	why	evidence	result
@@ -39,20 +39,7 @@ Use the helper `scripts/log.sh <logfile> <phase> <decision> <why> <evidence> <re
 
 Log decision points and checkpoints, not every action: a fork chosen, a unit completed with its verification result, a pivot or revert with its trigger, a blocker surfaced, a gate fixed. For loop runs, one row per iteration. Skip the trivial and self-evident.
 
-A run is one Pi session, including resumed turns and compaction.
-A pickup in another session or a replacement agent starts a new run.
-Before the first row, resolve this run's stable `pi-session://` reference through `session_history`.
-Use `action: "list"` with `include_current: true` and select the entry with `isCurrent: true`.
-If the tool is unavailable, use the recorded reference supplied by the parent.
-If no reference exists, keep a separate log until the parent binds it to recorded session evidence.
-Do not append to a shared log without that identity.
-Begin each identified run with a row with phase `start`.
-Write another `start` row when this run returns after another run's `start` row.
-Before returning to a shared log, read its last rows.
-The `start` row names the earlier timestamp range that this run did not write.
-Its evidence identifies this run with its stable `pi-session://` reference.
-Use phase `start` only for these run boundaries.
-Give concurrent writers separate logs and serialize handoffs to a shared log.
+A run is one Pi session, including its later turns and any compaction of it. A pickup, a replacement agent, or a new session starts a new run. When a run adds to a log that already has rows, its first row has phase `start`, and so does its first row after another run's `start` row. So a run that comes back to a log in a later turn first reads the log's last rows to see whether another run wrote since. A `start` row names the `ts` range of the rows before it that this run did not write, and its evidence names this run by its `pi-session://` reference from `session_history`. Use phase `start` for nothing else.
 
 ## Where it lives
 
@@ -62,25 +49,18 @@ Commit it only when the work is ambitious enough that a reviewer needs the trail
 
 ## Rules
 
-- One row is one decision or checkpoint.
 - Append-only. A wrong call gets a new row that supersedes it. Never edit or delete history.
 - Prefer evidence produced by committed scripts over hand-made one-offs (the **encode-lessons-in-structure** principle skill).
 
 ## Audit the log against the transcript
 
-At the end of the run, before handoff, check that the log tells the truth. Use `session_history` to inspect the current Pi session. First call `list` with `include_current: true` and `include_children: true`. Select the result with `isCurrent: true`, and preserve its `pi-session://` reference. Call `timeline` and `tool_activity` for that session with `include_children: true`. When an entry needs context, call `read` with `view: "audit"`. Treat a recorded tool result as execution proof. Do not treat an assistant statement as execution proof. Audit only this run's rows against what actually happened.
-Each stretch starts at this run's `start` row, or the first row when this run created the log.
-It ends before another run's next `start` row.
+At the end of the run, before handing back, check the log told the truth. Read this run's session through `session_history` (`timeline`, `tool_activity`, and `read` with `view: "audit"`). Don't search other sessions. That reads unrelated private chats. Walk this run's rows against what actually happened. Each stretch of them begins at one of this run's `start` rows, or at the first row if this run created the log, and ends at the next `start` row of another run:
 
 - Check that every row maps to a real decision or action.
-- Check that each evidence pointer resolves and proves the row's claim.
-- Add missing forks, pivots, or abandoned approaches that shaped this run.
+- Check that each row's evidence resolves and shows what the row claims.
+- A fork, pivot, or abandoned approach that shaped the work but isn't logged is a gap. Add it.
 
-Never edit or remove a row during the audit, even an invented or padded row.
-Append a correction that supersedes the wrong claim and describes what actually happened.
-Identify the original row by line number and timestamp, and cite the recorded evidence for the correction.
-Do not audit other runs' rows.
-If this run's evidence disproves an earlier row, supersede it without rewriting that history.
+Correct the log, not the story. The audit never edits or removes a row, even an invented one. When a row records neither a real decision nor a real action, or its claim or evidence is wrong, add a row that supersedes it with what actually happened and a pointer that resolves. This audit does not check rows outside this run's stretches. If this run's own work shows one of them is wrong, supersede it like any wrong call.
 
 ## Cross-model review of the trail
 

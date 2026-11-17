@@ -18,38 +18,19 @@ const exceptions = [
 ]
 
 describe('Comment Sicko review guidance', () => {
-  it('preserves exact exceptions across agent and inline skill', () => {
+  it('keeps the exact exception list in the agent', () => {
     const agent = read('../agents/comment-sicko.md')
-    const skill = read('../skills/no-comments/SKILL.md')
-    for (const exception of exceptions) {
-      expect(agent).toContain(exception)
-      expect(skill).toContain(exception)
-    }
-  })
-
-  it('supports leaf inline review without recursive delegation', () => {
-    const agent = read('../agents/comment-sicko.md')
-    const skill = read('../skills/no-comments/SKILL.md')
-    expect(skill).toContain('including a leaf reviewer, perform the rubric inline')
-    expect(skill).toContain('Do not spawn another Task or invoke `/how` or `/architect`')
-    expect(skill).toContain('run `/why` from the **why** skill on it')
+    for (const exception of exceptions) expect(agent).toContain(exception)
     expect(agent).toContain('run `/why` from the **why** skill on it')
-    expect(agent).toContain('I never spawn another Task or invoke `/how` or `/architect`.')
-    expect(agent).toContain('block the decision rather than guessing')
-    expect(agent).toContain("Respect the caller's scope and permissions")
+    expect(agent).toContain('I never write application code.')
   })
 
-  it('selects one report-only code reviewer without pool fanout', () => {
+  it('spawns one isolated Comment Sicko and joins only an accepted diff', () => {
     const skill = read('../skills/no-comments/SKILL.md')
-    expect(skill).toContain('launch exactly one independent reviewer')
-    expect(skill).toContain('`role`: `arena cross-judge pool`')
-    expect(skill).toContain('`readonly`: `true`')
-    expect(skill).toContain('The pool is availability, not fanout')
-    expect(skill).toContain('Consolidation never authorizes the reviewer to edit product files')
-    expect(skill).toContain('Before opening a PR, reuse the existing independent verdict')
-    expect(read('../skills/deslop/SKILL.md')).toContain(
-      'report findings without edits or another Task',
-    )
+    expect(skill).toContain('`subagent_type: "comment-sicko"`')
+    expect(skill).toContain('`isolation: { mode: "worktree", integration: "apply" }`')
+    expect(skill).toContain('Call `TaskControl` with `action: "join"` only for an accepted diff')
+    expect(skill).toContain('Do not restate its rules.')
   })
 })
 
@@ -91,8 +72,7 @@ describe('setup pstack role guidance', () => {
     expect(example).toContain('swarm workers: inherit-parent')
     for (const role of ['code review', 'hardest tasks', 'how explorer', 'architect runners'])
       expect(example).not.toContain(`${role}:`)
-    expect(skill).toContain('Every list is an availability pool')
-    expect(skill).toContain('List length never causes fanout')
+    expect(skill).toContain('so the list length sets the fan-out')
     expect(skill).toContain('`judgment and prose` is only for prose or evidence synthesis')
     expect(skill).toContain('Markdown comments (`<!-- ... -->`) are ignored')
   })

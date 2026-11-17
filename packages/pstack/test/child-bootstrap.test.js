@@ -120,7 +120,7 @@ describe('pstack SDK child bootstrap', () => {
         expect(inventory.prompt).toContain(
           'Resolve every skill pointer below against that canonical base',
         )
-        expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/references/worker.md`)
+        expect(inventory.prompt).toContain(`${bootstrap.root}/poteto-mode/worker.md`)
         expect(inventory.prompt).toContain('ask_parent is advisory only')
         expect(inventory.prompt).not.toContain('{{PSTACK_SKILLS_ROOT}}')
         await h.session.prompt('read:parent')

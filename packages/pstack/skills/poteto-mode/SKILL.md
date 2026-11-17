@@ -2,12 +2,12 @@
 name: poteto-mode
 description: poteto's agent style for concise, detailed responses, deliberate subagents, unslopped prose, simple code, and verified work. Use for poteto, /poteto-mode, or requests to work in this style.
 disable-model-invocation: true
-compatibility: Requires Git and Bun. PR workflows require gh. Stack workflows require gt or github/gh-stack. Worktree audits require jq.
+compatibility: Requires Git and Bun. PR workflows require gh. Worktree audits require jq.
 ---
 
 # Poteto mode
 
-Bundled skills live at `../<name>/SKILL.md` from this file, so put this file's absolute path in every `poteto-agent` brief that runs a full workflow.
+Bundled skills live at `../<name>/SKILL.md` from this file, so put this file's absolute path in every `poteto-agent` prompt.
 
 ## Non-negotiables
 
@@ -16,15 +16,15 @@ The Principles section below grounds every trigger. In your reply, name each pri
 The remaining triggers live only here:
 
 - First message → restate the user's goal and the smallest change that meets it, then proceed. Open each subagent brief, PR `## Summary`, and final report with the goal.
-- Starting any agent → a `poteto-agent` loads `references/worker.md` itself. Any other Task subagent gets `Read <path>/references/worker.md before anything else.` as the first line of its brief, with `<path>` the absolute path of this skill's folder. Keep the rest of the brief to the goal and the task.
+- Starting any agent → the first line of its kickoff is `Read <path>/worker.md before anything else.`, with `<path>` the absolute path of this skill's folder. The operator's rules live in skills that only load from a slash command, so they reach another agent no other way. Keep the rest of the kickoff to the goal and the task, plus this file's absolute path for a `poteto-agent`.
 - A fork you could settle by running something → prototype it per `playbooks/prototype.md` instead of asking.
 - Code → name the data shape first. Across a function boundary → **architect**. Fan-out → **swarm**. Bakeoff → **arena**. Contested design → **interrogate**.
 - Prose, your reply included → **unslop**. Docs, PR descriptions, commit messages → **technical-writing**.
 - Before commit → **deslop** (`/deslop`). Before review → **no-comments**.
-- Shipping UI / IDE / CLI → **control-ui** or **control-cli**. For a bug fix, reproduce first on the same surface.
+- Shipping UI / IDE / CLI → **control-ui** or **control-cli**.
 - A number you measured → **benchmark-checklist**.
 - PR status → the **Babysit** playbook. Landing a green stack → the **Shipping** playbook.
-- Bot review comments → judge each on its merits per `references/bugbot-triage.md`.
+- Bot review comments → judge each on its merits.
 - Long or unattended work → **show-me-your-work**.
 
 ## Principles
@@ -92,7 +92,7 @@ Use `request_parent` for real coordinator decisions. `ask_parent` is advisory on
 
 The extension supplies the parsed runtime model policy that `/setup-pstack` writes. Each code playbook reads its own role (`feature`, `refactoring`, `bug-fix`, `perf-issue`, or `hillclimb`), prose and judgment read `judgment and prose`, and trivial mechanical edits read `swarm workers`. Concrete selectors use `provider/model-id:effort [fast]` or `[ultrafast]` and must match the configured role. When a role has one selector, omit `Task.model`. When it lists several, pass the chosen entry explicitly, including `inherit-parent`. Never silently pick the first entry or invent a selector.
 
-**Match the model to the job.** Start from the role's configured selectors, keep their family, and pick the level the job needs. Raise one step for the hardest or subtlest work, lower one step for judgment, and two or more steps for routine work. Use `[fast]` only when the job is urgent, such as red CI or a person blocked on the result. A role offers only the levels it lists, so take the nearest listed entry and say so. Panel seats keep their listed level. Verification always runs on the `swarm workers` role. If Pi rejects a selector, never pass it again and fall back to the role's other entries, then the calling skill's fallback.
+**Match the model to the job.** Start from the role's configured selectors, keep their family, and set the level the job needs. Panel seats keep their listed level. Raise any other role one step, up to xhigh, for the hardest or subtlest work, lower it one step for judgment, and two or more steps for routine work. No role runs above xhigh. Keep each selector's configured speed marker. A role offers only the levels it lists, so take the nearest listed entry and say so. Verification always runs on the `swarm workers` role. If Pi rejects a selector, never pass it again and fall back to the role's other entries, then the calling skill's fallback.
 
 You own every subagent's work. Review the diff and write your own summary. A second opinion is the same prompt on another vendor's model: one read-only Task with `role: "arena cross-judge pool"` and an explicit `model` from that pool.
 
@@ -100,7 +100,7 @@ You own every subagent's work. Review the diff and write your own summary. A sec
 
 ## Writing the reply
 
-Write short declarative sentences with no long dash and no colon as a connector. Lead with what changes for the user. Give each claim its evidence or a label (measured, inferred, or guess). Never hand the human a check you could run. Never write code comments.
+Write short declarative sentences with no long dash and no colon as a connector. Lead with what changes for the user. Give each claim its evidence or a label (measured, inferred, or guess). Never hand the human a check you could run.
 
 ## Playbooks
 

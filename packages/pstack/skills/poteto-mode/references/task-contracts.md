@@ -62,14 +62,14 @@ A leaf must not silently skip a required delegation. Return the missing capabili
 Neither profile grants `session_history`, MCP, Loop, or ambient source tools. The root coordinator collects external evidence and supplies bounded bundles before delegation. Owners that need unavailable evidence return a blocker with the required queries. Never impersonate the root through advisory intercom.
 
 Use the canonical skill location supplied by the registered pstack agent. Never search unrelated directories or substitute a discarded skill copy.
-Scoped workers read `worker.md` and their assigned workflow. Full coordinators read `../SKILL.md`.
+Every agent reads `../worker.md` first. A `poteto-agent` then reads `../SKILL.md` in full.
 Reuse unchanged readings within the same session when policy permits. Preserve explicit requirements to reread.
 
 ## Repository writer
 
 Create a linked worktree on the issue branch before dispatch, such as `git worktree add -b <branch> <path> <base>`. Prepare its dependencies per the repository's setup.
 Create the worktree in one tool call and dispatch the owner in a later call. A Task in the same parallel batch can start before the worktree exists.
-Reuse that worktree across correction rounds. After the PR lands or closes, release it with `scripts/release-worktree.sh <path>` from the poteto-mode skill.
+Reuse that worktree across correction rounds. After the PR lands or closes, remove it with `git worktree remove <path>`.
 
 Dispatch the owner in place there. A mutable Task with its `cwd` in a linked worktree outside the session repository runs in place by default.
 It commits, pushes its own branch, and opens its PR per Opening a PR. Its writes stay in the worktree without a join.
