@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
   mkdir,
@@ -73,28 +73,47 @@ export function safeSegment(value: string): string {
   return digest(value).slice(0, 16)
 }
 
+const maxProcessOutputMiB = 64
+const maxProcessOutputBytes = maxProcessOutputMiB * 1024 * 1024
+const maxProcessDiagnosticBytes = 4096
+
+class ProcessOutputLimitError extends Error {
+  readonly code = 'PROCESS_OUTPUT_LIMIT'
+
+  constructor(executable: string) {
+    super(`${executable} exceeded the ${maxProcessOutputMiB} MiB subprocess output limit.`)
+  }
+}
+
 async function run(cwd: string, command: readonly string[], input?: string): Promise<GitResult> {
   const executable = command[0]
   if (executable === undefined) throw new Error('The process command is empty.')
   return new Promise<GitResult>((resolveResult, reject) => {
-    const child = spawn(executable, command.slice(1), { cwd, stdio: 'pipe' })
-    const stdout: Buffer[] = []
-    const stderr: Buffer[] = []
-    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
-    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
-    child.on('error', reject)
-    child.on('close', (exitCode) => {
-      const output = Buffer.concat(stdout).toString('utf8')
-      const error = Buffer.concat(stderr).toString('utf8')
-      if (exitCode !== 0) {
-        const detail = error.trim().length > 0 ? error.trim() : output.trim()
-        reject(new Error(`${command.join(' ')} failed${detail.length === 0 ? '' : `: ${detail}`}`))
-        return
-      }
-      resolveResult({ stderr: error, stdout: output })
+    let inputError: Error | undefined
+    const child = execFile(
+      executable,
+      command.slice(1),
+      { cwd, encoding: 'buffer', maxBuffer: maxProcessOutputBytes, killSignal: 'SIGKILL' },
+      (error, stdout, stderr) => {
+        if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          reject(new ProcessOutputLimitError(executable))
+        } else if (error !== null) {
+          const detail =
+            stderr.subarray(0, maxProcessDiagnosticBytes).toString('utf8').trim() ||
+            stdout.subarray(0, maxProcessDiagnosticBytes).toString('utf8').trim() ||
+            error.message.slice(0, maxProcessDiagnosticBytes)
+          reject(new Error(`${command.join(' ')} failed: ${detail}`, { cause: error }))
+        } else if (inputError !== undefined) {
+          reject(inputError)
+        } else {
+          resolveResult({ stderr: stderr.toString('utf8'), stdout: stdout.toString('utf8') })
+        }
+      },
+    )
+    child.stdin?.on('error', (error) => {
+      inputError = error
     })
-    if (input !== undefined) child.stdin.end(input)
-    else child.stdin.end()
+    child.stdin?.end(input)
   })
 }
 
