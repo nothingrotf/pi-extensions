@@ -31,7 +31,7 @@ agent-browser set media dark
 agent-browser diff screenshot --baseline ./before-dark.png --output ./pair-check-dark.png
 ```
 
-A dimension-mismatch result means the viewport, device pixel ratio, or crop drifted; recapture rather than resizing an image. Inspect the reported mismatch regions: changes outside the edited surface are unintended regressions to fix or report, not evidence to upload. The generated red-highlight diff image is a validation artifact; do not attach it to the pull request unless it illustrates a finding. Use `--selector <sel>` on `screenshot` capture and `diff screenshot` for element-scoped pairs, including Storybook's `#storybook-root`.
+A dimension-mismatch result means the viewport, device pixel ratio, or crop drifted; recapture rather than resizing an image. Inspect the reported mismatch regions: changes outside the edited surface are unintended regressions to fix or report, not evidence to upload. The generated red-highlight diff image is a validation artifact; do not attach it to the pull request unless it illustrates a finding. For element-scoped capture, pass the selector before the output path: `agent-browser screenshot '#storybook-root' ./before-light.png`. Use `--selector <sel>` on `diff screenshot` for the matching element-scoped comparison.
 
 For a motion or interaction change where timing matters, also record video with matching theme state:
 
